@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Local configuration and secrets
+.env
+.env.*
+!*.example
+
+# Generated desktop / COM artifacts
+Python/
+comtypes_gen/
+
+# Reproducibility artifacts and private inputs
+artifacts/
+screenshots/
+fixtures/private/
+
+# Model caches and weights
+model/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt

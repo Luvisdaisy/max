@@ -144,13 +144,14 @@ flowchart LR
 
 ## 4. 核心数据契约
 
-模型与数据层使用范围为 `[0.0, 1.0]` 的归一化坐标，以适配不同分辨率；执行层使用物理像素，原点为目标显示器左上角。感知模块必须在每次截图中写入屏幕尺寸、窗口矩形、DPI 缩放和截图尺寸。模型可以输出元素 ID 或归一化坐标，但只有 Guard 能完成物理像素转换并生成 `ApprovedAction`。
+模型与数据层使用范围为 `[0.0, 1.0]` 的归一化坐标；执行层使用 Windows 虚拟桌面物理像素坐标。`ScreenMeta` 必须记录目标显示器在虚拟桌面中的矩形，因而允许 `left/top` 为负值；归一化坐标相对该显示器的捕获矩形计算。进程在首次截图或输入前设置 DPI awareness，`mss` 截图、UIA 边界框与 PyAutoGUI 输入统一以物理像素表示。模型可以输出元素 ID 或归一化坐标，但只有 Guard 能完成物理像素转换并生成 `ApprovedAction`。
 
 ```python
 from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 class ScreenMeta(BaseModel):
+    virtual_rect: tuple[int, int, int, int]  # left, top, right, bottom
     width_px: int
     height_px: int
     dpi_scale: float = Field(gt=0)
@@ -184,10 +185,39 @@ class DesktopAction(BaseModel):
     target_element_id: Optional[str] = None
     target_point: Optional[TargetPoint] = None
     text: Optional[str] = None
-    delta: Optional[int] = None
+    drag_to: Optional[TargetPoint] = None
+    delta: Optional[int] = None  # scroll：正数向上，负数向下，单位为滚轮 notch
+    wait_ms: Optional[int] = None
     target_description: str
     expected_observation: str
     requires_confirmation: bool = False
+
+class ApprovedAction(BaseModel):
+    action: DesktopAction
+    window_handle: int
+    process_id: int
+    physical_target: Optional[tuple[int, int]] = None
+    physical_drag_to: Optional[tuple[int, int]] = None
+    approval_hash: str
+    approved_at_ms: int
+
+class ExecutionReceipt(BaseModel):
+    action_hash: str
+    started_at_ms: int
+    finished_at_ms: int
+    before_screenshot_ref: str
+    after_screenshot_ref: str
+    cursor_before: tuple[int, int]
+    cursor_after: tuple[int, int]
+    outcome: Literal["executed", "aborted", "error"]
+    error_code: Optional[str] = None
+
+class StepRecord(BaseModel):
+    before_observation: Observation
+    candidate_action: DesktopAction
+    guard_decision: Literal["approved", "denied", "confirmation_required"]
+    execution_receipt: Optional[ExecutionReceipt] = None
+    verification_evidence: list[str] = []
 
 class AgentState(BaseModel):
     task_id: str
@@ -204,7 +234,17 @@ class AgentState(BaseModel):
     status: Literal["INIT", "OBSERVING", "PLANNING", "GUARDING", "ACTING", "VERIFYING", "RECOVERING", "WAITING_USER", "SUCCEEDED", "FAILED", "ABORTED"] = "INIT"
 ```
 
-模型输出必须通过 Pydantic schema 校验。解析失败时，Orchestrator 可请求模型以相同 schema 重答一次；第二次失败即终止任务并记录原始响应摘要，绝不以自然语言猜测鼠标动作。
+字段组合也必须校验：`click`/`double_click`/`type_text` 只能指定一个元素或一个坐标；`drag` 必须同时提供起点和终点；`scroll` 必须提供非零 `delta`；`wait` 只能提供 `wait_ms`（100–5,000 ms）；`type_text` 必须提供非空文本；`finish` 与 `call_user` 不得包含坐标或输入文本。`target_element_id` 解析后必须仍位于已授权窗口中，否则视为 `INVALID_ACTION`。
+
+模型输出必须通过 Pydantic schema 与上述组合校验。解析失败时，Orchestrator 可请求模型以相同 schema 重答一次；第二次失败即终止任务并记录原始响应摘要，绝不以自然语言猜测鼠标动作。
+
+### 4.1 窗口授权、确认与时序契约
+
+授权窗口以 `HWND + PID + 已解析进程路径` 三元组标识；窗口标题仅作可读日志和二次匹配，不能单独作为放行依据。Guard 在生成 `ApprovedAction` 前及 Controller 实际输入前各验证一次三元组、窗口前台状态和元素/坐标有效性；两次校验任一不符即重新观察，不复用旧坐标。
+
+高影响动作进入 `WAITING_USER`：Guard 对规范化动作、窗口三元组、目标坐标、文本摘要和当前 `state_fingerprint` 计算 `approval_hash`，CLI 展示摘要并等待本地显式确认。确认仅对同一 `approval_hash` 有效，有效期 60 秒；确认后重新截图并再次执行 Guard，画面或窗口变化即失效。拒绝或超时不执行输入，分别记录 `POLICY_DENIED` 或 `TIMEOUT`。
+
+默认参数写入 `configs/default.yaml`：最小动作间隔 200 ms、`step_timeout_s=20`、`task_timeout_s=300`、`max_steps=12`、相邻两帧状态指纹相同且变化区域占比小于 1% 时记为无进展。连续两次无进展依次触发重新观察和一次审慎重规划；第三次转 `WAITING_USER`，无人处理则失败。所有阈值均随轨迹归档。
 
 ## 5. 执行工作流与状态机
 
@@ -217,6 +257,7 @@ stateDiagram-v2
     OBSERVING --> PLANNING: 截图与感知成功
     PLANNING --> GUARDING: 得到合法 Action JSON
     GUARDING --> ACTING: 策略放行
+    GUARDING --> WAITING_USER: 高影响动作待确认
     GUARDING --> FAILED: 策略拒绝
     ACTING --> VERIFYING: 操作完成
     VERIFYING --> SUCCEEDED: 成功条件满足
@@ -247,7 +288,7 @@ stateDiagram-v2
 
 ### 6.1 默认策略
 
-- 动作白名单仅包含 `click`、`double_click`、`type_text`、`scroll`、`drag`、`wait`、`finish`；不提供命令行、文件删除、注册表、进程管理或网络请求工具。
+- 可执行动作白名单仅包含 `click`、`double_click`、`type_text`、`scroll`、`drag`、`wait`、`finish`；`call_user` 只允许进入人工处理状态，绝不调用桌面控制器。不提供命令行、文件删除、注册表、进程管理或网络请求工具。
 - 默认只允许配置的测试应用进程/窗口标题；焦点窗口变化后重新观察并重新规划。
 - 坐标必须落在目标显示器边界且不得位于配置的禁用区域；点击前移动鼠标并保留 200 ms 以上间隔。
 - PyAutoGUI `FAILSAFE=True`；鼠标移至屏幕角落或 Ctrl+Alt+Esc 触发 `ABORTED`。中止后立即释放按键和鼠标按键，不再重试。
@@ -282,9 +323,11 @@ LangChain 的 `ChatPromptTemplate` 由系统规则、任务目标、标准化观
 4. 同一失败动作不重复超过一次；
 5. 每轮只产生一项原子动作。
 
-模型配置需暴露：`model_id`、`revision`、`model_cache_dir`、`torch_dtype`、`device`、`attn_implementation`、`max_new_tokens`、`temperature`、`image_max_side`、`max_steps` 和 `step_timeout_s`。默认值为 `model_id=Qwen/Qwen2.5-VL-3B-Instruct`、`revision=master`、`torch_dtype=bfloat16`、`device=cuda:0`、`attn_implementation=sdpa`、`temperature=0.1`、`max_new_tokens=256`、`image_max_side=1280`、`max_steps=12`。模型快照解析后的实际目录、文件摘要、PyTorch/CUDA/Transformers 版本和峰值显存随任务归档，确保实验可复现。
+模型配置需暴露：`model_id`、不可变 `revision`、`model_cache_dir`、`torch_dtype`、`device`、`attn_implementation`、`max_new_tokens`、`temperature`、`image_max_side`、`max_steps` 和 `step_timeout_s`。默认值为 `model_id=Qwen/Qwen2.5-VL-3B-Instruct`、`torch_dtype=bfloat16`、`device=cuda:0`、`attn_implementation=sdpa`、`temperature=0.1`、`max_new_tokens=256`、`image_max_side=1280`、`max_steps=12`。下载阶段可用 `master` 定位候选快照，但必须在首次成功下载后记录解析出的 commit/revision、完整文件清单与 SHA-256；推理和评测仅加载该本地不可变快照。实际目录、文件摘要、PyTorch/CUDA/Transformers 版本和峰值显存随任务归档，确保实验可复现。
 
 快慢推理共享同一 `ModelProvider`：快速路径只使用当前观察、目标和最近三步摘要；审慎路径额外加入失败证据、已完成里程碑和禁止重复的动作。审慎路径最多触发一次，防止小模型在长推理中引入新的幻觉。任务需要登录、验证码、身份确认或超出授权边界时，模型必须输出 `call_user`，而不是尝试绕过限制。
+
+第 1–4 周仅启用本地 `TorchQwenProvider`。API Provider 保留为第 5 周后的隔离实验适配器，默认关闭；启用前需单独配置出站许可、截图脱敏规则和审计策略。本项目的默认评测与真实桌面控制不向外传输截图、OCR 文本或轨迹。
 
 ## 8. 项目目录与接口组织
 
@@ -312,6 +355,10 @@ src/gui_agent/
   verification/predicates.py# 任务专用功能性检查器
   recovery/policy.py        # 无进展检测与有限恢复策略
   storage/artifacts.py      # 日志、截图和结果归档
+  data/manifest.py          # 数据集版本、许可证与数据划分清单
+  training/dataset.py       # 第 5 周训练样本构建，仅消费脱敏公开数据
+  training/lora.py          # PEFT LoRA 训练与检查点归档
+  evaluation/benchmark.py   # 20 任务分层评测与统计
 configs/default.yaml         # 可调整运行策略，禁止存放密钥
 requirements/base.txt        # 主程序锁定依赖
 requirements/torch-cu130.txt # PyTorch CUDA 13.0 精确版本与索引说明
@@ -320,7 +367,7 @@ tests/                       # 单元、集成和受控端到端测试
 artifacts/<task_id>/         # 运行期产物；加入 .gitignore
 ```
 
-`ModelProvider` 的稳定接口为 `invoke(observation: Observation, goal: str, history: list[StepRecord]) -> DesktopAction`。`TorchQwenProvider` 只负责从仓库外本地快照加载处理器和模型、构造多模态输入、调用 `generate()`、记录耗时/显存并解析响应；它不得下载模型、读取实时屏幕或执行动作。`DesktopController` 的稳定接口为 `execute(action: ApprovedAction) -> ExecutionReceipt`。领域模块不得跨过这两个接口相互调用。
+`ModelProvider` 的稳定接口为 `invoke(observation: Observation, goal: str, history: list[StepRecord]) -> DesktopAction`。`TorchQwenProvider` 只负责从仓库外本地快照加载处理器和模型、构造多模态输入、调用 `generate()`、记录耗时/显存并解析响应；它不得下载模型、读取实时屏幕或执行动作。`DesktopController` 的稳定接口为 `execute(action: ApprovedAction) -> ExecutionReceipt`。训练模块只产生版本化的模型适配器或提示词配置，必须经 `ModelProvider` 加载，不能直接调用 Controller。领域模块不得跨过这些接口相互调用。
 
 ## 9. 数据处理与评测设计
 
@@ -330,7 +377,7 @@ artifacts/<task_id>/         # 运行期产物；加入 .gitignore
 
 每一步轨迹统一记录 `before_observation`、候选动作、Guard 决策、`execution_receipt`、`after_observation`、验证证据和可选人工纠正。成功轨迹、失败轨迹与人工纠正轨迹分开标记；前四周只完成可审计采集，不启动 LoRA、DPO 或在线自训练。
 
-端到端验收设置五个受控任务：打开测试浏览器、搜索指定内容、打开指定测试文件、向测试联系人发送预设消息、关闭测试应用。每项任务至少执行 5 次，记录：
+端到端验收设置五个受控任务：打开测试浏览器、搜索指定内容、打开指定测试文件、向测试联系人发送预设消息、关闭测试应用。每个任务夹具必须版本化定义初始窗口、允许进程/路径、显示器与 DPI、测试数据、成功谓词和 `reset()` 步骤；消息任务只能使用预置测试联系人，且发送前必须触发本地确认。每项任务至少执行 5 次，记录：
 
 - 任务成功率、平均/中位耗时、平均步数；
 - 感知、推理、控制和验证各阶段耗时；
@@ -338,6 +385,10 @@ artifacts/<task_id>/         # 运行期产物；加入 .gitignore
 - 分辨率/DPI、模型版本、量化模式和配置哈希。
 
 基础验收目标是每项任务都有可复现轨迹和失败样例；不以隐藏失败或一次性演示代替评测。性能结论以实测为准：报告中必须分别列出 3B 与可选 7B 模型的首次加载时间、稳态单步延迟、峰值显存和成功率，不能用主观描述替代数据。
+
+第 5 周开始的训练数据只使用许可证允许教学/研究用途的公开样本，按任务来源和模板去重后固定 train/validation/test 划分；测试集严禁进入训练或提示词示例。LoRA 实验至少比较“基线模型 + 固定提示词”“基线模型 + 优化提示词”“LoRA 模型 + 固定提示词”三组，统一模型快照、图像尺寸、随机种子和任务夹具。每个适配器归档基座快照摘要、数据清单哈希、训练参数、检查点哈希与验证结果；不得使用真实桌面截图或个人数据训练。
+
+第 7 周的正式评测扩展为 20 个任务，按 5 个基础任务类别、2 个难度层级和至少 2 种受控分辨率/DPI 条件分层，并保留不可完成任务。每个“模型版本 × 任务 × 环境”组合重复 5 次，报告成功率及 Wilson 95% 置信区间、平均/中位耗时、平均步数、失败码分布和安全拒绝正确率；Ui-TARS、Claude Computer Use 仅依据公开可比结果作定性差距分析，不把无法同环境复现的数字并入同一排行榜。
 
 ## 10. 测试策略
 
@@ -353,7 +404,7 @@ artifacts/<task_id>/         # 运行期产物；加入 .gitignore
 
 测试默认使用 mock Provider 和模拟/专用窗口；真实鼠标键盘集成测试须显式加 `--enable-desktop-control` 标志，CI 不执行真实桌面控制。
 
-## 11. 四周实施映射
+## 11. 八周实施映射
 
 | 周次 | 主要实现 | 可验收产物 |
 | --- | --- | --- |
@@ -361,6 +412,10 @@ artifacts/<task_id>/         # 运行期产物；加入 .gitignore
 | 第 2 周 | 截图、OCR、可选 UIA、坐标转换、控制器、Guard、会话锁与单测 | 感知控制模块、测试报告、受控窗口演示 |
 | 第 3 周 | 数据适配、`ModelProvider`、快慢提示词、LangGraph 基础图、轨迹 schema | 预处理脚本、基础 Agent、结构化计划样例 |
 | 第 4 周 | 状态机集成、功能性 Verifier、有限恢复、CLI、日志与五任务测试 | v1.0 原型、运行说明、执行轨迹和基础任务测试报告 |
+| 第 5 周 | 固定公开数据许可与划分、构造训练/验证集、PEFT LoRA、提示词对照实验 | 适配器权重、可复现训练配置、微调效果对比报告 |
+| 第 6 周 | 复杂任务分解、错误检测与有限重试、感知优化、实时任务状态与日志 | v2.0 系统、鲁棒性测试报告 |
+| 第 7 周 | 设计并执行 20 任务分层评测，分析应用与分辨率差异 | 系统全面评估报告、性能分析图表 |
+| 第 8 周 | 整理代码、复现实验、技术报告与演示 | 完整仓库、技术报告、系统演示视频 |
 
 ## 12. 风险与缓解
 
@@ -380,6 +435,9 @@ artifacts/<task_id>/         # 运行期产物；加入 .gitignore
 | 宿主机安装数据库/Redis 污染环境 | 端口、服务和数据目录难清理 | 第一版不用数据库；未来只能用 Docker Compose、命名卷、健康检查和回环端口 |
 | 异常退出遗留输入状态 | 键盘或鼠标持续按下 | 单会话锁、统一 finally 清理、进程退出钩子和急停测试 |
 | 外部副作用或隐私泄露 | 合规风险 | 测试账号、敏感动作确认、本地脱敏日志、禁止上传截图作为默认策略 |
+| LoRA 数据泄漏或许可不兼容 | 合规风险、评测失真 | 数据清单记录来源/许可证/哈希；训练前做许可审查、去重和测试集隔离 |
+| 微调收益不可复现 | 无法判断投入价值 | 固定基座快照、随机种子、训练配置、数据划分和对照组；只比较相同夹具下的结果 |
+| 20 任务评测样本不足 | 结论偶然或偏置 | 按任务类别、难度、DPI 分层，每个组合重复 5 次并报告置信区间 |
 
 ## 13. 运行与交付要求
 
@@ -394,6 +452,8 @@ PostgreSQL、Redis、消息队列等会注册服务、占用端口或持久化�
 环境文档必须提供 Python、GPU、PyTorch CUDA/BF16、ModelScope 小文件下载、本地单图推理、截图、OCR/UIA 和受控点击的验证命令。模型权重、缓存、截图和运行产物不提交 Git；配置中不包含真实密钥。
 
 每次实验至少归档 `config.yaml` 副本、`environment.json`、`trajectory.jsonl`、关键截图、`result.json`。最终 README 要能让新环境按步骤安装、选择本地 3B 模型、启动安全模式，并复现至少一个无副作用任务。
+
+第 5–8 周的额外交付也必须可复现：训练阶段归档 `dataset_manifest.json`、数据划分哈希、训练配置、随机种子、基座与 LoRA 检查点哈希；评测阶段归档任务夹具版本、逐次结果、聚合统计与生成图表脚本。第 8 周交付的仓库不得包含模型权重、个人数据、真实截图、令牌或未获许可的数据；技术报告须区分已实测结果、对照实验结论与后续假设。
 
 ### 13.1 开发开始前的机器准备
 
@@ -428,4 +488,4 @@ PostgreSQL、Redis、消息队列等会注册服务、占用端口或持久化�
 
 ## 14. 设计结论
 
-本设计以轻量 LangChain/LangGraph 编排、Windows Python 3.12、PyTorch/Transformers、ModelScope 模型快照和确定性安全控制层为主线，匹配 RTX 5070 Ti 与 32 GB 内存。第一版采用单进程、单模型、单并发，不引入 vLLM 或数据库；有状态基础设施未来统一由 Docker Compose 隔离。系统吸收先进 GUI Agent 的闭环交互、多源感知、归一化定位、快慢推理、功能性验证和错误恢复理念，同时避免提前服务化。它优先交付一个可验证、可中止、可复现的 Windows GUI 执行闭环；vLLM、更大模型、模型微调、长期记忆和跨平台兼容性只在主线稳定并有实测收益后扩展。
+本设计以轻量 LangChain/LangGraph 编排、Windows Python 3.12、PyTorch/Transformers、ModelScope 模型快照和确定性安全控制层为主线，匹配 RTX 5070 Ti 与 32 GB 内存。第 1–4 周采用单进程、单模型、单并发，不引入 vLLM 或数据库，优先交付一个可验证、可中止、可复现的 Windows GUI 执行闭环。第 5–8 周以该稳定接口为基础，依次引入受许可数据上的 LoRA 对照实验、有限鲁棒性优化、20 任务分层评测和可复现作品集；训练和评测均不越过 Guard/Controller 边界。更大模型、vLLM、长期记忆和跨平台兼容性只有在主线指标显示明确收益后才进入后续迭代。

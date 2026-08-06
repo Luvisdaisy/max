@@ -1,0 +1,9 @@
+langchain==1.3.14
+langgraph==1.2.10
+modelscope==1.39.1
+prompt_toolkit==3.0.52
+rich==14.3.3
+textual==8.1.1
+transformers==5.14.1
+typer==0.21.0
+Pillow==11.3.0
