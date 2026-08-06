@@ -1,0 +1,431 @@
+# 基于多模态大模型的桌面 GUI 智能体：系统技术设计报告
+
+**版本：** v1.4.1  
+**日期：** 2026-08-06  
+**目标平台：** Windows 11、NVIDIA RTX 5070 Ti、32 GB DDR5-6400 内存  
+**编排框架：** LangChain（LCEL + LangGraph 状态机）  
+**模型部署：** Windows Conda Python 3.12 + PyTorch/Transformers 单进程本地推理
+
+## 1. 目标、范围与约束
+
+本系统实现一个可复现的桌面 GUI 智能体原型：接收自然语言任务，观察当前屏幕，生成并执行受约束的鼠标键盘操作，验证每一步结果，并输出完整审计记录。其核心闭环为：
+
+```text
+用户指令 → 屏幕感知 → 任务规划 → 动作校验与执行 → 屏幕复核 → 结果反馈
+```
+
+第一阶段覆盖项目计划第 1～4 周：环境与技术验证、感知/控制模块、数据和基础 Agent、端到端集成。命令行是唯一交互入口；不在本阶段开发桌面前端、浏览器扩展、长期记忆或模型微调，也不引入多 Agent 协作、在线自训练、向量数据库或 MCP 服务。只有当单进程 CLI 原型稳定且出现明确的外部复用需求后，才评估这些扩展。
+
+系统仅在授权的本机测试账户、模拟应用或专用测试窗口中运行。涉及发送消息的测试只能面向测试对象；不得读取、上传或操作个人敏感数据，也不得对未经授权的软件执行不可逆操作。
+
+## 2. 技术路线与关键取舍
+
+### 2.1 方案选择
+
+采用“视觉模型提出候选动作 + 确定性安全层执行和验证”的分层方案，而非直接让模型控制鼠标键盘。理由是 GUI 任务失败通常来自坐标偏移、页面变化和模型输出不规范；把权限校验、坐标换算、动作间隔和成功判定放在确定性组件中，更容易调试、复现和止损。
+
+LangChain 只承担提示词、模型调用和可观测的工作流编排；状态转换由 LangGraph 显式定义。这样避免把高风险执行逻辑藏在自由循环的 Agent Executor 内部，同时保留后续替换模型或工具的能力。
+
+本设计吸收以下已有方案中可在四周内验证的思想：
+
+| 参考方案 | 吸收的设计 | 本项目中的简化实现 |
+| --- | --- | --- |
+| ScreenAgent | Planning–Acting–Reflecting 闭环、结构化动作、失败后重试或重规划 | 一个 LangGraph 状态机驱动六个节点，不拆成多个 Agent |
+| UI-TARS | 多源感知、归一化坐标、统一动作空间、快慢推理、状态变化识别 | 截图 + OCR + 可选 UI Automation；模型只生成单个原子动作 |
+| WebArena | 可复现环境、功能性结果验证、不可完成任务 | 使用本地测试窗口与任务检查器，不要求复现固定点击轨迹 |
+| Computer Use 工程实践 | 能力闸门、会话锁、宿主隔离和异常清理 | CLI 显式开关、单任务锁、窗口白名单、输入状态释放 |
+
+### 2.2 本地模型部署策略
+
+以 RTX 5070 Ti 的 16 GB 显存为设计基线。第一版不使用 vLLM、不部署独立推理服务，LangChain/LangGraph、桌面感知控制与 PyTorch/Transformers 模型推理全部运行在 Windows Conda `max`（Python 3.12）中。单进程方案减少 WSL、HTTP 序列化和服务生命周期管理成本，适合单用户、单模型、单并发原型。
+
+启动时必须记录 `nvidia-smi`、Python、PyTorch、CUDA 构建、GPU 名称、计算能力和可用显存，并执行一次 BF16 GPU 张量运算。加载模型后再执行一张受控图片的结构化动作推理。任一检查失败时进入 `MODEL_UNAVAILABLE`，不得自动执行桌面动作。
+
+| 角色 | 首选 | 量化与运行方式 | 设计用途 |
+| --- | --- | --- | --- |
+| 主视觉语言模型 | `Qwen/Qwen2.5-VL-3B-Instruct` | PyTorch BF16、Transformers、单实例单并发 | 默认观察、规划和动作 JSON 生成；优先验证原生算子链路 |
+| 兼容性回退 | 同一 3B 模型 | FP32 CPU 仅用于最小功能诊断，不用于交互任务 | 区分 CUDA/驱动故障与模型、提示词故障 |
+| 质量/能力对照 | `Qwen/Qwen2.5-VL-7B-Instruct` | 后续按显存实测决定量化方式 | 不作为第一版依赖，不与 3B 同时驻留 |
+| 云端/API 适配 | 任一兼容视觉 API | 仅通过 `ModelProvider` 接口启用 | 本地模型不可用时的可选替代，不传输含敏感信息的截图 |
+| 文字识别 | PaddleOCR | CPU 优先，必要时启用 GPU | 提供文字、置信度和屏幕坐标，减少视觉模型对小字号文字的压力 |
+
+主模型只通过 ModelScope 拉取。下载路径必须位于 Git 仓库外，推理阶段只读本地快照，不允许 Transformers 隐式访问其他模型仓库：
+
+```python
+from modelscope import snapshot_download
+from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+import torch
+
+model_dir = snapshot_download(
+    "Qwen/Qwen2.5-VL-3B-Instruct",
+    revision="master",
+    cache_dir=r"F:\AI\models\modelscope",
+)
+processor = AutoProcessor.from_pretrained(model_dir, local_files_only=True)
+model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+    model_dir,
+    torch_dtype=torch.bfloat16,
+    device_map="auto",
+    attn_implementation="sdpa",
+    local_files_only=True,
+).eval()
+```
+
+默认运行预算为：每轮一张预处理截图，长边不超过 1280 px；最多生成 256 token；每轮只生成一个动作；任务最多 12 轮；同一时刻只允许一个推理请求。第一版使用 eager inference、`torch.inference_mode()`、BF16 和 SDPA，不启用 `torch.compile`、FlashAttention 源码编译、AWQ 或多模型常驻。每步推理后保留模型但释放不再引用的输入/输出张量；不得每轮重新加载模型或无条件调用 `empty_cache()`。
+
+LangChain 不使用 `ChatOpenAI`。自定义 `TorchModelProvider` 将标准化观察转换为 Qwen chat template，调用 `generate()`，记录预处理、GPU 推理、解码耗时与显存峰值，再用 Pydantic 校验动作 JSON。模型权重、处理器和设备只在 Provider 初始化时加载一次。
+
+推理采用轻量的快慢路由，但不同时驻留两套模型。默认“快速路径”让当前模型基于明确目标直接生成一条原子动作；当目标存在多个候选、任务需要跨应用、连续两轮无进展或 Verifier 返回冲突证据时，切换“审慎路径”，向同一模型补充任务摘要、失败证据和里程碑信息后重新规划。3B/7B 是实验配置而不是运行时双模型路由，避免在 16 GB 显存中同时加载两个视觉模型。
+
+### 2.3 部署依据与兼容性边界
+
+- PyTorch 官方支持 Windows 与 Python 3.12；本机实测固定使用 `torch==2.13.0+cu130` 和 `torchvision==0.28.0+cu130`，必须从官方 CUDA 13.0 wheel 索引安装：[PyTorch Start Locally](https://pytorch.org/get-started/locally/)。默认 PyPI 曾解析到 CPU 构建，因此验收不能只检查版本号，必须检查 `torch.version.cuda` 和真实 CUDA 运算。
+- Transformers 已提供 `Qwen2_5_VLForConditionalGeneration`；主模型从 [ModelScope 的 Qwen2.5-VL-3B-Instruct](https://modelscope.cn/models/Qwen/Qwen2.5-VL-3B-Instruct) 下载，代码不得用远端模型 ID 调用 `from_pretrained()`。
+- 本机实测 RTX 5070 Ti 计算能力为 12.0，PyTorch CUDA 13.0 构建可执行 BF16 矩阵运算。该结果只证明 CUDA 基础链路，不等于完整 3B 模型已经完成显存和延迟验收。
+- vLLM 保留为后续吞吐量或服务化需求出现后的候选，不属于第一版安装、启动或验收范围。
+
+## 3. 总体架构
+
+```mermaid
+flowchart LR
+    U[用户 / CLI] --> O[Orchestrator\nLangGraph]
+    O --> P[Perception\n截图、OCR、UIA、OpenCV]
+    P --> S[Agent State]
+    S --> M[TorchModelProvider\nTransformers + PyTorch]
+    M --> PL[Planner\n结构化 ActionPlan]
+    PL --> G[Safety Guard\n策略、坐标、确认]
+    G -->|允许| E[Desktop Controller\nPyAutoGUI / pynput]
+    G -->|拒绝| O
+    E --> V[Verifier\n功能谓词、UI 状态、截图差异]
+    V -->|成功| O
+    V -->|失败或无进展| R[Recovery\n重观察、重规划、人工接管]
+    R --> O
+    O --> C[Session Safety\n能力闸门、会话锁、异常清理]
+    O --> L[Artifact Store\n日志、截图、轨迹]
+```
+
+第一版运行边界如下：
+
+```mermaid
+flowchart LR
+    subgraph WIN[Windows 11 / Conda max]
+        A[CLI + LangGraph]
+        P[截图 / OCR / UIA]
+        T[PyTorch + Transformers]
+        Q[Qwen2.5-VL-3B BF16]
+        C[Guard + Desktop Controller]
+        A --> P
+        P -->|PIL image + observation| T
+        T --> Q
+        Q -->|structured action JSON| A
+        A --> C
+    end
+    MS[ModelScope] -->|仅下载阶段| CACHE[仓库外模型缓存]
+    CACHE -->|本地只读加载| T
+    D[Docker Compose\n按需 PostgreSQL / Redis] -. 第一版不启用 .-> A
+```
+
+模块边界如下：
+
+| 模块 | 职责 | 依赖 | 不负责的事 |
+| --- | --- | --- | --- |
+| CLI | 接收任务、显示进度和最终结果 | Orchestrator | 不直接访问鼠标键盘 |
+| Orchestrator | 维护任务状态，驱动 Observe/Decide/Guard/Act/Verify/Recover 循环 | LangGraph、各领域模块 | 不包含 OCR 或坐标计算细节 |
+| Perception | 截图、显示器/缩放信息、OCR、UI Automation、状态变化检测 | mss、OpenCV、PaddleOCR、pywinauto | 不执行动作、不做任务决策 |
+| ModelProvider | 单例加载本地模型，完成预处理、PyTorch 推理、解码与结构化输出 | torch、transformers、qwen-vl-utils | 不接触桌面控制器、不负责模型下载 |
+| Planner | 根据任务与观察生成下一条候选动作和成功条件 | ModelProvider | 不直接执行候选动作 |
+| Safety Guard | 对动作、坐标、目标窗口、频率、轮数实施策略 | 配置、当前状态 | 不调用模型做安全放行 |
+| Desktop Controller | 受控点击、输入、滚动、拖拽、停止 | PyAutoGUI、pynput | 不判断任务是否成功 |
+| Verifier | 以屏幕变化、OCR 文字和规则验证动作结果 | Perception | 不重试或自行执行 |
+| Recovery | 根据失败证据选择等待、重观察、重规划或人工接管 | Verifier、AgentState | 不绕过 Guard 重复执行动作 |
+| Session Safety | 能力总开关、单会话锁、宿主窗口排除和输入状态清理 | 配置、操作系统进程/窗口信息 | 不参与模型决策 |
+| Artifact Store | 按任务保存 JSONL 轨迹、截图及环境元数据 | 文件系统、logging | 不保存密钥或原始敏感内容 |
+| Infrastructure | 仅在确有跨进程查询、并发写或队列需求时提供有状态服务 | Docker Compose、命名卷 | 第一版不引入数据库；不在宿主机安装 PostgreSQL/Redis |
+
+## 4. 核心数据契约
+
+模型与数据层使用范围为 `[0.0, 1.0]` 的归一化坐标，以适配不同分辨率；执行层使用物理像素，原点为目标显示器左上角。感知模块必须在每次截图中写入屏幕尺寸、窗口矩形、DPI 缩放和截图尺寸。模型可以输出元素 ID 或归一化坐标，但只有 Guard 能完成物理像素转换并生成 `ApprovedAction`。
+
+```python
+from typing import Literal, Optional
+from pydantic import BaseModel, Field
+
+class ScreenMeta(BaseModel):
+    width_px: int
+    height_px: int
+    dpi_scale: float = Field(gt=0)
+    monitor_id: int = 0
+    captured_at_ms: int
+    active_window_title: str
+    active_window_rect: tuple[int, int, int, int]
+
+class TargetPoint(BaseModel):
+    normalized_x: float = Field(ge=0, le=1)
+    normalized_y: float = Field(ge=0, le=1)
+    physical_x: Optional[int] = None  # 仅 Guard 写入
+    physical_y: Optional[int] = None
+
+class UIElement(BaseModel):
+    text: str
+    confidence: float = Field(ge=0, le=1)
+    bbox: tuple[int, int, int, int]  # left, top, right, bottom
+    element_id: str
+    source: Literal["uia", "ocr", "template", "model"]
+
+class Observation(BaseModel):
+    screenshot_ref: str
+    screen: ScreenMeta
+    elements: list[UIElement]
+    changed_regions: list[tuple[int, int, int, int]] = []
+    state_fingerprint: str
+
+class DesktopAction(BaseModel):
+    kind: Literal["click", "double_click", "type_text", "scroll", "drag", "wait", "finish", "call_user"]
+    target_element_id: Optional[str] = None
+    target_point: Optional[TargetPoint] = None
+    text: Optional[str] = None
+    delta: Optional[int] = None
+    target_description: str
+    expected_observation: str
+    requires_confirmation: bool = False
+
+class AgentState(BaseModel):
+    task_id: str
+    user_goal: str
+    step_index: int = 0
+    max_steps: int = 12
+    screen: Optional[ScreenMeta] = None
+    elements: list[UIElement] = []
+    candidate_action: Optional[DesktopAction] = None
+    history: list[dict] = []
+    no_progress_count: int = 0
+    replan_count: int = 0
+    reasoning_mode: Literal["fast", "deliberate"] = "fast"
+    status: Literal["INIT", "OBSERVING", "PLANNING", "GUARDING", "ACTING", "VERIFYING", "RECOVERING", "WAITING_USER", "SUCCEEDED", "FAILED", "ABORTED"] = "INIT"
+```
+
+模型输出必须通过 Pydantic schema 校验。解析失败时，Orchestrator 可请求模型以相同 schema 重答一次；第二次失败即终止任务并记录原始响应摘要，绝不以自然语言猜测鼠标动作。
+
+## 5. 执行工作流与状态机
+
+每个任务按下列状态推进，任何异常均落到可审计的终态：
+
+```mermaid
+stateDiagram-v2
+    [*] --> INIT
+    INIT --> OBSERVING
+    OBSERVING --> PLANNING: 截图与感知成功
+    PLANNING --> GUARDING: 得到合法 Action JSON
+    GUARDING --> ACTING: 策略放行
+    GUARDING --> FAILED: 策略拒绝
+    ACTING --> VERIFYING: 操作完成
+    VERIFYING --> SUCCEEDED: 成功条件满足
+    VERIFYING --> RECOVERING: 失败、冲突或无进展
+    RECOVERING --> OBSERVING: 等待或重新观察
+    RECOVERING --> PLANNING: 切换审慎路径并重新规划
+    RECOVERING --> WAITING_USER: 需要登录、确认或人工处理
+    RECOVERING --> FAILED: 超时、重复失败或达到预算
+    WAITING_USER --> OBSERVING: 用户处理完成
+    WAITING_USER --> ABORTED: 用户取消
+    INIT --> ABORTED: 用户停止
+    OBSERVING --> ABORTED: 用户停止
+    PLANNING --> ABORTED: 用户停止
+    ACTING --> ABORTED: Fail-safe 或用户停止
+```
+
+1. CLI 创建唯一 `task_id`，记录启动环境、模型配置和任务文本。
+2. Perception 用 `mss` 捕获指定显示器并生成缩放后的模型图像，合并 PaddleOCR、可选 Windows UI Automation 和 OpenCV 结果；只有元素密集或定位歧义时才生成 Set-of-Mark 标注图。
+3. Perception 根据窗口标题、关键 OCR/UIA 状态和截图感知哈希计算 `state_fingerprint`，并输出相对上一帧的变化区域。
+4. Planner 使用“当前观察 + 精简历史 + 用户目标”生成**仅一个** `DesktopAction`。快速路径不展开长推理；存在歧义或恢复失败时才使用审慎路径。提示词要求优先引用元素 ID，其次使用归一化坐标，不允许编造不可见元素。
+5. Guard 检查动作种类、目标窗口、元素是否仍存在、坐标转换、黑名单区域、最小动作间隔、最大步数和确认要求。
+6. Controller 执行动作；每个动作前后写入时间戳、鼠标位置和截图引用。输入文本不写入明文日志，改记长度和 SHA-256 摘要。
+7. Verifier 按“任务专用功能谓词 → 窗口/UIA 状态 → OCR 目标文字 → 局部截图变化 → VLM 兜底”的顺序验证，不要求执行固定的标准动作序列。
+8. 若动作相同且连续两轮 `state_fingerprint` 基本不变，则进入 Recovery：第一次重新观察，第二次切换审慎路径重规划，第三次请求用户或失败退出。恢复动作仍须重新通过 Guard。
+9. 成功、失败或中止均生成 `result.json`，包括结果、验证证据、耗时、步数、失败码、截图索引和可复现实验配置。
+
+## 6. 安全与故障控制
+
+### 6.1 默认策略
+
+- 动作白名单仅包含 `click`、`double_click`、`type_text`、`scroll`、`drag`、`wait`、`finish`；不提供命令行、文件删除、注册表、进程管理或网络请求工具。
+- 默认只允许配置的测试应用进程/窗口标题；焦点窗口变化后重新观察并重新规划。
+- 坐标必须落在目标显示器边界且不得位于配置的禁用区域；点击前移动鼠标并保留 200 ms 以上间隔。
+- PyAutoGUI `FAILSAFE=True`；鼠标移至屏幕角落或 Ctrl+Alt+Esc 触发 `ABORTED`。中止后立即释放按键和鼠标按键，不再重试。
+- “发送”“提交”“支付”“删除”“关闭未保存内容”等高影响动作标记 `requires_confirmation=True`，CLI 显示动作摘要并等待明确的本地确认；没有确认即拒绝执行。
+- 截图、OCR 文本与日志仅保存在本地任务目录；日志字段进行脱敏，禁止写入 API Key、Cookie、剪贴板内容或完整密码文本。
+- 真实桌面控制必须同时满足配置总开关和 CLI `--enable-desktop-control` 参数；默认模式只观察并输出候选动作。
+- `DesktopSessionLock` 保证同一时刻只有一个任务控制真实桌面，并排除当前 CLI/终端窗口，防止 Agent 点击自己的宿主界面。
+- `InputStateCleanup` 在成功、失败、热键中止、异常和进程退出路径中统一释放鼠标按键与 Ctrl/Alt/Shift 等修饰键；清理失败写入独立高优先级日志。
+
+### 6.2 失败分类
+
+| 失败码 | 触发条件 | 系统行为 |
+| --- | --- | --- |
+| `MODEL_UNAVAILABLE` | 模型加载、CUDA 或调用失败 | 不执行动作，结束任务 |
+| `INVALID_ACTION` | schema、坐标或必填字段不合法 | 一次格式重试，仍失败则结束 |
+| `POLICY_DENIED` | 白名单、窗口、风险策略不允许 | 结束任务并提示人工处理 |
+| `ACTION_ERROR` | 自动化库抛错、焦点丢失 | 截图、释放输入状态、结束 |
+| `VERIFY_FAILED` | 成功条件不满足或无界面进展 | 在步数预算内回到观察，否则结束 |
+| `NO_PROGRESS` | 连续两轮状态指纹基本不变或重复同一失败动作 | 进入分级恢复，最多一次重新规划 |
+| `SESSION_BUSY` | 已有桌面控制会话持有锁 | 不启动第二个任务，不抢占现有会话 |
+| `TIMEOUT` | 单步或任务超时 | 中止当前输入状态并结束 |
+
+## 7. 模型与提示词设计
+
+LangChain 的 `ChatPromptTemplate` 由系统规则、任务目标、标准化观察和最近三步摘要组成。提示词禁止模型输出 Markdown、解释性文本或多动作列表，输出必须匹配 `DesktopAction` JSON schema。图片输入为当前截图；OCR 结果按置信度排序后截取，避免上下文膨胀。
+
+规划策略遵循以下优先级：
+
+1. 若成功条件已满足，输出 `finish`；
+2. 若 OCR/模板匹配可唯一定位目标，使用其边界框中心；
+3. 若目标不确定，输出 `wait` 或说明不可安全执行，不允许猜测点击；
+4. 同一失败动作不重复超过一次；
+5. 每轮只产生一项原子动作。
+
+模型配置需暴露：`model_id`、`revision`、`model_cache_dir`、`torch_dtype`、`device`、`attn_implementation`、`max_new_tokens`、`temperature`、`image_max_side`、`max_steps` 和 `step_timeout_s`。默认值为 `model_id=Qwen/Qwen2.5-VL-3B-Instruct`、`revision=master`、`torch_dtype=bfloat16`、`device=cuda:0`、`attn_implementation=sdpa`、`temperature=0.1`、`max_new_tokens=256`、`image_max_side=1280`、`max_steps=12`。模型快照解析后的实际目录、文件摘要、PyTorch/CUDA/Transformers 版本和峰值显存随任务归档，确保实验可复现。
+
+快慢推理共享同一 `ModelProvider`：快速路径只使用当前观察、目标和最近三步摘要；审慎路径额外加入失败证据、已完成里程碑和禁止重复的动作。审慎路径最多触发一次，防止小模型在长推理中引入新的幻觉。任务需要登录、验证码、身份确认或超出授权边界时，模型必须输出 `call_user`，而不是尝试绕过限制。
+
+## 8. 项目目录与接口组织
+
+建议代码按职责组织，避免 Agent 编排与设备操作互相耦合：
+
+```text
+src/gui_agent/
+  cli.py                    # 命令行入口
+  orchestration/graph.py    # LangGraph 状态图与节点装配
+  schemas.py                # Pydantic 数据契约
+  perception/screen.py      # mss 截图与 DPI 元数据
+  perception/ocr.py         # PaddleOCR 适配
+  perception/uia.py         # Windows UI Automation 可选适配
+  perception/vision.py      # OpenCV 预处理与模板匹配
+  perception/som.py         # 按需生成 Set-of-Mark 标注图
+  planning/prompts.py       # LangChain 提示词
+  planning/planner.py       # 结构化动作生成
+  providers/base.py         # ModelProvider 抽象接口
+  providers/torch_qwen.py   # PyTorch/Transformers Qwen 本地 Provider
+  models/download.py        # ModelScope 快照下载与完整性记录
+  control/guard.py          # 安全策略与校验
+  control/desktop.py        # PyAutoGUI/pynput 执行器
+  control/session.py        # 能力开关、会话锁与输入状态清理
+  verification/verifier.py  # 结果判定
+  verification/predicates.py# 任务专用功能性检查器
+  recovery/policy.py        # 无进展检测与有限恢复策略
+  storage/artifacts.py      # 日志、截图和结果归档
+configs/default.yaml         # 可调整运行策略，禁止存放密钥
+requirements/base.txt        # 主程序锁定依赖
+requirements/torch-cu130.txt # PyTorch CUDA 13.0 精确版本与索引说明
+deploy/compose.yaml           # 有明确需求后才加入数据库/Redis 服务
+tests/                       # 单元、集成和受控端到端测试
+artifacts/<task_id>/         # 运行期产物；加入 .gitignore
+```
+
+`ModelProvider` 的稳定接口为 `invoke(observation: Observation, goal: str, history: list[StepRecord]) -> DesktopAction`。`TorchQwenProvider` 只负责从仓库外本地快照加载处理器和模型、构造多模态输入、调用 `generate()`、记录耗时/显存并解析响应；它不得下载模型、读取实时屏幕或执行动作。`DesktopController` 的稳定接口为 `execute(action: ApprovedAction) -> ExecutionReceipt`。领域模块不得跨过这两个接口相互调用。
+
+## 9. 数据处理与评测设计
+
+第三周的数据适配层将 ScreenAgent、Mind2Web、WebArena 等公开样例映射为统一字段：`instruction`、`screenshot_ref`、`action_type`、`action_args`、`precondition`、`expected_result`、`source`、`license`。原始数据不混入人工测试轨迹；处理脚本可重复运行，并输出数据版本、输入哈希、丢弃记录和许可证信息。
+
+本项目采用结果导向的评测方式：同一任务允许多条正确路径，验收以最终窗口、文件、页面或测试应用状态为准，而不是把预测动作与一条固定轨迹逐项比较。测试集中至少包含一个不可完成任务，要求系统返回明确原因并停止，不能编造完成结果。
+
+每一步轨迹统一记录 `before_observation`、候选动作、Guard 决策、`execution_receipt`、`after_observation`、验证证据和可选人工纠正。成功轨迹、失败轨迹与人工纠正轨迹分开标记；前四周只完成可审计采集，不启动 LoRA、DPO 或在线自训练。
+
+端到端验收设置五个受控任务：打开测试浏览器、搜索指定内容、打开指定测试文件、向测试联系人发送预设消息、关闭测试应用。每项任务至少执行 5 次，记录：
+
+- 任务成功率、平均/中位耗时、平均步数；
+- 感知、推理、控制和验证各阶段耗时；
+- `INVALID_ACTION`、`POLICY_DENIED`、`VERIFY_FAILED` 等失败码分布；
+- 分辨率/DPI、模型版本、量化模式和配置哈希。
+
+基础验收目标是每项任务都有可复现轨迹和失败样例；不以隐藏失败或一次性演示代替评测。性能结论以实测为准：报告中必须分别列出 3B 与可选 7B 模型的首次加载时间、稳态单步延迟、峰值显存和成功率，不能用主观描述替代数据。
+
+## 10. 测试策略
+
+| 层级 | 核心验证 | 例子 |
+| --- | --- | --- |
+| 单元测试 | 坐标、schema、策略、OCR/UIA 结果转换 | 归一化坐标正确转换；越界点击被拒绝 |
+| 合约测试 | 模块接口与模型结构化输出 | 非法 JSON 不进入控制器；Provider 可替换为 mock |
+| 模型测试 | PyTorch CUDA、ModelScope 快照、本地单图推理 | BF16 GPU 运算成功；仅从本地快照生成有效动作 JSON |
+| 集成测试 | 截图→OCR、Guard→Controller、Verifier | 在受控窗口点击指定按钮后识别“完成”文字 |
+| 端到端测试 | 完整状态机、功能性验证、恢复和中止 | 重复动作触发恢复；热键中止后没有遗留按键状态 |
+| 安全测试 | 能力闸门、会话锁、窗口隔离和清理 | 默认不能控制桌面；并发任务不能获得第二把锁 |
+| 性能测试 | GPU/内存/延迟与稳定性 | 连续执行 10 个受控任务，无显存单调增长 |
+
+测试默认使用 mock Provider 和模拟/专用窗口；真实鼠标键盘集成测试须显式加 `--enable-desktop-control` 标志，CI 不执行真实桌面控制。
+
+## 11. 四周实施映射
+
+| 周次 | 主要实现 | 可验收产物 |
+| --- | --- | --- |
+| 第 1 周 | Python 3.12 与 GPU 验证、ModelScope 下载、PyTorch 3B BF16 基准、依赖锁定、接口草案 | 调研报告、环境文档、模型下载脚本、显存/延迟记录、架构图 |
+| 第 2 周 | 截图、OCR、可选 UIA、坐标转换、控制器、Guard、会话锁与单测 | 感知控制模块、测试报告、受控窗口演示 |
+| 第 3 周 | 数据适配、`ModelProvider`、快慢提示词、LangGraph 基础图、轨迹 schema | 预处理脚本、基础 Agent、结构化计划样例 |
+| 第 4 周 | 状态机集成、功能性 Verifier、有限恢复、CLI、日志与五任务测试 | v1.0 原型、运行说明、执行轨迹和基础任务测试报告 |
+
+## 12. 风险与缓解
+
+| 风险 | 影响 | 缓解措施 |
+| --- | --- | --- |
+| PyTorch 默认索引安装到 CPU 构建 | GPU 不可用但安装表面成功 | 固定官方 CUDA 13.0 索引；启动时同时验证 `torch.version.cuda` 与真实 BF16 CUDA 运算 |
+| Blackwell 与 PyTorch/算子组合异常 | 模型启动或推理失败 | 固定已实测的 `torch==2.13.0+cu130`；第一版使用 BF16 + SDPA eager，不源码编译 FlashAttention |
+| 3B 模型显存或延迟超预算 | 交互不可用、OOM | 降图像边长和输出长度、缩短历史、单并发；完整模型加载后以实测峰值决定是否量化 |
+| ModelScope 快照漂移或下载中断 | 结果不可复现、文件不完整 | 固定 revision/文件摘要；下载与推理解耦；Provider 仅允许本地路径和 `local_files_only=True` |
+| 模型缓存写入 Git 或系统盘 | 仓库膨胀、磁盘压力 | 固定仓库外 `F:\AI\models\modelscope`；启动时拒绝位于仓库内的模型目录 |
+| Windows DPI、多显示器坐标偏移 | 误点击 | 物理像素统一、每轮记录 DPI/显示器、受控分辨率测试、Guard 边界检查 |
+| OCR 小字或主题变化误识别 | 规划错误 | 置信度阈值、图像预处理、模型视觉复核、低置信度拒绝猜测 |
+| 模型幻觉或输出不规范 | 危险/无效动作 | Pydantic schema、原子动作、白名单、窗口限制、一次重试上限 |
+| Agent 忽略历史状态并重复动作 | 无效循环、误操作 | 状态指纹、重复动作检测、一次审慎重规划和明确停止预算 |
+| UI Automation 对非标准控件不可用 | 感知信息缺失 | UIA 仅作为增强信号，截图 + OCR + VLM 始终保留 |
+| PyTorch 与 PaddleOCR 的 Windows DLL 加载顺序 | 先加载 PaddleOCR 时可能导致后续 Torch DLL 加载失败 | 应用启动先导入/初始化 PyTorch 与 ModelScope，再初始化 PaddleOCR；若运行期仍冲突才拆为独立 OCR 子进程 |
+| 宿主机安装数据库/Redis 污染环境 | 端口、服务和数据目录难清理 | 第一版不用数据库；未来只能用 Docker Compose、命名卷、健康检查和回环端口 |
+| 异常退出遗留输入状态 | 键盘或鼠标持续按下 | 单会话锁、统一 finally 清理、进程退出钩子和急停测试 |
+| 外部副作用或隐私泄露 | 合规风险 | 测试账号、敏感动作确认、本地脱敏日志、禁止上传截图作为默认策略 |
+
+## 13. 运行与交付要求
+
+Windows 主环境固定为 Conda `max`（Python 3.12.13）。第一版已锁定的核心版本为 `torch==2.13.0+cu130`、`torchvision==0.28.0+cu130`、`transformers==5.14.1`、`modelscope==1.39.1`、`langchain==1.3.14` 和 `langgraph==1.2.10`。PyTorch/TorchVision 必须从 `https://download.pytorch.org/whl/cu130` 安装，其他包从常规 PyPI 安装；最终交付需生成带哈希的锁定文件。
+
+PaddlePaddle 3.3.1 与 PaddleOCR 3.7.0 已能在 Python 3.12 中安装。实测必须先初始化 PyTorch/ModelScope，再初始化 PaddleOCR；逆序曾触发 Torch DLL 加载失败。第一版先用明确的启动顺序控制复杂度，只有该问题在实际 OCR 推理中复现时才拆分 OCR 子进程。
+
+模型、Paddle、ModelScope、COM 生成代码和运行产物必须使用显式缓存路径且不进入 Git。建议模型根目录为 `F:\AI\models\modelscope`，运行产物留在仓库的 ignored `artifacts/`；不得让 `comtypes` 在仓库根目录生成 `Python/` 缓存。
+
+PostgreSQL、Redis、消息队列等会注册服务、占用端口或持久化数据的基础设施不得直接安装到 Windows。只有业务需求明确后才加入 `compose.yaml`，镜像固定版本/摘要，端口默认只绑定 `127.0.0.1`，数据写入命名卷并提供健康检查。第一版 JSONL Artifact Store 已满足单用户审计需求，因此不启动数据库容器。当前机器已安装并启动用户级 Docker Desktop；其 CLI 位于 `C:\Users\admin\AppData\Local\Programs\DockerDesktop\resources\bin\docker.exe`。自动化检查若运行在受限沙箱中，必须区分“无权执行用户目录中的 CLI”与“Docker 未安装”。
+
+环境文档必须提供 Python、GPU、PyTorch CUDA/BF16、ModelScope 小文件下载、本地单图推理、截图、OCR/UIA 和受控点击的验证命令。模型权重、缓存、截图和运行产物不提交 Git；配置中不包含真实密钥。
+
+每次实验至少归档 `config.yaml` 副本、`environment.json`、`trajectory.jsonl`、关键截图、`result.json`。最终 README 要能让新环境按步骤安装、选择本地 3B 模型、启动安全模式，并复现至少一个无副作用任务。
+
+### 13.1 开发开始前的机器准备
+
+1. 使用 `conda activate max`，确认 Python 为 3.12.x，解释器位于 `F:\Software\Miniconda3\envs\max`。
+2. 用 `nvidia-smi` 确认 RTX 5070 Ti 和可用显存；运行 PyTorch CUDA/BF16 张量自检，不能只依据驱动显示的 CUDA 版本判断。
+3. 在 `F:\AI\models\modelscope` 至少预留 20 GB，并确保该目录不位于 Git 仓库中；用 ModelScope 先下载 `config.json` 验证网络，再下载完整模型。
+4. 完整模型下载后离线加载 3B BF16，记录首次加载时间、空闲/峰值显存和单图推理延迟；若 OOM，先降低图像尺寸和上下文，不能直接切换多种量化库。
+5. 关闭游戏、视频增强、其他 CUDA 程序和不必要的 GPU Overlay，为 Windows 桌面保留显存。
+6. 固定首轮测试的显示器、分辨率和 Windows 缩放比例，并准备专用测试目录、测试浏览器配置和测试联系人，不使用真实个人数据。
+7. 在交互式本机 PowerShell 中验证 `mss` 截图、UIA 窗口枚举、PaddleOCR 最小识别和急停热键；Codex 的非交互桌面会话不能替代该项。
+8. Docker Desktop 已安装；仅当项目确需数据库/Redis 时创建 Compose 配置，并在首次使用前验证 `docker version`、`docker compose version`、镜像拉取和一个带健康检查的临时容器。
+9. 准备五个验收任务对应的初始状态和结果谓词；每次测试前能够恢复到相同初始状态。
+
+### 13.2 2026-08-06 基础环境核验结果
+
+| 检查项 | 当前结果 | 是否可用 / 后续动作 |
+| --- | --- | --- |
+| Windows Conda | Conda 26.5.3，环境路径 `F:\Software\Miniconda3\envs\max` | 可用 |
+| Windows Python | `max` 中为 Python 3.12.13，pip 26.1.2；SSL、SQLite 自检正常 | 可用 |
+| Git | 2.55.0.windows.3 | 可用 |
+| Windows GPU | RTX 5070 Ti，16,303 MiB，驱动 610.88 | 可用 |
+| PyTorch GPU | `torch 2.13.0+cu130`、CUDA 13.0、计算能力 12.0；BF16 矩阵运算成功 | 可用 |
+| Qwen/Transformers | `transformers 5.14.1` 可导入 `Qwen2_5_VLForConditionalGeneration` | 接口可用；完整模型尚未下载和推理 |
+| ModelScope | 1.39.1；已从 `Qwen/Qwen2.5-VL-3B-Instruct` 下载 1,373 字节 `config.json` 到临时目录并清理 | 下载链路可用；完整权重待下载 |
+| LangChain/LangGraph | 1.3.14 / 1.2.10，导入成功 | 可用；自定义 Provider 尚待编码 |
+| 视觉与桌面依赖 | OpenCV 4.10.0、mss、PyAutoGUI、pynput、pywinauto 均导入成功；屏幕尺寸读取为 1920×1080 | 依赖可用；非交互会话 BitBlt 截图失败，需本机交互式终端复验 |
+| PaddleOCR | PaddlePaddle 3.3.1、PaddleOCR 3.7.0；Paddle CPU 张量与正确导入顺序通过 | 基础运行可用；OCR 模型下载和最小识别待验证 |
+| Python 依赖一致性 | `pip check` 返回 `No broken requirements found` | 可用 |
+| Docker | Docker 29.6.2、Compose v5.3.1、Docker Desktop 4.85.0；Linux Engine 29.6.2 可连接 | 可用；尚未拉取测试镜像或验证项目级 Compose 健康检查 |
+
+当前结论是：Python 3.12、PyTorch CUDA、ModelScope 小文件下载、核心 Python 依赖、基础 OCR 运行时和 Docker Engine 已验证。正式模型编码前仍应完成三项机器侧验收：下载完整 Qwen 3B 权重并执行单图结构化推理；在交互式 PowerShell 中验证真实截图/UIA/急停；运行一次 PaddleOCR 最小文字识别。项目首次引入数据库、Redis 或队列时，再补充镜像拉取与 Compose 健康检查。
+
+## 14. 设计结论
+
+本设计以轻量 LangChain/LangGraph 编排、Windows Python 3.12、PyTorch/Transformers、ModelScope 模型快照和确定性安全控制层为主线，匹配 RTX 5070 Ti 与 32 GB 内存。第一版采用单进程、单模型、单并发，不引入 vLLM 或数据库；有状态基础设施未来统一由 Docker Compose 隔离。系统吸收先进 GUI Agent 的闭环交互、多源感知、归一化定位、快慢推理、功能性验证和错误恢复理念，同时避免提前服务化。它优先交付一个可验证、可中止、可复现的 Windows GUI 执行闭环；vLLM、更大模型、模型微调、长期记忆和跨平台兼容性只在主线稳定并有实测收益后扩展。
