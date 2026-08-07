@@ -415,8 +415,7 @@ src/max_agent/
   training/lora.py          # PEFT LoRA 训练与检查点归档
   evaluation/benchmark.py   # 20 任务分层评测与统计
 configs/default.yaml         # 可调整运行策略，禁止存放密钥
-requirements/base.txt        # 主程序锁定依赖
-requirements/torch-cu130.txt # PyTorch CUDA 13.0 精确版本与索引说明
+requirements.txt             # 唯一安装入口：全部直接依赖、CUDA 13.0 索引与 editable 项目
 deploy/compose.yaml           # 有明确需求后才加入数据库/Redis 服务
 tests/                       # 单元、集成和受控端到端测试
 artifacts/<task_id>/         # 运行期产物；加入 .gitignore
@@ -496,9 +495,7 @@ artifacts/<task_id>/         # 运行期产物；加入 .gitignore
 
 ## 13. 运行与交付要求
 
-Windows 主环境固定为 Conda `max`（Python 3.12.13）。第一版已锁定的核心版本为 `torch==2.13.0+cu130`、`torchvision==0.28.0+cu130`、`transformers==5.14.1`、`modelscope==1.39.1`、`langchain==1.3.14` 和 `langgraph==1.2.10`。PyTorch/TorchVision 必须从 `https://download.pytorch.org/whl/cu130` 安装，其他包从常规 PyPI 安装；最终交付需生成带哈希的锁定文件。
-
-当前第一周基线依赖已经准备好的 Conda `max` 环境。`python -m pip install -e .` 负责安装当前包、注册命令入口和安装 `pyproject.toml` 已声明的应用依赖，但当前清单尚未覆盖全部桌面/OCR 组件；`mss`、PyAutoGUI、OpenCV、PaddleOCR、PaddlePaddle、`pynput` 与 `pywinauto` 由现有环境提供并通过 Doctor 核验。在发布包含这些组件且带哈希的完整锁定清单前，不得把当前步骤表述为从空白环境的一键复现。
+Windows 支持环境固定为 Python `>=3.12,<3.13`，可以由 venv、uv 或 Conda 创建；当前机器核验使用 Conda `max`（Python 3.12.13）。根目录 `requirements.txt` 是唯一开发者安装入口，固定应用、PyTorch/TorchVision、图像、桌面/UIA、PaddleOCR/PaddlePaddle 和数据契约直接依赖，并通过 `-e .` 注册 `max-agent`。PyTorch CUDA 构建通过同一文件中的 `https://download.pytorch.org/whl/cu130` extra index 获取；开发者不再组合多个 requirements 文件。最终发布仍需在这些精确直接版本之上生成带哈希的跨索引锁定文件。
 
 PaddlePaddle 3.3.1 与 PaddleOCR 3.7.0 已能在 Python 3.12 中安装。实测必须先初始化 PyTorch/ModelScope，再初始化 PaddleOCR；逆序曾触发 Torch DLL 加载失败。第一版先用明确的启动顺序控制复杂度，只有该问题在实际 OCR 推理中复现时才拆分 OCR 子进程。
 
@@ -514,7 +511,7 @@ PostgreSQL、Redis、消息队列等会注册服务、占用端口或持久化�
 
 ### 13.1 开发开始前的机器准备
 
-1. 使用 `conda activate max`，确认 Python 为 3.12.x，解释器位于 `F:\Software\Miniconda3\envs\max`。
+1. 使用 venv、uv 或 Conda 创建并激活 Python 3.12 环境，在仓库根目录执行 `python -m pip install -r requirements.txt`（uv 使用 `uv pip install -r requirements.txt`）；当前核验环境可继续使用 `conda activate max`。
 2. 用 `nvidia-smi` 确认 RTX 5070 Ti 和可用显存；运行 PyTorch CUDA/BF16 张量自检，不能只依据驱动显示的 CUDA 版本判断。
 3. 在仓库 Git 忽略的 `model/` 至少预留 20 GB；用 ModelScope 先下载 `config.json` 验证网络，再将完整模型显式下载到该目录树内。
 4. 依次加载 Qwen3.5-2B、Qwen3.5-4B、Qwen3.5-9B 的单个测试配置，记录首次加载时间、空闲/峰值显存和单图推理延迟；若 OOM，先降低图像尺寸和上下文，不能直接切换多种量化库。

@@ -7,8 +7,8 @@
 
 ## 项目背景
 
-- 这是 Windows 本地 GUI Agent 原型。使用名为 `max` 的 Conda 环境与 Python 3.12。
-- Python 项目采用 `src/` 布局。使用命令入口前，先执行 `python -m pip install -e .` 安装当前仓库。
+- 这是 Windows 本地 GUI Agent 原型。支持 Python 3.12；当前验证环境是名为 `max` 的 Conda 环境，但开发者也可使用 venv 或 uv 创建隔离环境。
+- Python 项目采用 `src/` 布局。使用命令入口前，在仓库根目录执行 `python -m pip install -r requirements.txt`；该清单会安装全部直接依赖并以 editable 模式安装当前仓库。
 - 下载的模型仅能存放在 `model/`；诊断与基准证据仅能存放在 `artifacts/`。两者均由 Git 忽略。
 - 除非有独立且已批准的变更，否则桌面控制与模型驱动聊天均不在当前范围内。
 

@@ -6,23 +6,36 @@ MAX 是面向 Windows 的本地 GUI 智能体原型。当前第一周交付提�
 
 ## 使用环境
 
-项目使用 Conda `max` 环境与 Python 3.12。GPU 相关核验要求 NVIDIA CUDA 运行时和 BF16 张量运算支持。
+项目支持 Windows 11 与 Python `>=3.12,<3.13`。可以使用 venv、uv 或 Conda 创建隔离环境；三种方式都从仓库根目录的同一个 `requirements.txt` 安装项目及全部 Python 依赖。GPU 相关核验要求 NVIDIA CUDA 运行时和 BF16 张量运算支持。
 
-当前第一周基线使用已经准备好的 `max` 环境。仓库当前依赖清单尚未覆盖全部桌面/OCR 组件，因此以下命令用于安装当前包和注册 `max-agent`，并不代表能够从空白环境一条命令还原完整运行时：
+### venv + pip
 
 ```powershell
-conda activate max
-python -m pip install -e .
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 python -m pip check
 ```
 
-如需重装 GPU 运行时，应使用 CUDA 13.0 专用索引清单：
+### uv
 
 ```powershell
-python -m pip install -r requirements/torch-cu130.txt
+uv venv --python 3.12
+.\.venv\Scripts\Activate.ps1
+uv pip install -r requirements.txt
+python -m pip check
 ```
 
-`mss`、PyAutoGUI、OpenCV、PaddleOCR、PaddlePaddle、`pynput` 和 `pywinauto` 当前由既有环境提供并通过 Doctor 核验。完整且带哈希的环境锁定清单仍是后续交付项。
+### Conda + pip
+
+```powershell
+conda create -n max python=3.12 -y
+conda activate max
+python -m pip install -r requirements.txt
+python -m pip check
+```
+
+以上安装命令必须在仓库根目录执行。`requirements.txt` 已包含 CUDA 13.0 PyTorch wheel 索引、应用依赖、桌面/UIA/OCR 依赖和 `-e .`，因此无需再组合其他 requirements 文件或单独执行 editable 安装。Conda 环境名称可以自行调整，不要求必须命名为 `max`。
 
 ## Doctor
 
@@ -75,7 +88,7 @@ max-agent --artifact-root artifacts doctor --desktop-probe
 
 | 问题 | 排查方式 |
 | --- | --- |
-| CUDA 或 BF16 检查失败 | 确认已激活 `max` 环境，并检查驱动与 PyTorch CUDA 构建是否匹配。 |
+| CUDA 或 BF16 检查失败 | 确认已激活完成依赖安装的 Python 环境，并检查驱动与 PyTorch CUDA 构建是否匹配。 |
 | 基础工具检查失败 | 查看 Doctor 的失败条目；在交互式 Windows 会话中复核显示器与桌面权限。 |
 | `pip check` 报冲突 | 在隔离环境中按项目依赖清单重新安装。 |
 | 显式桌面探针失败 | 关闭其他会抢占焦点的窗口，再在受控测试桌面中重试；不要在真实业务应用中运行。 |

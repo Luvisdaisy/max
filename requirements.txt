@@ -1,0 +1,33 @@
+# CUDA 13.0 wheels for the supported NVIDIA runtime.
+--extra-index-url https://download.pytorch.org/whl/cu130
+
+# Application and orchestration.
+langchain==1.3.14
+langgraph==1.2.10
+modelscope==1.39.1
+prompt-toolkit==3.0.52
+rich==14.3.3
+textual==8.1.1
+transformers==5.14.1
+typer==0.21.0
+
+# Local model and image runtime.
+torch==2.13.0+cu130
+torchvision==0.28.0+cu130
+Pillow==11.3.0
+numpy==2.3.5
+opencv-contrib-python==4.10.0.84
+
+# Windows desktop perception and input.
+mss==10.2.0
+PyAutoGUI==0.9.54
+pynput==1.8.2
+pywinauto==0.6.9
+
+# OCR and structured contracts.
+paddlepaddle==3.3.1
+paddleocr==3.7.0
+pydantic==2.13.4
+
+# Install the local project and register the max-agent command.
+-e .

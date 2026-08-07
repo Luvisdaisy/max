@@ -42,12 +42,12 @@
 | 技术/组件                     | 计划承担的职责                              | 当前状态                                                                                          |
 | ----------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | Windows 11                    | 目标桌面、窗口、DPI 和输入环境              | **已实现：** Doctor 支持基础环境核验和显式桌面探针                                                |
-| Conda `max` + Python 3.12     | 统一运行时和依赖隔离                        | **已实现：** 当前使用 `max`；项目要求 Python `>=3.12,<3.13`                                      |
+| Python 3.12 + venv/uv/Conda   | 统一运行时版本与可替换的环境隔离方式        | **已实现：** 根 `requirements.txt` 提供统一安装入口；当前核验使用 Conda `max`                     |
 | Typer + Rich + Prompt Toolkit | 首要 CLI 命令入口、终端渲染和默认交互式会话 | **已实现：** 基础交互、`/doctor`、`/quit` 和未配置后端提示                                        |
 | Textual                       | 后续可选的高级 UI 和状态展示入口            | **部分实现：** 已有控制台壳；需显式选择，尚未连接 Agent 后端                                      |
 | LangGraph                     | 编排器的显式状态图、循环、预算和终止条件    | **仅依赖可用：** 版本已锁定，Orchestrator 尚未实现                                                |
 | LangChain                     | 提示词、模型与工具的适配层                  | **仅依赖可用：** 版本已锁定，尚未接入模型工具；不承载高风险执行逻辑                               |
-| PyTorch CUDA 13.0             | GPU 推理和 BF16 张量运算                    | **已实现：** CUDA/BF16 已验证；版本由 `requirements/torch-cu130.txt` 约束                         |
+| PyTorch CUDA 13.0             | GPU 推理和 BF16 张量运算                    | **已实现：** CUDA/BF16 已验证；版本与 wheel 索引由根 `requirements.txt` 约束                       |
 | Transformers                  | 本地多模态模型加载、Processor 和单图推理    | **已实现：** 离线 Qwen3.5-4B 加载路径和基准接口                                                   |
 | ModelScope                    | 模型元数据校验和显式权重下载                | **已实现：** 下载目标必须位于仓库 `model/` 目录                                                   |
 | `mss`                         | 屏幕捕获                                    | **部分实现：** 已接入 Doctor；Perception 工具尚未实现                                             |
@@ -57,7 +57,7 @@
 | PyAutoGUI / `pynput`          | 受 Guard 审批后的鼠标、键盘和滚动输入       | **部分实现：** 仅在显式桌面探针中验证基础输入；Guard 与 Controller 尚未实现                        |
 | Pydantic / Protocol           | 数据契约校验、序列化和模型 Provider 接口    | **部分实现：** `ModelProvider` Protocol 已定义；完整 Pydantic schema 待实现                        |
 | JSONL Artifact Store          | 运行配置、环境、轨迹和结果归档              | **已实现：** 位于 `artifacts/`，适合单用户单进程审计                                              |
-| `unittest` + `pip check`      | 单元测试和依赖一致性验证                    | **已实现：** 当前 35 项测试通过，依赖检查通过                                                     |
+| `unittest` + `pip check`      | 单元测试和依赖一致性验证                    | **已实现：** 当前 38 项测试通过，依赖检查通过                                                     |
 
 当前状态统一分为四类：**已实现**表示代码和命令已存在且完成当前核验；**部分实现**表示已有基础接口或辅助能力，但尚未进入端到端闭环；**仅依赖可用**表示运行环境已具备第三方组件，项目工具契约尚未实现；**规划中**表示仅属于目标设计。
 
@@ -181,10 +181,10 @@ sequenceDiagram
 
 ## 9. 存储、部署与可复现性
 
-- 运行环境：Windows 11、Conda `max`、Python 3.12、NVIDIA GPU。
-- 当前安装边界：第一周基线依赖预先准备的 Conda `max` 环境。`python -m pip install -e .` 用于安装当前包、注册 `max-agent` 并安装 `pyproject.toml` 中声明的应用依赖；它不会安装全部桌面/OCR 依赖。
-- GPU 依赖：PyTorch/TorchVision 必须按 `requirements/torch-cu130.txt` 从 CUDA 13.0 专用索引安装，不能依赖默认 PyPI 索引选择构建。
-- 桌面/OCR 依赖：当前 `mss`、PyAutoGUI、OpenCV、PaddleOCR、PaddlePaddle、`pynput` 和 `pywinauto` 由既有 `max` 环境提供，并由 Doctor 核验。在发布完整且带哈希的锁定清单前，仓库尚不支持从空白环境一条命令完成全部依赖复现。
+- 运行环境：Windows 11、Python `>=3.12,<3.13`、NVIDIA GPU；环境可由 venv、uv 或 Conda 创建，当前实测环境为 Conda `max`。
+- 统一安装入口：在仓库根目录运行 `python -m pip install -r requirements.txt`；使用 uv 时运行 `uv pip install -r requirements.txt`。根清单包含 `-e .`，会同时安装依赖、当前包和 `max-agent` 命令入口。
+- GPU 依赖：根清单显式声明 PyTorch CUDA 13.0 extra index，并固定 `torch==2.13.0+cu130` 与匹配的 TorchVision 构建。
+- 桌面/OCR 依赖：`mss`、PyAutoGUI、OpenCV、PaddleOCR、PaddlePaddle、`pynput` 和 `pywinauto` 均由根清单固定版本，不依赖环境中的隐式全局包。
 - 模型位置：模型权重只能放在仓库根目录 `model/`；路径由代码校验并使用 `local_files_only=True` 进行离线加载。
 - 运行产物：诊断和基准证据写入 Git 忽略的 `artifacts/`，至少包括 `config.yaml`、`environment.json`、`trajectory.jsonl`、`result.json`。
 - 缓存隔离：Transformers 动态模块缓存写入 `artifacts/hf_modules`；模型、缓存、截图和令牌不提交 Git。
@@ -196,7 +196,7 @@ sequenceDiagram
 
 | 阶段       | 主要实现                                                          | 验收重点                                               |
 | ---------- | ----------------------------------------------------------------- | ------------------------------------------------------ |
-| 当前基线   | Doctor、控制台壳、模型路径约束、模型下载/校验、离线单图基准、归档 | 35 项单元测试通过，`pip check` 通过，命令和现有证据可复核 |
+| 当前基线   | Doctor、控制台壳、模型路径约束、模型下载/校验、离线单图基准、归档 | 38 项单元测试通过，`pip check` 通过，命令和现有证据可复核 |
 | 感知与控制 | 截图、OCR、UIA、窗口元数据、受控点击/输入/滚动/拖拽、急停         | 只在测试窗口中运行；窗口和坐标校验失败时不输入         |
 | 基础 Agent | Agent State、Observation/Action schema、Model Provider、Planner   | 模型只产生结构化候选动作，动作不具备执行权限           |
 | 端到端闭环 | Orchestrator、Guard、Verifier、Recovery、Session Safety           | 完成若干受控任务，记录每一步状态、证据、失败和退出原因 |
@@ -208,9 +208,12 @@ sequenceDiagram
 
 截至 2026-08-07，使用 `F:\Software\Miniconda3\envs\max\python.exe` 对当前工作区执行验证，结果为：
 
-- `python -m unittest discover -s tests -v`：35 项测试全部通过；
+- `python -m pip install -r requirements.txt`：统一清单安装成功，editable 项目入口可用，PyTorch/TorchVision 保持 CUDA 13.0 构建；
+- `uv pip install --dry-run --python F:\Software\Miniconda3\envs\max\python.exe -r requirements.txt`：成功解析 121 个包，可消费 extra index 与 editable 项目条目；
+- `python -m unittest discover -s tests -v`：38 项测试全部通过；
 - `python -m pip check`：`No broken requirements found`；
 - `python -m max_agent.cli --help`：公开命令包含 `doctor`、`download-model`、`validate-model` 和 `benchmark`；
+- 非输入 Doctor：Python、依赖、CUDA 13.0、BF16、RTX 5070 Ti、PyAutoGUI、OpenCV、PaddleOCR 和 pynput 检查通过；当前非交互会话的 `mss` 截图因 `BitBlt` 失败，桌面探针按设计跳过，仍需在交互式 Windows 会话复核；
 - 已实现的代码边界与本报告的“当前实现基线”一致；
 - 感知、规划、审批、执行、验证和恢复仍属于后续设计实现。
 
