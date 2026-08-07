@@ -26,3 +26,6 @@ model/
 *.pt
 *.pth
 *.ckpt
+
+# Ignore temporary working directory
+tmp/
