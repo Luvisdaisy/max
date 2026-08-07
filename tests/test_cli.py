@@ -1,4 +1,5 @@
 import unittest
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -43,12 +44,40 @@ class CliTests(unittest.TestCase):
         self.assertIn("doctor", help_text)
         self.assertNotIn("diagnose", help_text)
 
-    def test_chat_flag_starts_default_frontend(self) -> None:
-        with patch("max_agent.cli.run_textual_chat") as start_chat:
+    def test_chat_flag_starts_cli_first_frontend(self) -> None:
+        with patch("max_agent.cli.run_prompt_toolkit_console") as start_chat:
             result = CliRunner().invoke(app, ["--chat"])
 
         self.assertEqual(result.exit_code, 0)
         start_chat.assert_called_once()
+
+    def test_no_command_starts_cli_first_frontend(self) -> None:
+        with patch("max_agent.cli.run_prompt_toolkit_console") as start_chat:
+            result = CliRunner().invoke(app, [])
+
+        self.assertEqual(result.exit_code, 0)
+        start_chat.assert_called_once()
+
+    def test_fallback_remains_compatibility_alias(self) -> None:
+        with patch("max_agent.cli.run_prompt_toolkit_console") as start_console:
+            result = CliRunner().invoke(app, ["--fallback"])
+
+        self.assertEqual(result.exit_code, 0)
+        start_console.assert_called_once()
+
+    def test_textual_is_explicit_optional_frontend(self) -> None:
+        with patch("max_agent.cli.run_textual_chat") as start_textual:
+            result = CliRunner().invoke(app, ["--textual"])
+
+        self.assertEqual(result.exit_code, 0)
+        start_textual.assert_called_once()
+
+    def test_cli_first_frontend_does_not_require_textual(self) -> None:
+        with patch.dict(sys.modules, {"textual": None}), patch("max_agent.cli.run_prompt_toolkit_console") as start_console:
+            result = CliRunner().invoke(app, [])
+
+        self.assertEqual(result.exit_code, 0)
+        start_console.assert_called_once()
 
     def test_download_model_command_advertises_qwen35(self) -> None:
         help_text = CliRunner().invoke(app, ["--help"]).output

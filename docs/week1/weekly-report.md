@@ -7,6 +7,7 @@
 ## 完成情况
 
 - 完成 GUI 智能体技术调研与系统架构设计，详见 `research-report.md` 和 `architecture-report.md`。
+- 确定 CLI 优先的交互策略：Typer/Rich/Prompt Toolkit 负责基础交互层，Textual 后置为可选高级 UI。
 - 在 Conda `max` 环境中核验 Python 3.12、CUDA、GPU、BF16 和依赖一致性。
 - 新增 Doctor：默认以无输入方式检查 mss、PyAutoGUI、OpenCV、PaddleOCR 与 pynput，并以通过、失败、跳过分组输出结果。
 - 增加显式受控桌面探针；只有指定 `--desktop-probe` 才会在临时窗口内执行点击和输入验证。

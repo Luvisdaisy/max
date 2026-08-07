@@ -1,10 +1,4 @@
-# chat-console-ui Specification
-
-## Purpose
-
-Provide a chat-first local console that gives the future GUI Agent a consistent interactive entry point while preserving direct access to the existing development operations.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Default chat-first terminal interface
 The application SHALL provide a CLI-first terminal interface as its default interactive experience, with command input, visible status feedback, command history, and a graceful exit action. The default interface SHALL use the Typer/Rich/Prompt Toolkit interaction path; Textual SHALL NOT be required to start the default interface.
@@ -20,21 +14,6 @@ The application SHALL provide a CLI-first terminal interface as its default inte
 #### Scenario: Start the explicit chat interface
 - **WHEN** a developer runs `max-agent --chat`
 - **THEN** the application starts the same CLI-first interactive interface used by the default entry point
-
-### Requirement: Shared interactive command dispatch
-The application SHALL support `/diagnose` and `/quit` in every interactive frontend and SHALL dispatch them through the same operation core used by non-interactive commands.
-
-#### Scenario: Run diagnostics from an interactive frontend
-- **WHEN** a developer enters `/diagnose`
-- **THEN** the frontend displays the diagnostic outcome and preserves the session for further input
-
-#### Scenario: Exit from an interactive frontend
-- **WHEN** a developer enters `/quit`
-- **THEN** the frontend exits cleanly without starting model inference or desktop control
-
-#### Scenario: Unsupported slash command
-- **WHEN** a developer enters an unsupported slash command
-- **THEN** the frontend reports that the command is unsupported and remains available for input
 
 ### Requirement: Terminal compatibility fallback
 The application SHALL provide a line-oriented interactive console as the primary development interaction path, with command history and the shared command set. Textual MAY be provided as an optional advanced interface, but its availability or initialization SHALL NOT be required for the primary CLI interaction path.

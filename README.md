@@ -2,6 +2,8 @@
 
 MAX 是面向 Windows 的本地 GUI 智能体原型。当前第一周交付提供 Doctor 环境与基础工具核验；它不会默认控制桌面，也不会在 Doctor 证据中记录任何模型信息。
 
+交互入口采用 CLI 优先策略：Typer 负责命令入口，Rich 负责终端输出，Prompt Toolkit 负责默认交互式会话。Textual 保留为后续可选的高级 UI，不是基础 CLI 运行的必要依赖。
+
 ## 使用环境
 
 项目使用 Conda `max` 环境与 Python 3.12。GPU 相关核验要求 NVIDIA CUDA 运行时和 BF16 张量运算支持。
@@ -22,10 +24,22 @@ max-agent --artifact-root artifacts doctor
 
 Doctor 会以“通过 / 失败 / 跳过”分组展示 Python、依赖一致性、CUDA、GPU、BF16，以及 mss、PyAutoGUI、OpenCV、PaddleOCR 和 pynput 的无输入检查。运行记录存于 Git 忽略的 `artifacts/`，其中不包含模型型号、模型目录、远程修订或文件集合身份。
 
-聊天控制台中可使用 `/doctor`，使用 `/quit` 退出：
+默认交互控制台使用 Prompt Toolkit，可使用 `/doctor`，使用 `/quit` 退出：
+
+```powershell
+max-agent
+```
+
+也可以显式启动同一 CLI 交互路径：
 
 ```powershell
 max-agent --chat
+```
+
+`--fallback` 仍作为兼容别名保留。后续如需体验 Textual 高级界面，可显式运行：
+
+```powershell
+max-agent --textual
 ```
 
 默认 Doctor 不会发送鼠标或键盘事件。仅在已授权的交互式 Windows 会话中，才可显式运行受控测试窗口探针：

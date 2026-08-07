@@ -17,7 +17,7 @@
 | Doctor 基础工具检查 | 默认无输入地验证 mss 内存截图、PyAutoGUI 屏幕尺寸、OpenCV 合成图像处理、PaddleOCR 可用性与 pynput 导入 | 默认不发送鼠标或键盘事件；PaddleOCR 默认不执行会隐式下载资源的完整识别 |
 | `doctor --desktop-probe` | 显式创建临时 Tk 测试窗口，并有限请求该窗口成为 Windows 前台窗口；只有句柄确认成功时，才执行受控点击和文本输入 | 前台焦点不可得时标记为跳过，明确未执行输入测试并在任何输入前停止；不操作真实业务窗口 |
 | `ExperimentArchive` | 每次 Doctor 在 Git 忽略的 `artifacts/` 下写入 `config.yaml`、`environment.json`、`trajectory.jsonl`、`result.json` | 不归档真实截图、令牌、密钥或模型身份信息 |
-| 聊天控制台 | Textual 与 Prompt Toolkit 前端将 `/doctor` 分发为本地检查，普通消息只返回未配置后端提示 | 不提供模型驱动聊天 |
+| 聊天控制台 | Typer/Rich/Prompt Toolkit 构成首要 CLI 交互层，将 `/doctor` 分发为本地检查；Textual 作为后续可选高级 UI 复用同一分发核心，普通消息只返回未配置后端提示 | 不提供模型驱动聊天；Textual 不属于基础 CLI 运行必需路径 |
 | 本地辅助命令 | 保留下载、元数据校验和单图基准命令的现有实现 | 它们与 Doctor 证据隔离，Doctor 不依赖或识别模型 |
 
 当前 `src/max_agent/` 仅包含归档、诊断、CLI、控制台分发、运行配置与本地辅助命令等基础模块。后文描述的 `Orchestrator`、`Perception`、`Planner`、`Safety Guard`、`Desktop Controller`、`Verifier`、`Recovery` 和 `Session Safety` 仍是待实现设计，不能据此推断仓库已经具备端到端 GUI Agent 能力。未来感知实现的唯一位置为 `src/max_agent/tools/perception/`；当前没有感知模块需要移动，也不为此创建空包。
@@ -63,7 +63,7 @@ max-agent doctor --artifact-root artifacts --desktop-probe
 用户指令 → 屏幕感知 → 任务规划 → 动作校验与执行 → 屏幕复核 → 结果反馈
 ```
 
-第一阶段覆盖项目计划第 1～4 周：环境与技术验证、感知/控制模块、数据和基础 Agent、端到端集成。命令行是唯一交互入口；不在本阶段开发桌面前端、浏览器扩展、长期记忆或模型微调，也不引入多 Agent 协作、在线自训练、向量数据库或 MCP 服务。只有当单进程 CLI 原型稳定且出现明确的外部复用需求后，才评估这些扩展。
+第一阶段覆盖项目计划第 1～4 周：环境与技术验证、感知/控制模块、数据和基础 Agent、端到端集成。命令行是当前阶段的首要交互入口：Typer 负责命令路由，Rich 负责终端输出，Prompt Toolkit 负责默认交互式会话；Textual 仅作为后续可选的高级 UI。不在本阶段开发桌面前端、浏览器扩展、长期记忆或模型微调，也不引入多 Agent 协作、在线自训练、向量数据库或 MCP 服务。只有当单进程 CLI 原型稳定且出现明确的外部复用需求后，才评估这些扩展。
 
 系统仅在授权的本机测试账户、模拟应用或专用测试窗口中运行。涉及发送消息的测试只能面向测试对象；不得读取、上传或操作个人敏感数据，也不得对未经授权的软件执行不可逆操作。
 

@@ -10,7 +10,7 @@ Render = Callable[[str], None]
 
 
 def run_line_console(*, read_line: Callable[[], str], dispatch: Dispatch, render: Render) -> None:
-    """Run a UI-neutral line loop, enabling deterministic fallback tests."""
+    """Run a UI-neutral line loop for the primary CLI interaction path."""
     while True:
         result = dispatch(read_line())
         for message in result.messages:

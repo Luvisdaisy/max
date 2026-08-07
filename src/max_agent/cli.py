@@ -46,15 +46,16 @@ def entry(
     ctx: typer.Context,
     artifact_root: Path = typer.Option(Path("artifacts"), "--artifact-root"),
     doctor: bool = typer.Option(False, "--doctor", help="Run Doctor and exit"),
-    chat: bool = typer.Option(False, "--chat", help="Start the default chat interface"),
-    fallback: bool = typer.Option(False, "--fallback", help="Start the Prompt Toolkit fallback console"),
+    chat: bool = typer.Option(False, "--chat", help="Start the CLI-first chat interface"),
+    fallback: bool = typer.Option(False, "--fallback", help="Compatibility alias for the CLI-first console"),
+    textual: bool = typer.Option(False, "--textual", help="Start the optional Textual advanced interface"),
 ) -> None:
     if doctor:
         raise typer.Exit(_doctor(artifact_root))
-    if fallback:
-        run_prompt_toolkit_console(_interactive_dispatch(artifact_root))
-    elif chat or ctx.invoked_subcommand is None:
+    if textual:
         run_textual_chat(_interactive_dispatch(artifact_root))
+    elif chat or fallback or ctx.invoked_subcommand is None:
+        run_prompt_toolkit_console(_interactive_dispatch(artifact_root))
 
 
 @app.command("doctor")
