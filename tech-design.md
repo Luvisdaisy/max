@@ -383,15 +383,10 @@ LangChain 的 `ChatPromptTemplate` 由系统规则、任务目标、标准化观
 建议代码按职责组织，避免 Agent 编排与设备操作互相耦合：
 
 ```text
-src/gui_agent/
+src/max_agent/
   cli.py                    # 命令行入口
   orchestration/graph.py    # LangGraph 状态图与节点装配
   schemas.py                # Pydantic 数据契约
-  perception/screen.py      # mss 截图与 DPI 元数据
-  perception/ocr.py         # PaddleOCR 适配
-  perception/uia.py         # Windows UI Automation 可选适配
-  perception/vision.py      # OpenCV 预处理与模板匹配
-  perception/som.py         # 按需生成 Set-of-Mark 标注图
   planning/prompts.py       # LangChain 提示词
   planning/planner.py       # 结构化动作生成
   tools/base.py             # 工具/插件抽象接口
@@ -427,7 +422,7 @@ tests/                       # 单元、集成和受控端到端测试
 artifacts/<task_id>/         # 运行期产物；加入 .gitignore
 ```
 
-工具/插件的稳定接口为 `invoke(input: ToolInput, context: AgentState) -> ToolReceipt`；其中 `invoke_model` 的输入包括观察、目标和历史，输出候选 `DesktopAction`。Qwen3.5 工具插件只负责加载 2B、4B 或 9B 的一个本地测试配置、构造多模态输入、调用 `generate()`、记录耗时/显存并解析响应；它不得下载模型、读取实时屏幕、推进任务状态或执行动作。`execute_action` 工具的稳定接口为 `execute(action: ApprovedAction) -> ExecutionReceipt`。所有领域工具只能经由 Agent Orchestrator 交互。
+工具/插件的稳定接口为 `invoke(input: ToolInput, context: AgentState) -> ToolReceipt`；其中 `invoke_model` 的输入包括观察、目标和历史，输出候选 `DesktopAction`。Qwen3.5 工具插件只负责加载 2B、4B 或 9B 的一个本地测试配置、构造多模态输入、调用 `generate()`、记录耗时/显存并解析响应；它不得下载模型、读取实时屏幕、推进任务状态或执行动作。`execute_action` 工具的稳定接口为 `execute(action: ApprovedAction) -> ExecutionReceipt`。Agent Orchestrator 只能通过 `tools/registry.py` 调用领域工具，工具之间不得直接串联高风险能力。
 
 ## 9. 数据处理与评测设计
 
@@ -485,7 +480,7 @@ artifacts/<task_id>/         # 运行期产物；加入 .gitignore
 | Blackwell 与 PyTorch/算子组合异常 | 模型启动或推理失败 | 固定已实测的 `torch==2.13.0+cu130`；第一版使用 BF16 + SDPA eager，不源码编译 FlashAttention |
 | Qwen3.5-9B 显存或延迟超预算 | 交互不可用、OOM | 先用 2B、4B 完成工具链测试；降低图像边长和输出长度、缩短历史、单并发；以实测峰值决定是否量化 |
 | ModelScope 快照漂移或下载中断 | 结果不可复现、文件不完整 | 固定 revision/文件摘要；下载与推理解耦；Provider 仅允许本地路径和 `local_files_only=True` |
-| 模型缓存写入 Git 或系统盘 | 仓库膨胀、磁盘压力 | 固定仓库外 `F:\AI\models\modelscope`；启动时拒绝位于仓库内的模型目录 |
+| 模型权重或缓存被提交 Git | 仓库膨胀、敏感或大文件进入版本历史 | 模型权重固定在 Git 忽略的仓库 `model/`；启动时拒绝位于该目录树之外的模型路径；运行缓存写入 Git 忽略的 `artifacts/` |
 | Windows DPI、多显示器坐标偏移 | 误点击 | 物理像素统一、每轮记录 DPI/显示器、受控分辨率测试、Guard 边界检查 |
 | OCR 小字或主题变化误识别 | 规划错误 | 置信度阈值、图像预处理、模型视觉复核、低置信度拒绝猜测 |
 | 模型幻觉或输出不规范 | 危险/无效动作 | Pydantic schema、原子动作、白名单、窗口限制、一次重试上限 |
@@ -503,15 +498,17 @@ artifacts/<task_id>/         # 运行期产物；加入 .gitignore
 
 Windows 主环境固定为 Conda `max`（Python 3.12.13）。第一版已锁定的核心版本为 `torch==2.13.0+cu130`、`torchvision==0.28.0+cu130`、`transformers==5.14.1`、`modelscope==1.39.1`、`langchain==1.3.14` 和 `langgraph==1.2.10`。PyTorch/TorchVision 必须从 `https://download.pytorch.org/whl/cu130` 安装，其他包从常规 PyPI 安装；最终交付需生成带哈希的锁定文件。
 
+当前第一周基线依赖已经准备好的 Conda `max` 环境。`python -m pip install -e .` 负责安装当前包、注册命令入口和安装 `pyproject.toml` 已声明的应用依赖，但当前清单尚未覆盖全部桌面/OCR 组件；`mss`、PyAutoGUI、OpenCV、PaddleOCR、PaddlePaddle、`pynput` 与 `pywinauto` 由现有环境提供并通过 Doctor 核验。在发布包含这些组件且带哈希的完整锁定清单前，不得把当前步骤表述为从空白环境的一键复现。
+
 PaddlePaddle 3.3.1 与 PaddleOCR 3.7.0 已能在 Python 3.12 中安装。实测必须先初始化 PyTorch/ModelScope，再初始化 PaddleOCR；逆序曾触发 Torch DLL 加载失败。第一版先用明确的启动顺序控制复杂度，只有该问题在实际 OCR 推理中复现时才拆分 OCR 子进程。
 
-模型、Paddle、ModelScope、COM 生成代码和运行产物必须使用显式缓存路径且不进入 Git。建议模型根目录为 `F:\AI\models\modelscope`，运行产物留在仓库的 ignored `artifacts/`；不得让 `comtypes` 在仓库根目录生成 `Python/` 缓存。
+模型、Paddle、ModelScope、COM 生成代码和运行产物必须使用显式路径且不进入 Git。模型权重与 ModelScope 显式下载目录只能放在仓库根目录下 Git 忽略的 `model/`；Transformers 动态模块缓存和诊断/基准产物留在 Git 忽略的 `artifacts/`。其他第三方缓存必须显式指向 Git 忽略目录，不得让 `comtypes` 在仓库根目录生成 `Python/` 缓存。
 
 PostgreSQL、Redis、消息队列等会注册服务、占用端口或持久化数据的基础设施不得直接安装到 Windows。只有业务需求明确后才加入 `compose.yaml`，镜像固定版本/摘要，端口默认只绑定 `127.0.0.1`，数据写入命名卷并提供健康检查。第一版 JSONL Artifact Store 已满足单用户审计需求，因此不启动数据库容器。当前机器已安装并启动用户级 Docker Desktop；其 CLI 位于 `C:\Users\admin\AppData\Local\Programs\DockerDesktop\resources\bin\docker.exe`。自动化检查若运行在受限沙箱中，必须区分“无权执行用户目录中的 CLI”与“Docker 未安装”。
 
 环境文档必须提供 Python、GPU、PyTorch CUDA/BF16、ModelScope 小文件下载、本地单图推理、截图、OCR/UIA 和受控点击的验证命令。模型权重、缓存、截图和运行产物不提交 Git；配置中不包含真实密钥。
 
-每次实验至少归档 `config.yaml` 副本、`environment.json`、`trajectory.jsonl`、关键截图、`result.json`。最终 README 要能让新环境按步骤安装、选择本地 3B 模型、启动安全模式，并复现至少一个无副作用任务。
+每次实验至少归档 `config.yaml` 副本、`environment.json`、`trajectory.jsonl`、关键截图、`result.json`。最终 README 要能让新环境按步骤安装、选择本地 Qwen3.5-4B 模型、启动安全模式，并复现至少一个无副作用任务。
 
 第 5–8 周的额外交付也必须可复现：训练阶段归档 `dataset_manifest.json`、数据划分哈希、训练配置、随机种子、基座与 LoRA 检查点哈希；评测阶段归档任务夹具版本、逐次结果、聚合统计与生成图表脚本。第 8 周交付的仓库不得包含模型权重、个人数据、真实截图、令牌或未获许可的数据；技术报告须区分已实测结果、对照实验结论与后续假设。
 
@@ -519,7 +516,7 @@ PostgreSQL、Redis、消息队列等会注册服务、占用端口或持久化�
 
 1. 使用 `conda activate max`，确认 Python 为 3.12.x，解释器位于 `F:\Software\Miniconda3\envs\max`。
 2. 用 `nvidia-smi` 确认 RTX 5070 Ti 和可用显存；运行 PyTorch CUDA/BF16 张量自检，不能只依据驱动显示的 CUDA 版本判断。
-3. 在 `F:\AI\models\modelscope` 至少预留 20 GB，并确保该目录不位于 Git 仓库中；用 ModelScope 先下载 `config.json` 验证网络，再下载完整模型。
+3. 在仓库 Git 忽略的 `model/` 至少预留 20 GB；用 ModelScope 先下载 `config.json` 验证网络，再将完整模型显式下载到该目录树内。
 4. 依次加载 Qwen3.5-2B、Qwen3.5-4B、Qwen3.5-9B 的单个测试配置，记录首次加载时间、空闲/峰值显存和单图推理延迟；若 OOM，先降低图像尺寸和上下文，不能直接切换多种量化库。
 5. 关闭游戏、视频增强、其他 CUDA 程序和不必要的 GPU Overlay，为 Windows 桌面保留显存。
 6. 固定首轮测试的显示器、分辨率和 Windows 缩放比例，并准备专用测试目录、测试浏览器配置和测试联系人，不使用真实个人数据。
@@ -538,13 +535,13 @@ PostgreSQL、Redis、消息队列等会注册服务、占用端口或持久化�
 | PyTorch GPU | `torch 2.13.0+cu130`、CUDA 13.0、计算能力 12.0；BF16 矩阵运算成功 | 可用 |
 | Qwen3.5/Transformers | Qwen3.5-2B、Qwen3.5-4B、Qwen3.5-9B 将通过统一 `invoke_model` 工具插件测试 | 具体加载类与完整模型测试待按所选发布版本执行 |
 | 模型下载工具 | 本地模型下载与离线加载命令已存在 | 2B、4B、9B 的完整权重测试待依次执行 |
-| LangChain/LangGraph | 1.3.14 / 1.2.10，导入成功 | 可用；自定义 Provider 尚待编码 |
+| LangChain/LangGraph | 1.3.14 / 1.2.10，导入成功 | 可用；最小 `ModelProvider` Protocol 已定义，完整模型工具插件尚待编码 |
 | 视觉与桌面依赖 | OpenCV 4.10.0、mss、PyAutoGUI、pynput、pywinauto 均导入成功；屏幕尺寸读取为 1920×1080 | 依赖可用；非交互会话 BitBlt 截图失败，需本机交互式终端复验 |
 | PaddleOCR | PaddlePaddle 3.3.1、PaddleOCR 3.7.0；Paddle CPU 张量与正确导入顺序通过 | 基础运行可用；OCR 模型下载和最小识别待验证 |
 | Python 依赖一致性 | `pip check` 返回 `No broken requirements found` | 可用 |
 | Docker | Docker 29.6.2、Compose v5.3.1、Docker Desktop 4.85.0；Linux Engine 29.6.2 可连接 | 可用；尚未拉取测试镜像或验证项目级 Compose 健康检查 |
 
-当前结论是：Python 3.12、PyTorch CUDA、ModelScope 小文件下载、核心 Python 依赖、基础 OCR 运行时和 Docker Engine 已验证。正式模型编码前仍应完成三项机器侧验收：下载完整 Qwen 3B 权重并执行单图结构化推理；在交互式 PowerShell 中验证真实截图/UIA/急停；运行一次 PaddleOCR 最小文字识别。项目首次引入数据库、Redis 或队列时，再补充镜像拉取与 Compose 健康检查。
+当前结论是：Python 3.12、PyTorch CUDA、ModelScope 小文件下载、核心 Python 依赖、基础 OCR 运行时和 Docker Engine 已验证。正式模型闭环编码前仍应完成三项机器侧验收：在仓库 `model/` 下载完整 Qwen3.5-4B 权重并执行单图结构化推理；在交互式 PowerShell 中验证真实截图/UIA/急停；运行一次 PaddleOCR 最小文字识别。项目首次引入数据库、Redis 或队列时，再补充镜像拉取与 Compose 健康检查。
 
 ## 14. 设计结论
 

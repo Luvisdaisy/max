@@ -8,11 +8,21 @@ MAX 是面向 Windows 的本地 GUI 智能体原型。当前第一周交付提�
 
 项目使用 Conda `max` 环境与 Python 3.12。GPU 相关核验要求 NVIDIA CUDA 运行时和 BF16 张量运算支持。
 
+当前第一周基线使用已经准备好的 `max` 环境。仓库当前依赖清单尚未覆盖全部桌面/OCR 组件，因此以下命令用于安装当前包和注册 `max-agent`，并不代表能够从空白环境一条命令还原完整运行时：
+
 ```powershell
 conda activate max
 python -m pip install -e .
 python -m pip check
 ```
+
+如需重装 GPU 运行时，应使用 CUDA 13.0 专用索引清单：
+
+```powershell
+python -m pip install -r requirements/torch-cu130.txt
+```
+
+`mss`、PyAutoGUI、OpenCV、PaddleOCR、PaddlePaddle、`pynput` 和 `pywinauto` 当前由既有环境提供并通过 Doctor 核验。完整且带哈希的环境锁定清单仍是后续交付项。
 
 ## Doctor
 
@@ -48,7 +58,7 @@ max-agent --textual
 max-agent --artifact-root artifacts doctor --desktop-probe
 ```
 
-该探针只对临时测试窗口验证截图、OCR 样例、点击和文本输入；窗口不可用、焦点丢失或坐标不匹配时应停止并报告失败。
+该探针只对临时测试窗口验证前台句柄、点击和文本输入；同一次 Doctor 还会检查内存截图和 PaddleOCR 包可用性，但不会执行可能隐式下载资源的完整 OCR 识别。窗口不可用、焦点丢失或坐标不匹配时应停止并报告失败。
 
 ## 证据与安全边界
 
