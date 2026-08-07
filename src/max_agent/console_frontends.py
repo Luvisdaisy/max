@@ -42,8 +42,8 @@ def run_textual_chat(dispatch: Dispatch) -> None:
 
         def compose(self) -> ComposeResult:
             yield Header()
-            yield VerticalScroll(Static("AI backend is not configured. Use /diagnose or /quit.", id="status"), id="messages")
-            yield Input(placeholder="Message, /diagnose, or /quit", id="chat-input")
+            yield VerticalScroll(Static("AI backend is not configured. Use /doctor or /quit.", id="status"), id="messages")
+            yield Input(placeholder="Message, /doctor, or /quit", id="chat-input")
             yield Footer()
 
         def on_input_submitted(self, event: Input.Submitted) -> None:

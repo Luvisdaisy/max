@@ -1,10 +1,59 @@
 # 基于多模态大模型的桌面 GUI 智能体：系统技术设计报告
 
-**版本：** v1.4.1  
-**日期：** 2026-08-06  
+**版本：** v1.5.0  
+**日期：** 2026-08-07  
 **目标平台：** Windows 11、NVIDIA RTX 5070 Ti、32 GB DDR5-6400 内存  
 **编排框架：** LangChain（LCEL + LangGraph 状态机）  
 **模型部署：** Windows Conda Python 3.12 + PyTorch/Transformers 单进程本地推理
+
+## 当前实现基线（2026-08-07）
+
+本报告后续章节保留第 1～8 周的目标架构、接口契约和路线图，其中部分组件尚未实现。当前仓库已实现的代码边界如下；除非本节明确说明，不得将后文的设计当作已交付功能。
+
+| 已实现模块 | 当前行为 | 明确边界 |
+| --- | --- | --- |
+| `max-agent doctor`、`--doctor`、`/doctor` | 统一环境核验入口，替代已移除的 `diagnose`/`/diagnose`；CLI 输出按“通过 / 失败 / 跳过”分组 | 不启动聊天模型，不执行通用桌面任务 |
+| Doctor 运行时检查 | 检查 Python、`pip check`、CUDA、GPU 名称与 BF16 CUDA 张量运算 | 证据不记录模型型号、目录、远程修订或文件集合身份 |
+| Doctor 基础工具检查 | 默认无输入地验证 mss 内存截图、PyAutoGUI 屏幕尺寸、OpenCV 合成图像处理、PaddleOCR 可用性与 pynput 导入 | 默认不发送鼠标或键盘事件；PaddleOCR 默认不执行会隐式下载资源的完整识别 |
+| `doctor --desktop-probe` | 显式创建临时 Tk 测试窗口，并有限请求该窗口成为 Windows 前台窗口；只有句柄确认成功时，才执行受控点击和文本输入 | 前台焦点不可得时标记为跳过，明确未执行输入测试并在任何输入前停止；不操作真实业务窗口 |
+| `ExperimentArchive` | 每次 Doctor 在 Git 忽略的 `artifacts/` 下写入 `config.yaml`、`environment.json`、`trajectory.jsonl`、`result.json` | 不归档真实截图、令牌、密钥或模型身份信息 |
+| 聊天控制台 | Textual 与 Prompt Toolkit 前端将 `/doctor` 分发为本地检查，普通消息只返回未配置后端提示 | 不提供模型驱动聊天 |
+| 本地辅助命令 | 保留下载、元数据校验和单图基准命令的现有实现 | 它们与 Doctor 证据隔离，Doctor 不依赖或识别模型 |
+
+当前 `src/max_agent/` 仅包含归档、诊断、CLI、控制台分发、运行配置与本地辅助命令等基础模块。后文描述的 `Orchestrator`、`Perception`、`Planner`、`Safety Guard`、`Desktop Controller`、`Verifier`、`Recovery` 和 `Session Safety` 仍是待实现设计，不能据此推断仓库已经具备端到端 GUI Agent 能力。未来感知实现的唯一位置为 `src/max_agent/tools/perception/`；当前没有感知模块需要移动，也不为此创建空包。
+
+### 当前 Doctor 工作流
+
+```mermaid
+flowchart LR
+    U["开发者"] --> C["max-agent doctor"]
+    C --> R["运行时：Python / pip / CUDA / GPU / BF16"]
+    C --> T["基础工具：mss / PyAutoGUI / OpenCV / PaddleOCR / pynput"]
+    R --> A["ExperimentArchive"]
+    T --> A
+    C --> S["分组摘要：通过 / 失败 / 跳过"]
+    P["--desktop-probe"] -.显式启用.-> W["临时受控窗口"]
+    W --> F{"Windows 前台焦点"}
+    F -->|"匹配"| I["有限点击与文本输入"]
+    F -->|"不匹配"| K["跳过，不发送输入"]
+```
+
+运行 Doctor 的推荐命令为：
+
+```powershell
+conda activate max
+max-agent doctor --artifact-root artifacts
+```
+
+在已授权且可交互的 Windows 会话中，才可额外执行：
+
+```powershell
+max-agent doctor --artifact-root artifacts --desktop-probe
+```
+
+## 后续设计与路线图说明
+
+以下章节保留原始技术设计，用于约束后续实现。章节中使用“必须”“应当”等措辞时，除当前实现基线明确覆盖的内容外，均表示计划中的目标契约，而非当前命令已经提供的能力。
 
 ## 1. 目标、范围与约束
 
@@ -22,9 +71,15 @@
 
 ### 2.1 方案选择
 
-采用“视觉模型提出候选动作 + 确定性安全层执行和验证”的分层方案，而非直接让模型控制鼠标键盘。理由是 GUI 任务失败通常来自坐标偏移、页面变化和模型输出不规范；把权限校验、坐标换算、动作间隔和成功判定放在确定性组件中，更容易调试、复现和止损。
+采用“Agent Orchestrator 为核心 + 能力工具/插件为边界”的分层方案。编排器拥有任务状态、轮次预算、工具选择、错误传播和终止决策；屏幕感知、模型调用、动作审批、桌面输入、结果验证、恢复与归档均以显式工具契约接入。这样不会让模型、控制器或任一框架反向主导工作流，并可独立替换、测试和限权每项能力。
 
-LangChain 只承担提示词、模型调用和可观测的工作流编排；状态转换由 LangGraph 显式定义。这样避免把高风险执行逻辑藏在自由循环的 Agent Executor 内部，同时保留后续替换模型或工具的能力。
+LangGraph 仅用于实现编排器的显式状态图，LangChain 仅用于提示词与模型工具适配。任何高风险执行逻辑都不得藏在自由循环的 Agent Executor 内部；编排器必须经由工具注册表调用能力，并根据每次工具回执决定下一状态。
+
+### 2.1.1 编排器与工具/插件契约
+
+`Agent Orchestrator` 是唯一能够推进任务状态的核心组件。每个工具/插件声明名称、输入 schema、输出 schema、权限级别、超时和可恢复错误码；编排器只消费结构化回执，不直接调用操作系统、OCR 库或模型 SDK。首批工具包括 `observe_screen`、`recognize_text`、`invoke_model`、`approve_action`、`execute_action`、`verify_result`、`recover` 与 `archive_run`。Doctor 作为独立的环境诊断工具，不参与任务执行闭环。
+
+工具注册表必须支持替换同一能力的实现，例如以 UI Automation、OCR 或视觉模型提供不同的观察工具；模型 Provider 也只是 `invoke_model` 工具的一个插件。插件不得持有全局任务循环、不得绕过审批工具、不得直接触发另一插件的高风险副作用。
 
 本设计吸收以下已有方案中可在四周内验证的思想：
 
@@ -43,26 +98,21 @@ LangChain 只承担提示词、模型调用和可观测的工作流编排；状�
 
 | 角色 | 首选 | 量化与运行方式 | 设计用途 |
 | --- | --- | --- | --- |
-| 主视觉语言模型 | `Qwen/Qwen2.5-VL-3B-Instruct` | PyTorch BF16、Transformers、单实例单并发 | 默认观察、规划和动作 JSON 生成；优先验证原生算子链路 |
-| 兼容性回退 | 同一 3B 模型 | FP32 CPU 仅用于最小功能诊断，不用于交互任务 | 区分 CUDA/驱动故障与模型、提示词故障 |
-| 质量/能力对照 | `Qwen/Qwen2.5-VL-7B-Instruct` | 后续按显存实测决定量化方式 | 不作为第一版依赖，不与 3B 同时驻留 |
-| 云端/API 适配 | 任一兼容视觉 API | 仅通过 `ModelProvider` 接口启用 | 本地模型不可用时的可选替代，不传输含敏感信息的截图 |
+| 快速冒烟 | Qwen3.5-2B | PyTorch/Transformers、单实例单并发 | 验证工具链、提示词和结构化动作契约 |
+| 默认基线 | Qwen3.5-4B | PyTorch BF16、单实例单并发 | 作为主要桌面任务测试配置 |
+| 质量对照 | Qwen3.5-9B | 仅在显存实测满足条件时加载 | 与 2B、4B 在同一夹具下比较质量、延迟与显存 |
+| 云端/API 适配 | 任一兼容视觉 API | 仅作为 `invoke_model` 工具插件启用 | 后续隔离实验；不传输含敏感信息的截图 |
 | 文字识别 | PaddleOCR | CPU 优先，必要时启用 GPU | 提供文字、置信度和屏幕坐标，减少视觉模型对小字号文字的压力 |
 
-主模型只通过 ModelScope 拉取。下载路径必须位于 Git 仓库外，推理阶段只读本地快照，不允许 Transformers 隐式访问其他模型仓库：
+Qwen3.5 的 2B、4B、9B 测试必须串行进行，同一时刻只允许一个模型实例驻留。模型由 `invoke_model` 工具插件加载；下载、缓存和本地推理实现不得取得任务编排或桌面输入权限。推理阶段只读本地文件，不允许 Transformers 隐式访问其他模型仓库：
 
 ```python
 from modelscope import snapshot_download
-from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+from transformers import AutoModelForMultimodalLM, AutoProcessor
 import torch
 
-model_dir = snapshot_download(
-    "Qwen/Qwen2.5-VL-3B-Instruct",
-    revision="master",
-    cache_dir=r"F:\AI\models\modelscope",
-)
 processor = AutoProcessor.from_pretrained(model_dir, local_files_only=True)
-model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+model = AutoModelForMultimodalLM.from_pretrained(
     model_dir,
     torch_dtype=torch.bfloat16,
     device_map="auto",
@@ -73,14 +123,14 @@ model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
 
 默认运行预算为：每轮一张预处理截图，长边不超过 1280 px；最多生成 256 token；每轮只生成一个动作；任务最多 12 轮；同一时刻只允许一个推理请求。第一版使用 eager inference、`torch.inference_mode()`、BF16 和 SDPA，不启用 `torch.compile`、FlashAttention 源码编译、AWQ 或多模型常驻。每步推理后保留模型但释放不再引用的输入/输出张量；不得每轮重新加载模型或无条件调用 `empty_cache()`。
 
-LangChain 不使用 `ChatOpenAI`。自定义 `TorchModelProvider` 将标准化观察转换为 Qwen chat template，调用 `generate()`，记录预处理、GPU 推理、解码耗时与显存峰值，再用 Pydantic 校验动作 JSON。模型权重、处理器和设备只在 Provider 初始化时加载一次。
+LangChain 不使用 `ChatOpenAI`。`invoke_model` 工具插件将标准化观察转换为 Qwen3.5 chat template，调用 `generate()`，记录预处理、GPU 推理、解码耗时与显存峰值，再用 Pydantic 校验动作 JSON。模型权重、处理器和设备只在插件初始化时加载一次。
 
-推理采用轻量的快慢路由，但不同时驻留两套模型。默认“快速路径”让当前模型基于明确目标直接生成一条原子动作；当目标存在多个候选、任务需要跨应用、连续两轮无进展或 Verifier 返回冲突证据时，切换“审慎路径”，向同一模型补充任务摘要、失败证据和里程碑信息后重新规划。3B/7B 是实验配置而不是运行时双模型路由，避免在 16 GB 显存中同时加载两个视觉模型。
+推理采用轻量的快慢路由，但不同时驻留两套模型。默认“快速路径”让当前模型基于明确目标直接生成一条原子动作；当目标存在多个候选、任务需要跨应用、连续两轮无进展或验证工具返回冲突证据时，编排器再次调用同一 `invoke_model` 工具并附加失败证据与里程碑信息。2B、4B、9B 是实验配置而不是运行时多模型路由。
 
 ### 2.3 部署依据与兼容性边界
 
 - PyTorch 官方支持 Windows 与 Python 3.12；本机实测固定使用 `torch==2.13.0+cu130` 和 `torchvision==0.28.0+cu130`，必须从官方 CUDA 13.0 wheel 索引安装：[PyTorch Start Locally](https://pytorch.org/get-started/locally/)。默认 PyPI 曾解析到 CPU 构建，因此验收不能只检查版本号，必须检查 `torch.version.cuda` 和真实 CUDA 运算。
-- Transformers 已提供 `Qwen2_5_VLForConditionalGeneration`；主模型从 [ModelScope 的 Qwen2.5-VL-3B-Instruct](https://modelscope.cn/models/Qwen/Qwen2.5-VL-3B-Instruct) 下载，代码不得用远端模型 ID 调用 `from_pretrained()`。
+- Qwen3.5 的 2B、4B、9B 具体加载类和本地目录以所选发布版本的官方文档为准；`invoke_model` 插件不得用远端模型 ID 调用 `from_pretrained()`。
 - 本机实测 RTX 5070 Ti 计算能力为 12.0，PyTorch CUDA 13.0 构建可执行 BF16 矩阵运算。该结果只证明 CUDA 基础链路，不等于完整 3B 模型已经完成显存和延迟验收。
 - vLLM 保留为后续吞吐量或服务化需求出现后的候选，不属于第一版安装、启动或验收范围。
 
@@ -88,20 +138,22 @@ LangChain 不使用 `ChatOpenAI`。自定义 `TorchModelProvider` 将标准化�
 
 ```mermaid
 flowchart LR
-    U[用户 / CLI] --> O[Orchestrator\nLangGraph]
-    O --> P[Perception\n截图、OCR、UIA、OpenCV]
-    P --> S[Agent State]
-    S --> M[TorchModelProvider\nTransformers + PyTorch]
-    M --> PL[Planner\n结构化 ActionPlan]
-    PL --> G[Safety Guard\n策略、坐标、确认]
-    G -->|允许| E[Desktop Controller\nPyAutoGUI / pynput]
-    G -->|拒绝| O
-    E --> V[Verifier\n功能谓词、UI 状态、截图差异]
-    V -->|成功| O
-    V -->|失败或无进展| R[Recovery\n重观察、重规划、人工接管]
-    R --> O
-    O --> C[Session Safety\n能力闸门、会话锁、异常清理]
-    O --> L[Artifact Store\n日志、截图、轨迹]
+    U[用户 / CLI] --> O[Agent Orchestrator\nLangGraph 状态机]
+    O --> S[Agent State]
+    O --> P[observe_screen 工具插件\n截图、OCR、UIA、OpenCV]
+    O --> M[invoke_model 工具插件\nQwen3.5 2B / 4B / 9B]
+    O --> G[approve_action 工具插件\n策略、坐标、确认]
+    O --> E[execute_action 工具插件\nPyAutoGUI / pynput]
+    O --> V[verify_result 工具插件\n功能谓词、UI 状态、截图差异]
+    O --> R[recover 工具插件\n重观察、重规划、人工接管]
+    O --> C[Session Safety 工具插件\n能力闸门、会话锁、异常清理]
+    O --> L[archive_run 工具插件\n日志、截图、轨迹]
+    P -->|Observation| O
+    M -->|候选动作| O
+    G -->|审批结果| O
+    E -->|执行回执| O
+    V -->|验证证据| O
+    R -->|恢复决策| O
 ```
 
 第一版运行边界如下：
@@ -109,15 +161,14 @@ flowchart LR
 ```mermaid
 flowchart LR
     subgraph WIN[Windows 11 / Conda max]
-        A[CLI + LangGraph]
-        P[截图 / OCR / UIA]
-        T[PyTorch + Transformers]
-        Q[Qwen2.5-VL-3B BF16]
-        C[Guard + Desktop Controller]
+        A[Agent Orchestrator + LangGraph]
+        P[观察工具插件\n截图 / OCR / UIA]
+        T[模型工具插件\nPyTorch + Transformers]
+        Q[Qwen3.5 2B / 4B / 9B\n串行测试]
+        C[审批与执行工具插件]
         A --> P
-        P -->|PIL image + observation| T
+        A --> T
         T --> Q
-        Q -->|structured action JSON| A
         A --> C
     end
     MS[ModelScope] -->|仅下载阶段| CACHE[仓库外模型缓存]
@@ -129,17 +180,15 @@ flowchart LR
 
 | 模块 | 职责 | 依赖 | 不负责的事 |
 | --- | --- | --- | --- |
-| CLI | 接收任务、显示进度和最终结果 | Orchestrator | 不直接访问鼠标键盘 |
-| Orchestrator | 维护任务状态，驱动 Observe/Decide/Guard/Act/Verify/Recover 循环 | LangGraph、各领域模块 | 不包含 OCR 或坐标计算细节 |
-| Perception | 截图、显示器/缩放信息、OCR、UI Automation、状态变化检测 | mss、OpenCV、PaddleOCR、pywinauto | 不执行动作、不做任务决策 |
-| ModelProvider | 单例加载本地模型，完成预处理、PyTorch 推理、解码与结构化输出 | torch、transformers、qwen-vl-utils | 不接触桌面控制器、不负责模型下载 |
-| Planner | 根据任务与观察生成下一条候选动作和成功条件 | ModelProvider | 不直接执行候选动作 |
-| Safety Guard | 对动作、坐标、目标窗口、频率、轮数实施策略 | 配置、当前状态 | 不调用模型做安全放行 |
-| Desktop Controller | 受控点击、输入、滚动、拖拽、停止 | PyAutoGUI、pynput | 不判断任务是否成功 |
-| Verifier | 以屏幕变化、OCR 文字和规则验证动作结果 | Perception | 不重试或自行执行 |
-| Recovery | 根据失败证据选择等待、重观察、重规划或人工接管 | Verifier、AgentState | 不绕过 Guard 重复执行动作 |
-| Session Safety | 能力总开关、单会话锁、宿主窗口排除和输入状态清理 | 配置、操作系统进程/窗口信息 | 不参与模型决策 |
-| Artifact Store | 按任务保存 JSONL 轨迹、截图及环境元数据 | 文件系统、logging | 不保存密钥或原始敏感内容 |
+| CLI | 接收任务、显示进度和最终结果 | Agent Orchestrator | 不直接访问鼠标键盘 |
+| Agent Orchestrator | 唯一维护任务状态、预算与状态转换；选择并调用工具插件 | LangGraph、工具注册表 | 不实现 OCR、推理、坐标换算或输入细节 |
+| 观察工具插件 | 截图、显示器/缩放信息、OCR、UI Automation、状态变化检测 | mss、OpenCV、PaddleOCR、pywinauto | 不执行动作、不推进任务状态 |
+| `invoke_model` 工具插件 | 串行加载一个 Qwen3.5 测试配置，完成预处理、推理、解码与结构化输出 | torch、transformers | 不接触桌面控制器、不持有任务循环 |
+| `approve_action` 工具插件 | 对动作、坐标、目标窗口、频率、轮数实施策略 | 配置、当前状态 | 不调用模型做安全放行 |
+| `execute_action` 工具插件 | 受控点击、输入、滚动、拖拽、停止 | PyAutoGUI、pynput | 不判断任务是否成功、不跳过审批 |
+| `verify_result` 工具插件 | 以屏幕变化、OCR 文字和规则验证动作结果 | 观察工具插件 | 不重试或自行执行 |
+| `recover` 工具插件 | 根据失败证据给出等待、重观察、重规划或人工接管建议 | 验证证据、AgentState | 不绕过审批工具 |
+| `archive_run` 工具插件 | 按任务保存 JSONL 轨迹、截图及环境元数据 | 文件系统、logging | 不保存密钥或原始敏感内容 |
 | Infrastructure | 仅在确有跨进程查询、并发写或队列需求时提供有状态服务 | Docker Compose、命名卷 | 第一版不引入数据库；不在宿主机安装 PostgreSQL/Redis |
 
 ## 4. 核心数据契约
@@ -323,11 +372,11 @@ LangChain 的 `ChatPromptTemplate` 由系统规则、任务目标、标准化观
 4. 同一失败动作不重复超过一次；
 5. 每轮只产生一项原子动作。
 
-模型配置需暴露：`model_id`、不可变 `revision`、`model_cache_dir`、`torch_dtype`、`device`、`attn_implementation`、`max_new_tokens`、`temperature`、`image_max_side`、`max_steps` 和 `step_timeout_s`。默认值为 `model_id=Qwen/Qwen2.5-VL-3B-Instruct`、`torch_dtype=bfloat16`、`device=cuda:0`、`attn_implementation=sdpa`、`temperature=0.1`、`max_new_tokens=256`、`image_max_side=1280`、`max_steps=12`。下载阶段可用 `master` 定位候选快照，但必须在首次成功下载后记录解析出的 commit/revision、完整文件清单与 SHA-256；推理和评测仅加载该本地不可变快照。实际目录、文件摘要、PyTorch/CUDA/Transformers 版本和峰值显存随任务归档，确保实验可复现。
+模型工具插件的配置需暴露：`model_id`、不可变 `revision`、`model_cache_dir`、`torch_dtype`、`device`、`attn_implementation`、`max_new_tokens`、`temperature`、`image_max_side`、`max_steps` 和 `step_timeout_s`。默认测试基线为 `model_id=Qwen/Qwen3.5-4B`、`torch_dtype=bfloat16`、`device=cuda:0`、`attn_implementation=sdpa`、`temperature=0.1`、`max_new_tokens=256`、`image_max_side=1280`、`max_steps=12`；Qwen3.5-2B 与 Qwen3.5-9B 使用相同夹具进行串行对照。模型实验归档与 Doctor 环境证据严格隔离。
 
-快慢推理共享同一 `ModelProvider`：快速路径只使用当前观察、目标和最近三步摘要；审慎路径额外加入失败证据、已完成里程碑和禁止重复的动作。审慎路径最多触发一次，防止小模型在长推理中引入新的幻觉。任务需要登录、验证码、身份确认或超出授权边界时，模型必须输出 `call_user`，而不是尝试绕过限制。
+快慢推理共享同一 `invoke_model` 工具插件：快速路径只使用当前观察、目标和最近三步摘要；审慎路径额外加入失败证据、已完成里程碑和禁止重复的动作。审慎路径最多触发一次。任务需要登录、验证码、身份确认或超出授权边界时，模型必须输出 `call_user`，由编排器转入人工处理状态。
 
-第 1–4 周仅启用本地 `TorchQwenProvider`。API Provider 保留为第 5 周后的隔离实验适配器，默认关闭；启用前需单独配置出站许可、截图脱敏规则和审计策略。本项目的默认评测与真实桌面控制不向外传输截图、OCR 文本或轨迹。
+第 1–4 周仅启用本地 Qwen3.5 `invoke_model` 工具插件。API Provider 保留为第 5 周后的隔离实验插件，默认关闭；启用前需单独配置出站许可、截图脱敏规则和审计策略。本项目的默认评测与真实桌面控制不向外传输截图、OCR 文本或轨迹。
 
 ## 8. 项目目录与接口组织
 
@@ -345,8 +394,19 @@ src/gui_agent/
   perception/som.py         # 按需生成 Set-of-Mark 标注图
   planning/prompts.py       # LangChain 提示词
   planning/planner.py       # 结构化动作生成
-  providers/base.py         # ModelProvider 抽象接口
-  providers/torch_qwen.py   # PyTorch/Transformers Qwen 本地 Provider
+  tools/base.py             # 工具/插件抽象接口
+  tools/registry.py         # 工具注册表；编排器的唯一能力调用入口
+  tools/perception/screen.py # mss 截图与 DPI 元数据
+  tools/perception/ocr.py   # PaddleOCR 适配
+  tools/perception/uia.py   # Windows UI Automation 可选适配
+  tools/perception/vision.py # OpenCV 预处理与模板匹配
+  tools/perception/som.py   # 按需生成 Set-of-Mark 标注图
+  tools/model/invoke_qwen.py # PyTorch/Transformers Qwen3.5 模型工具插件
+  tools/safety/approve_action.py # 动作审批工具
+  tools/desktop/execute_action.py # PyAutoGUI/pynput 执行工具
+  tools/verification/verify_result.py # 结果验证工具
+  tools/recovery/recover.py # 恢复工具
+  tools/archive/archive_run.py # 归档工具
   models/download.py        # ModelScope 快照下载与完整性记录
   control/guard.py          # 安全策略与校验
   control/desktop.py        # PyAutoGUI/pynput 执行器
@@ -367,7 +427,7 @@ tests/                       # 单元、集成和受控端到端测试
 artifacts/<task_id>/         # 运行期产物；加入 .gitignore
 ```
 
-`ModelProvider` 的稳定接口为 `invoke(observation: Observation, goal: str, history: list[StepRecord]) -> DesktopAction`。`TorchQwenProvider` 只负责从仓库外本地快照加载处理器和模型、构造多模态输入、调用 `generate()`、记录耗时/显存并解析响应；它不得下载模型、读取实时屏幕或执行动作。`DesktopController` 的稳定接口为 `execute(action: ApprovedAction) -> ExecutionReceipt`。训练模块只产生版本化的模型适配器或提示词配置，必须经 `ModelProvider` 加载，不能直接调用 Controller。领域模块不得跨过这些接口相互调用。
+工具/插件的稳定接口为 `invoke(input: ToolInput, context: AgentState) -> ToolReceipt`；其中 `invoke_model` 的输入包括观察、目标和历史，输出候选 `DesktopAction`。Qwen3.5 工具插件只负责加载 2B、4B 或 9B 的一个本地测试配置、构造多模态输入、调用 `generate()`、记录耗时/显存并解析响应；它不得下载模型、读取实时屏幕、推进任务状态或执行动作。`execute_action` 工具的稳定接口为 `execute(action: ApprovedAction) -> ExecutionReceipt`。所有领域工具只能经由 Agent Orchestrator 交互。
 
 ## 9. 数据处理与评测设计
 
@@ -384,7 +444,7 @@ artifacts/<task_id>/         # 运行期产物；加入 .gitignore
 - `INVALID_ACTION`、`POLICY_DENIED`、`VERIFY_FAILED` 等失败码分布；
 - 分辨率/DPI、模型版本、量化模式和配置哈希。
 
-基础验收目标是每项任务都有可复现轨迹和失败样例；不以隐藏失败或一次性演示代替评测。性能结论以实测为准：报告中必须分别列出 3B 与可选 7B 模型的首次加载时间、稳态单步延迟、峰值显存和成功率，不能用主观描述替代数据。
+基础验收目标是每项任务都有可复现轨迹和失败样例；不以隐藏失败或一次性演示代替评测。性能结论以实测为准：报告中必须分别列出 Qwen3.5-2B、Qwen3.5-4B、Qwen3.5-9B 的首次加载时间、稳态单步延迟、峰值显存和成功率，不能用主观描述替代数据。
 
 第 5 周开始的训练数据只使用许可证允许教学/研究用途的公开样本，按任务来源和模板去重后固定 train/validation/test 划分；测试集严禁进入训练或提示词示例。LoRA 实验至少比较“基线模型 + 固定提示词”“基线模型 + 优化提示词”“LoRA 模型 + 固定提示词”三组，统一模型快照、图像尺寸、随机种子和任务夹具。每个适配器归档基座快照摘要、数据清单哈希、训练参数、检查点哈希与验证结果；不得使用真实桌面截图或个人数据训练。
 
@@ -408,7 +468,7 @@ artifacts/<task_id>/         # 运行期产物；加入 .gitignore
 
 | 周次 | 主要实现 | 可验收产物 |
 | --- | --- | --- |
-| 第 1 周 | Python 3.12 与 GPU 验证、ModelScope 下载、PyTorch 3B BF16 基准、依赖锁定、接口草案 | 调研报告、环境文档、模型下载脚本、显存/延迟记录、架构图 |
+| 第 1 周 | Python 3.12 与 GPU 验证、Qwen3.5 模型工具链测试、依赖锁定、工具/插件接口草案 | 调研报告、环境文档、模型测试记录、架构图 |
 | 第 2 周 | 截图、OCR、可选 UIA、坐标转换、控制器、Guard、会话锁与单测 | 感知控制模块、测试报告、受控窗口演示 |
 | 第 3 周 | 数据适配、`ModelProvider`、快慢提示词、LangGraph 基础图、轨迹 schema | 预处理脚本、基础 Agent、结构化计划样例 |
 | 第 4 周 | 状态机集成、功能性 Verifier、有限恢复、CLI、日志与五任务测试 | v1.0 原型、运行说明、执行轨迹和基础任务测试报告 |
@@ -423,7 +483,7 @@ artifacts/<task_id>/         # 运行期产物；加入 .gitignore
 | --- | --- | --- |
 | PyTorch 默认索引安装到 CPU 构建 | GPU 不可用但安装表面成功 | 固定官方 CUDA 13.0 索引；启动时同时验证 `torch.version.cuda` 与真实 BF16 CUDA 运算 |
 | Blackwell 与 PyTorch/算子组合异常 | 模型启动或推理失败 | 固定已实测的 `torch==2.13.0+cu130`；第一版使用 BF16 + SDPA eager，不源码编译 FlashAttention |
-| 3B 模型显存或延迟超预算 | 交互不可用、OOM | 降图像边长和输出长度、缩短历史、单并发；完整模型加载后以实测峰值决定是否量化 |
+| Qwen3.5-9B 显存或延迟超预算 | 交互不可用、OOM | 先用 2B、4B 完成工具链测试；降低图像边长和输出长度、缩短历史、单并发；以实测峰值决定是否量化 |
 | ModelScope 快照漂移或下载中断 | 结果不可复现、文件不完整 | 固定 revision/文件摘要；下载与推理解耦；Provider 仅允许本地路径和 `local_files_only=True` |
 | 模型缓存写入 Git 或系统盘 | 仓库膨胀、磁盘压力 | 固定仓库外 `F:\AI\models\modelscope`；启动时拒绝位于仓库内的模型目录 |
 | Windows DPI、多显示器坐标偏移 | 误点击 | 物理像素统一、每轮记录 DPI/显示器、受控分辨率测试、Guard 边界检查 |
@@ -460,7 +520,7 @@ PostgreSQL、Redis、消息队列等会注册服务、占用端口或持久化�
 1. 使用 `conda activate max`，确认 Python 为 3.12.x，解释器位于 `F:\Software\Miniconda3\envs\max`。
 2. 用 `nvidia-smi` 确认 RTX 5070 Ti 和可用显存；运行 PyTorch CUDA/BF16 张量自检，不能只依据驱动显示的 CUDA 版本判断。
 3. 在 `F:\AI\models\modelscope` 至少预留 20 GB，并确保该目录不位于 Git 仓库中；用 ModelScope 先下载 `config.json` 验证网络，再下载完整模型。
-4. 完整模型下载后离线加载 3B BF16，记录首次加载时间、空闲/峰值显存和单图推理延迟；若 OOM，先降低图像尺寸和上下文，不能直接切换多种量化库。
+4. 依次加载 Qwen3.5-2B、Qwen3.5-4B、Qwen3.5-9B 的单个测试配置，记录首次加载时间、空闲/峰值显存和单图推理延迟；若 OOM，先降低图像尺寸和上下文，不能直接切换多种量化库。
 5. 关闭游戏、视频增强、其他 CUDA 程序和不必要的 GPU Overlay，为 Windows 桌面保留显存。
 6. 固定首轮测试的显示器、分辨率和 Windows 缩放比例，并准备专用测试目录、测试浏览器配置和测试联系人，不使用真实个人数据。
 7. 在交互式本机 PowerShell 中验证 `mss` 截图、UIA 窗口枚举、PaddleOCR 最小识别和急停热键；Codex 的非交互桌面会话不能替代该项。
@@ -476,8 +536,8 @@ PostgreSQL、Redis、消息队列等会注册服务、占用端口或持久化�
 | Git | 2.55.0.windows.3 | 可用 |
 | Windows GPU | RTX 5070 Ti，16,303 MiB，驱动 610.88 | 可用 |
 | PyTorch GPU | `torch 2.13.0+cu130`、CUDA 13.0、计算能力 12.0；BF16 矩阵运算成功 | 可用 |
-| Qwen/Transformers | `transformers 5.14.1` 可导入 `Qwen2_5_VLForConditionalGeneration` | 接口可用；完整模型尚未下载和推理 |
-| ModelScope | 1.39.1；已从 `Qwen/Qwen2.5-VL-3B-Instruct` 下载 1,373 字节 `config.json` 到临时目录并清理 | 下载链路可用；完整权重待下载 |
+| Qwen3.5/Transformers | Qwen3.5-2B、Qwen3.5-4B、Qwen3.5-9B 将通过统一 `invoke_model` 工具插件测试 | 具体加载类与完整模型测试待按所选发布版本执行 |
+| 模型下载工具 | 本地模型下载与离线加载命令已存在 | 2B、4B、9B 的完整权重测试待依次执行 |
 | LangChain/LangGraph | 1.3.14 / 1.2.10，导入成功 | 可用；自定义 Provider 尚待编码 |
 | 视觉与桌面依赖 | OpenCV 4.10.0、mss、PyAutoGUI、pynput、pywinauto 均导入成功；屏幕尺寸读取为 1920×1080 | 依赖可用；非交互会话 BitBlt 截图失败，需本机交互式终端复验 |
 | PaddleOCR | PaddlePaddle 3.3.1、PaddleOCR 3.7.0；Paddle CPU 张量与正确导入顺序通过 | 基础运行可用；OCR 模型下载和最小识别待验证 |

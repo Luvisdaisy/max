@@ -12,17 +12,50 @@
 - 下载的模型仅能存放在 `model/`；诊断与基准证据仅能存放在 `artifacts/`。两者均由 Git 忽略。
 - 除非有独立且已批准的变更，否则桌面控制与模型驱动聊天均不在当前范围内。
 
+## 代码风格
+
+- 编码时优先选择简单、高效且直接的实现。
+- 未有明确需求时，不引入 fallback、兼容分支或额外抽象。
+- 能以一行清晰代码解决的问题，避免无必要地拆分为多行；但不得以牺牲可读性、错误处理或正确性为代价。
+
+## 未来工具目录约定
+
+- Agent 编排器是唯一推进任务状态的核心；感知、模型、安全、桌面执行、验证、恢复和归档能力均通过工具/插件契约提供。
+- 新增感知实现时必须置于 `src/max_agent/tools/perception/`，不得新增顶层 `perception` 包；`tools/registry.py` 是编排器调用工具的唯一入口。
+- 不为尚未实现的能力创建空包或占位工具。
+
 ## 常用验证命令
 
 ```powershell
 python -m unittest discover -s tests -v
 python -m pip check
-max-agent --diagnose --artifact-root artifacts
+max-agent doctor --artifact-root artifacts
 ```
 
 若激活 Conda 后找不到 `max-agent`，使用 `python -m max_agent.cli`，或将 `$env:CONDA_PREFIX\Scripts` 添加到当前会话的 `PATH`。
 
+## 技术报告同步
+
+- 根目录 `tech-design.md` 是系统技术设计报告。涉及公开命令、模块职责、数据归档、安全边界或已实现能力的代码变更，必须同步更新该报告。
+- 报告必须区分“当前已实现基线”和“后续设计/路线图”；不得删除未实现的设计内容，除非变更明确废弃该设计。
+- 更新后应以当前代码、自动化测试和实际命令输出核对报告中的已实现行为，避免把计划能力表述为已交付。
+
 ## OpenSpec 工作流
+
+- 本项目不依赖全局安装的 `openspec` 命令。必须在仓库根目录使用以下前缀调用 OpenSpec：
+
+  ```powershell
+  npx.cmd --yes @fission-ai/openspec@1.8.0 <子命令>
+  ```
+
+  例如：
+
+  ```powershell
+  npx.cmd --yes @fission-ai/openspec@1.8.0 status
+  npx.cmd --yes @fission-ai/openspec@1.8.0 new change <change-name>
+  npx.cmd --yes @fission-ai/openspec@1.8.0 instructions apply --change <change-name> --json
+  npx.cmd --yes @fission-ai/openspec@1.8.0 validate --specs
+  ```
 
 - 将 `openspec/specs/` 视为当前行为契约。
 - 实现前，在 `openspec/changes/<change-name>/` 中创建 proposal、delta spec、design 与 tasks 等规划工件。

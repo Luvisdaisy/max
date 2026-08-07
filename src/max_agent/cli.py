@@ -10,7 +10,7 @@ from .benchmark import run_benchmark
 from .config import ModelConfig
 from .console_core import OperationResult, dispatch_input
 from .console_frontends import run_prompt_toolkit_console, run_textual_chat
-from .diagnostics import default_probe, run_diagnostics
+from .diagnostics import default_probe, render_doctor, run_diagnostics
 from .model_download import download_qwen35_model, run_modelscope_cli, validate_model_metadata
 from .model_runtime import load_qwen35_model, require_complete_local_model
 from .runtime_paths import configure_hf_modules_cache
@@ -23,20 +23,20 @@ def _repository_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _diagnose(artifact_root: Path) -> int:
-    archive = ExperimentArchive.create(artifact_root, "diagnose")
-    result = run_diagnostics(default_probe())
-    archive.write_config({"command": "diagnose"})
+def _doctor(artifact_root: Path, *, desktop_probe: bool = False) -> int:
+    archive = ExperimentArchive.create(artifact_root, "doctor")
+    result = run_diagnostics(default_probe(desktop_probe=desktop_probe))
+    archive.write_config({"command": "doctor", "desktop_probe": desktop_probe})
     archive.write_environment(result.to_dict())
-    archive.append_trajectory({"event": "diagnostic_completed", "ok": result.ok})
+    archive.append_trajectory({"event": "doctor_completed", "ok": result.ok})
     archive.write_result({"status": "success" if result.ok else "failure", "failures": result.failures})
-    typer.echo(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+    typer.echo(render_doctor(result))
     return 0 if result.ok else 1
 
 
 def _interactive_dispatch(artifact_root: Path):
     def dispatch(value: str) -> OperationResult:
-        return dispatch_input(value, diagnose=lambda: OperationResult("diagnose", (json.dumps(run_diagnostics(default_probe()).to_dict(), ensure_ascii=False),), exit_code=0))
+        return dispatch_input(value, doctor=lambda: OperationResult("doctor", (render_doctor(run_diagnostics(default_probe())),), exit_code=0))
 
     return dispatch
 
@@ -45,21 +45,24 @@ def _interactive_dispatch(artifact_root: Path):
 def entry(
     ctx: typer.Context,
     artifact_root: Path = typer.Option(Path("artifacts"), "--artifact-root"),
-    diagnose: bool = typer.Option(False, "--diagnose", help="Run diagnostics and exit"),
+    doctor: bool = typer.Option(False, "--doctor", help="Run Doctor and exit"),
     chat: bool = typer.Option(False, "--chat", help="Start the default chat interface"),
     fallback: bool = typer.Option(False, "--fallback", help="Start the Prompt Toolkit fallback console"),
 ) -> None:
-    if diagnose:
-        raise typer.Exit(_diagnose(artifact_root))
+    if doctor:
+        raise typer.Exit(_doctor(artifact_root))
     if fallback:
         run_prompt_toolkit_console(_interactive_dispatch(artifact_root))
     elif chat or ctx.invoked_subcommand is None:
         run_textual_chat(_interactive_dispatch(artifact_root))
 
 
-@app.command("diagnose")
-def diagnose_command(artifact_root: Path = typer.Option(Path("artifacts"), "--artifact-root")) -> None:
-    raise typer.Exit(_diagnose(artifact_root))
+@app.command("doctor")
+def doctor_command(
+    artifact_root: Path = typer.Option(Path("artifacts"), "--artifact-root"),
+    desktop_probe: bool = typer.Option(False, "--desktop-probe", help="Run controlled desktop input checks"),
+) -> None:
+    raise typer.Exit(_doctor(artifact_root, desktop_probe=desktop_probe))
 
 
 @app.command("download-model", help="Download Qwen3.5-4B to the project model directory")

@@ -16,9 +16,18 @@ class ConsoleCoreTests(unittest.TestCase):
 
         self.assertTrue(result.should_exit)
 
+    def test_doctor_command_uses_doctor_handler(self) -> None:
+        result = dispatch_input("/doctor", doctor=lambda: "doctor-result")
+
+        self.assertEqual(result, "doctor-result")
+
+    def test_legacy_diagnose_command_is_unsupported(self) -> None:
+        result = dispatch_input("/diagnose")
+
+        self.assertEqual(result.kind, "command_error")
+
     def test_unknown_command_keeps_session_open(self) -> None:
         result = dispatch_input("/unknown")
 
         self.assertIn("Unsupported command", result.messages[-1])
         self.assertFalse(result.should_exit)
-
