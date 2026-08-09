@@ -11,7 +11,9 @@ def assert_project_model_dir(repository_root: Path, model_dir: Path) -> None:
     try:
         resolved_model_dir.relative_to(expected_root)
     except ValueError:
-        raise ValueError("model directory is outside the repository model tree") from None
+        raise ValueError(
+            "model directory is outside the repository model tree"
+        ) from None
 
 
 @dataclass(frozen=True, slots=True)

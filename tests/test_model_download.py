@@ -1,5 +1,5 @@
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 from max_agent.config import ModelConfig
 from max_agent.model_download import download_qwen35_model, validate_model_metadata
@@ -14,7 +14,11 @@ class ModelDownloadTests(unittest.TestCase):
             return "F:/AI/models/modelscope/config.json"
 
         result = validate_model_metadata(
-            ModelConfig("ZhipuAI/glm-4v-9b", "revision-123", Path("C:/repo/model/ZhipuAI/glm-4v-9b")),
+            ModelConfig(
+                "ZhipuAI/glm-4v-9b",
+                "revision-123",
+                Path("C:/repo/model/ZhipuAI/glm-4v-9b"),
+            ),
             Path("C:/repo"),
             model_file_download,
         )
@@ -23,7 +27,9 @@ class ModelDownloadTests(unittest.TestCase):
         self.assertEqual(received["file_path"], "config.json")
         self.assertEqual(received["revision"], "revision-123")
 
-    def test_qwen35_download_uses_modelscope_cli_and_project_model_directory(self) -> None:
+    def test_qwen35_download_uses_modelscope_cli_and_project_model_directory(
+        self,
+    ) -> None:
         received: list[str] = []
 
         def runner(command: list[str]) -> None:

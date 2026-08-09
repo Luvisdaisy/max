@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
 import tomllib
 import unittest
-
+from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = REPOSITORY_ROOT / "requirements.txt"
@@ -29,18 +28,18 @@ def _normalized_pins() -> dict[str, str]:
 class RequirementsManifestTests(unittest.TestCase):
     def test_root_manifest_is_the_complete_install_entry_point(self) -> None:
         content = MANIFEST.read_text(encoding="utf-8")
-        self.assertIn("--extra-index-url https://download.pytorch.org/whl/cu130", content)
+        self.assertIn(
+            "--extra-index-url https://download.pytorch.org/whl/cu130", content
+        )
         self.assertIn("\n-e .\n", f"\n{content.rstrip()}\n")
         self.assertEqual(
             {
                 "langchain": "1.3.14",
                 "langgraph": "1.2.10",
                 "modelscope": "1.39.1",
-                "prompt-toolkit": "3.0.52",
-                "rich": "14.3.3",
                 "textual": "8.1.1",
                 "transformers": "5.14.1",
-                "typer": "0.21.0",
+                "ruff": "0.16.2",
                 "torch": "2.13.0+cu130",
                 "torchvision": "0.28.0+cu130",
                 "pillow": "11.3.0",
@@ -58,7 +57,9 @@ class RequirementsManifestTests(unittest.TestCase):
         )
 
     def test_package_metadata_dependencies_are_pinned_in_root_manifest(self) -> None:
-        project = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+        project = tomllib.loads(
+            (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        )["project"]
         manifest_pins = _normalized_pins()
         for requirement in project["dependencies"]:
             name, separator, version = requirement.partition("==")
@@ -66,7 +67,13 @@ class RequirementsManifestTests(unittest.TestCase):
             self.assertEqual(version, manifest_pins[name.lower().replace("_", "-")])
 
     def test_split_requirements_manifests_are_removed(self) -> None:
-        self.assertFalse([str(path.relative_to(REPOSITORY_ROOT)) for path in LEGACY_MANIFESTS if path.exists()])
+        self.assertFalse(
+            [
+                str(path.relative_to(REPOSITORY_ROOT))
+                for path in LEGACY_MANIFESTS
+                if path.exists()
+            ]
+        )
 
 
 if __name__ == "__main__":

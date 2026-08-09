@@ -1,5 +1,9 @@
 # 基于多模态大模型的桌面 GUI 智能体：系统技术设计报告
 
+## 代码质量与持续集成基线（当前已实现）
+
+仓库以 Ruff 作为 Python 3.12 的格式化与基础静态检查工具，检查范围为 `src/` 和 `tests/`，并在根目录 `requirements.txt` 固定工具版本。GitHub Actions 在 `push` 与 `pull_request` 上使用 Windows / Python 3.12，依次执行 Ruff 格式检查、Ruff 静态检查、完整单元测试和 `pip check`。该门禁不会启动 Textual、加载或下载本地模型、运行基准，也不会执行桌面控制；这些仍只可在经过授权的本地验证流程中运行。
+
 **版本：** v1.5.0  
 **日期：** 2026-08-07  
 **目标平台：** Windows 11、NVIDIA RTX 5070 Ti、32 GB DDR5-6400 内存  
@@ -18,9 +22,12 @@
 | `doctor --desktop-probe` | 显式创建临时 Tk 测试窗口，并有限请求该窗口成为 Windows 前台窗口；只有句柄确认成功时，才执行受控点击和文本输入 | 前台焦点不可得时标记为跳过，明确未执行输入测试并在任何输入前停止；不操作真实业务窗口 |
 | `ExperimentArchive` | 每次 Doctor 在 Git 忽略的 `artifacts/` 下写入 `config.yaml`、`environment.json`、`trajectory.jsonl`、`result.json` | 不归档真实截图、令牌、密钥或模型身份信息 |
 | 聊天控制台 | Typer/Rich/Prompt Toolkit 构成首要 CLI 交互层，将 `/doctor` 分发为本地检查；Textual 作为后续可选高级 UI 复用同一分发核心，普通消息只返回未配置后端提示 | 不提供模型驱动聊天；Textual 不属于基础 CLI 运行必需路径 |
-| 本地辅助命令 | 保留下载、元数据校验和单图基准命令的现有实现 | 它们与 Doctor 证据隔离，Doctor 不依赖或识别模型 |
+| Textual 本地聊天 | `max-agent` 与 `max-agent --chat` 均启动同一个 Textual 会话；普通文本按需离线加载项目内 Qwen3.5-2B，`/doctor` 运行无输入诊断 | 不提供桌面控制、远程推理或网络回退；模型加载失败保持会话可用，Qwen3.5-4B 留作后续容量验证 |
+| 本地辅助实现 | 保留下载、元数据校验和单图基准模块供未来内部 API 或后续入口使用 | 不提供公开 CLI 调用；不下载缺失权重、不回退网络、不归档模型权重、图像内容或绝对本地路径 |
 
 当前 `src/max_agent/` 仅包含归档、诊断、CLI、控制台分发、运行配置与本地辅助命令等基础模块。后文描述的 `Orchestrator`、`Perception`、`Planner`、`Safety Guard`、`Desktop Controller`、`Verifier`、`Recovery` 和 `Session Safety` 仍是待实现设计，不能据此推断仓库已经具备端到端 GUI Agent 能力。未来感知实现的唯一位置为 `src/max_agent/tools/perception/`；当前没有感知模块需要移动，也不为此创建空包。
+
+2026-08-09 已对仓库内完整 Qwen3.5-4B 与单像素图像夹具执行一次真实离线基准。固定目录、分片与图像预检均通过；模型加载阶段因 16 GiB 显卡当时仅约有 7.46 GiB 空闲而发生 CUDA OOM（还需 40 MiB），因此尚未得到成功推理数据。对应的 Git 忽略基准归档记录 `stage: "load"` 和 `offline: true`；该失败是当前已实现基线的真实验收结果，不能替代后续在空闲显存充足环境中的成功测量。
 
 ### 当前 Doctor 工作流
 

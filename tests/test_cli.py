@@ -1,90 +1,52 @@
+import tempfile
 import unittest
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
-from typer.testing import CliRunner
-
-from max_agent.cli import app
+from max_agent.cli import _doctor_operation, main
+from max_agent.diagnostics import DiagnosticResult
 
 
 class CliTests(unittest.TestCase):
-    def test_doctor_flag_dispatches_non_interactive_operation(self) -> None:
-        with patch("max_agent.cli._doctor", return_value=0) as doctor:
-            result = CliRunner().invoke(app, ["--doctor"])
+    def test_default_and_chat_start_the_same_textual_interface(self) -> None:
+        with patch("max_agent.cli.run_textual_chat") as start_chat:
+            main([])
+            main(["--chat"])
 
-        self.assertEqual(result.exit_code, 0)
-        doctor.assert_called_once()
+        self.assertEqual(start_chat.call_count, 2)
 
-    def test_doctor_command_dispatches_non_interactive_operation(self) -> None:
-        with patch("max_agent.cli._doctor", return_value=0) as doctor:
-            result = CliRunner().invoke(app, ["doctor"])
+    def test_removed_cli_operations_are_rejected(self) -> None:
+        for operation in (
+            "doctor",
+            "download-model",
+            "--doctor",
+            "--fallback",
+            "--textual",
+        ):
+            with self.subTest(operation=operation), self.assertRaises(SystemExit):
+                main([operation])
 
-        self.assertEqual(result.exit_code, 0)
-        doctor.assert_called_once()
+    def test_help_does_not_advertise_removed_operations(self) -> None:
+        with self.assertRaises(SystemExit):
+            main(["--help"])
 
-    def test_doctor_renders_readable_summary(self) -> None:
-        with patch("max_agent.cli.run_diagnostics") as diagnostics:
-            diagnostics.return_value = type("Result", (), {"ok": True, "to_dict": lambda self: {}, "checks": [], "failures": []})()
-            result = CliRunner().invoke(app, ["doctor"])
-
-        self.assertEqual(result.exit_code, 0)
-        self.assertIn("Doctor 结果", result.output)
-
-    def test_desktop_probe_is_explicit(self) -> None:
-        with patch("max_agent.cli._doctor", return_value=0) as doctor:
-            result = CliRunner().invoke(app, ["doctor", "--desktop-probe"])
-
-        self.assertEqual(result.exit_code, 0)
-        doctor.assert_called_once_with(Path("artifacts"), desktop_probe=True)
-
-    def test_help_excludes_legacy_diagnose_commands(self) -> None:
-        help_text = CliRunner().invoke(app, ["--help"]).output
-
-        self.assertIn("doctor", help_text)
-        self.assertNotIn("diagnose", help_text)
-
-    def test_chat_flag_starts_cli_first_frontend(self) -> None:
-        with patch("max_agent.cli.run_prompt_toolkit_console") as start_chat:
-            result = CliRunner().invoke(app, ["--chat"])
-
-        self.assertEqual(result.exit_code, 0)
-        start_chat.assert_called_once()
-
-    def test_no_command_starts_cli_first_frontend(self) -> None:
-        with patch("max_agent.cli.run_prompt_toolkit_console") as start_chat:
-            result = CliRunner().invoke(app, [])
-
-        self.assertEqual(result.exit_code, 0)
-        start_chat.assert_called_once()
-
-    def test_fallback_remains_compatibility_alias(self) -> None:
-        with patch("max_agent.cli.run_prompt_toolkit_console") as start_console:
-            result = CliRunner().invoke(app, ["--fallback"])
-
-        self.assertEqual(result.exit_code, 0)
-        start_console.assert_called_once()
-
-    def test_textual_is_explicit_optional_frontend(self) -> None:
-        with patch("max_agent.cli.run_textual_chat") as start_textual:
-            result = CliRunner().invoke(app, ["--textual"])
-
-        self.assertEqual(result.exit_code, 0)
-        start_textual.assert_called_once()
-
-    def test_cli_first_frontend_does_not_require_textual(self) -> None:
-        with patch.dict(sys.modules, {"textual": None}), patch("max_agent.cli.run_prompt_toolkit_console") as start_console:
-            result = CliRunner().invoke(app, [])
-
-        self.assertEqual(result.exit_code, 0)
-        start_console.assert_called_once()
-
-    def test_download_model_command_advertises_qwen35(self) -> None:
-        help_text = CliRunner().invoke(app, ["--help"]).output
-
-        self.assertIn("Qwen3.5-4B", help_text)
-
-    def test_cli_advertises_metadata_validation_command(self) -> None:
-        help_text = CliRunner().invoke(app, ["--help"]).output
-
-        self.assertIn("validate-model", help_text)
+    def test_doctor_command_archives_its_result(self) -> None:
+        result = DiagnosticResult(
+            python_version="3.12",
+            packages={},
+            cuda_available=True,
+            cuda_version="12.8",
+            bf16_supported=True,
+            failures=[],
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("max_agent.cli.run_diagnostics", return_value=result),
+        ):
+            operation = _doctor_operation(Path(directory))
+            run_directory = next(Path(directory).iterdir())
+            self.assertEqual(operation.kind, "doctor")
+            self.assertEqual(operation.exit_code, 0)
+            self.assertTrue((run_directory / "config.yaml").exists())
+            self.assertTrue((run_directory / "environment.json").exists())
+            self.assertTrue((run_directory / "result.json").exists())

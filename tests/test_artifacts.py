@@ -1,7 +1,7 @@
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from max_agent.artifacts import ExperimentArchive
 
@@ -17,6 +17,17 @@ class ArtifactTests(unittest.TestCase):
             archive.write_result({"status": "success"})
 
             self.assertTrue((archive.path / "config.yaml").is_file())
-            self.assertEqual(json.loads((archive.path / "environment.json").read_text(encoding="utf-8")), {"cuda_available": True})
-            self.assertEqual((archive.path / "trajectory.jsonl").read_text(encoding="utf-8"), '{"event": "started"}\n')
-            self.assertEqual(json.loads((archive.path / "result.json").read_text(encoding="utf-8")), {"status": "success"})
+            self.assertEqual(
+                json.loads(
+                    (archive.path / "environment.json").read_text(encoding="utf-8")
+                ),
+                {"cuda_available": True},
+            )
+            self.assertEqual(
+                (archive.path / "trajectory.jsonl").read_text(encoding="utf-8"),
+                '{"event": "started"}\n',
+            )
+            self.assertEqual(
+                json.loads((archive.path / "result.json").read_text(encoding="utf-8")),
+                {"status": "success"},
+            )
