@@ -27,10 +27,14 @@ class ModelRuntimeTests(unittest.TestCase):
         loaded_model.to.return_value = loaded_model
         loaded_model.eval.return_value = loaded_model
 
-        with patch(
-            "transformers.AutoModelForMultimodalLM.from_pretrained",
-            return_value=loaded_model,
-        ) as loader:
+        with (
+            patch("torch.cuda.is_available", return_value=False),
+            patch("torch.cuda.reset_peak_memory_stats") as reset_peak_memory,
+            patch(
+                "transformers.AutoModelForMultimodalLM.from_pretrained",
+                return_value=loaded_model,
+            ) as loader,
+        ):
             result = load_qwen35_model(Path("C:/repo/model/Qwen/Qwen3.5-4B"))
 
         self.assertIs(result, loaded_model)
@@ -38,6 +42,7 @@ class ModelRuntimeTests(unittest.TestCase):
         self.assertNotIn("torch_dtype", loader.call_args.kwargs)
         self.assertEqual(loader.call_args.kwargs["local_files_only"], True)
         self.assertNotIn("trust_remote_code", loader.call_args.kwargs)
+        reset_peak_memory.assert_not_called()
 
     def test_offline_model_loader_rejects_missing_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -54,7 +59,9 @@ class ModelRuntimeTests(unittest.TestCase):
             repository = Path(directory) / "repository"
             target = self._complete_model(repository)
 
-            self.assertEqual(require_complete_local_model(repository, target), target)
+            self.assertTrue(
+                require_complete_local_model(repository, target).samefile(target)
+            )
 
     def test_offline_model_loader_rejects_another_project_model(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
