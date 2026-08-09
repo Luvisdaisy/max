@@ -4,11 +4,20 @@ from max_agent.console_core import dispatch_input
 
 
 class ConsoleCoreTests(unittest.TestCase):
-    def test_chat_message_reports_unconfigured_backend(self) -> None:
-        result = dispatch_input("hello")
+    def test_chat_message_uses_local_runtime_handler(self) -> None:
+        result = dispatch_input("hello", chat=lambda text: f"reply:{text}")
 
         self.assertEqual(result.kind, "chat")
-        self.assertIn("AI backend is not configured", result.messages[-1])
+        self.assertEqual(result.messages[-1], "reply:hello")
+        self.assertFalse(result.should_exit)
+
+    def test_chat_runtime_error_keeps_session_open(self) -> None:
+        result = dispatch_input(
+            "hello",
+            chat=lambda text: (_ for _ in ()).throw(RuntimeError("offline failure")),
+        )
+
+        self.assertEqual(result.kind, "runtime_error")
         self.assertFalse(result.should_exit)
 
     def test_quit_command_requests_exit(self) -> None:

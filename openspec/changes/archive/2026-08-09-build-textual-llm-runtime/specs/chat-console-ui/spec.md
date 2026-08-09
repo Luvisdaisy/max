@@ -1,10 +1,4 @@
-# chat-console-ui Specification
-
-## Purpose
-
-提供唯一的 Textual 本地聊天入口，使开发者能够在同一交互会话中使用本地模型、诊断运行环境并安全退出。
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Default chat-first terminal interface
 The application SHALL provide a Textual terminal interface as its only interactive experience, with visible chat history, input, loading and error status, and a graceful exit action. `max-agent` and `max-agent --chat` SHALL start the same Textual interface. Ordinary text SHALL be sent to the local LLM runtime rather than receiving a fabricated unconfigured-backend message.

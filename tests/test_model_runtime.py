@@ -1,18 +1,36 @@
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
-from max_agent.model_runtime import load_qwen35_model, require_complete_local_model
+from max_agent.model_runtime import (
+    load_qwen35_model,
+    require_complete_local_model,
+    require_readable_image,
+)
 
 
 class ModelRuntimeTests(unittest.TestCase):
+    def _complete_model(self, repository: Path) -> Path:
+        target = repository / "model" / "Qwen" / "Qwen3.5-4B"
+        target.mkdir(parents=True)
+        for name in ("config.json", "preprocessor_config.json", "tokenizer.json"):
+            (target / name).write_text("{}", encoding="utf-8")
+        (target / "model.safetensors").write_bytes(b"weights")
+        (target / "model.safetensors.index.json").write_text(
+            '{"weight_map": {"layer": "model.safetensors"}}', encoding="utf-8"
+        )
+        return target
+
     def test_qwen35_loader_uses_native_offline_bf16_transformers_loader(self) -> None:
         loaded_model = Mock()
         loaded_model.to.return_value = loaded_model
         loaded_model.eval.return_value = loaded_model
 
-        with patch("transformers.AutoModelForMultimodalLM.from_pretrained", return_value=loaded_model) as loader:
+        with patch(
+            "transformers.AutoModelForMultimodalLM.from_pretrained",
+            return_value=loaded_model,
+        ) as loader:
             result = load_qwen35_model(Path("C:/repo/model/Qwen/Qwen3.5-4B"))
 
         self.assertIs(result, loaded_model)
@@ -26,17 +44,48 @@ class ModelRuntimeTests(unittest.TestCase):
             repository = Path(directory) / "repository"
             target = repository / "model" / "Qwen" / "Qwen3.5-4B"
             target.mkdir(parents=True)
-            with self.assertRaisesRegex(FileNotFoundError, "offline benchmark requires"):
+            with self.assertRaisesRegex(
+                FileNotFoundError, "offline benchmark requires"
+            ):
                 require_complete_local_model(repository, target)
 
-    def test_offline_model_loader_accepts_local_model_metadata(self) -> None:
+    def test_offline_model_loader_accepts_complete_local_model(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            model_dir = Path(directory)
-            (model_dir / "config.json").write_text("{}", encoding="utf-8")
-
-            repository = model_dir / "repository"
-            target = repository / "model" / "Qwen" / "Qwen3.5-4B"
-            target.mkdir(parents=True)
-            (target / "config.json").write_text("{}", encoding="utf-8")
+            repository = Path(directory) / "repository"
+            target = self._complete_model(repository)
 
             self.assertEqual(require_complete_local_model(repository, target), target)
+
+    def test_offline_model_loader_rejects_another_project_model(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory) / "repository"
+            self._complete_model(repository)
+            other_model = repository / "model" / "Qwen" / "another-model"
+            other_model.mkdir(parents=True)
+
+            with self.assertRaisesRegex(ValueError, "supported local Qwen3.5-4B"):
+                require_complete_local_model(repository, other_model)
+
+    def test_offline_model_loader_rejects_missing_weight_shard(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory) / "repository"
+            target = self._complete_model(repository)
+            (target / "model.safetensors").unlink()
+
+            with self.assertRaisesRegex(
+                FileNotFoundError, "complete local Qwen3.5-4B weights"
+            ):
+                require_complete_local_model(repository, target)
+
+    def test_image_preflight_accepts_readable_image_and_rejects_invalid_input(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "image.ppm"
+            image.write_bytes(b"P6\n1 1\n255\n\x00\x00\x00")
+            self.assertEqual(require_readable_image(image), image.resolve())
+            invalid = Path(directory) / "invalid-image"
+            invalid.write_text("not an image", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "readable local image"):
+                require_readable_image(invalid)

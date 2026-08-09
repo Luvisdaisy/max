@@ -23,11 +23,18 @@ class ExperimentArchive:
         return cls(path)
 
     def write_config(self, payload: Mapping[str, Any]) -> None:
-        lines = [f"{key}: {json.dumps(value, ensure_ascii=False)}" for key, value in sorted(payload.items())]
-        (self.path / "config.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        lines = [
+            f"{key}: {json.dumps(value, ensure_ascii=False)}"
+            for key, value in sorted(payload.items())
+        ]
+        (self.path / "config.yaml").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8"
+        )
 
     def write_environment(self, payload: Mapping[str, Any]) -> None:
-        (self.path / "environment.json").write_text(_json_line(payload), encoding="utf-8")
+        (self.path / "environment.json").write_text(
+            _json_line(payload), encoding="utf-8"
+        )
 
     def append_trajectory(self, payload: Mapping[str, Any]) -> None:
         with (self.path / "trajectory.jsonl").open("a", encoding="utf-8") as handle:

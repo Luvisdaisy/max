@@ -43,15 +43,31 @@ class DiagnosticResult:
 
     @property
     def ok(self) -> bool:
-        return not self.failures and not any(check.status == "failed" for check in self.tool_checks or [])
+        return not self.failures and not any(
+            check.status == "failed" for check in self.tool_checks or []
+        )
 
     @property
     def checks(self) -> list[CheckResult]:
         checks = [
             CheckResult("python", "passed", self.python_version.split()[0]),
-            CheckResult("dependencies", "passed" if not any("dependency" in failure.lower() for failure in self.failures) else "failed", "pip check"),
-            CheckResult("cuda", "passed" if self.cuda_available else "failed", self.cuda_version or "unavailable"),
-            CheckResult("bf16", "passed" if self.bf16_supported else "failed", "CUDA BF16 tensor operation"),
+            CheckResult(
+                "dependencies",
+                "passed"
+                if not any("dependency" in failure.lower() for failure in self.failures)
+                else "failed",
+                "pip check",
+            ),
+            CheckResult(
+                "cuda",
+                "passed" if self.cuda_available else "failed",
+                self.cuda_version or "unavailable",
+            ),
+            CheckResult(
+                "bf16",
+                "passed" if self.bf16_supported else "failed",
+                "CUDA BF16 tensor operation",
+            ),
         ]
         if self.gpu_name:
             checks.append(CheckResult("gpu", "passed", self.gpu_name))
@@ -82,13 +98,19 @@ def run_diagnostics(probe: DiagnosticProbe) -> DiagnosticResult:
         try:
             probe.bf16_probe()
             bf16_supported = True
-        except Exception as error:  # diagnostic boundary: capture library errors as evidence
+        except (
+            Exception
+        ) as error:  # diagnostic boundary: capture library errors as evidence
             failures.append(f"BF16 CUDA tensor operation failed: {error}")
     failures.extend(probe.dependency_check())
     try:
         tool_checks = probe.tool_checks()
-    except Exception as error:  # diagnostic boundary: capture base-tool probe failures as evidence
-        tool_checks = [CheckResult("base_tools", "failed", f"Base-tool probe failed: {error}")]
+    except (
+        Exception
+    ) as error:  # diagnostic boundary: capture base-tool probe failures as evidence
+        tool_checks = [
+            CheckResult("base_tools", "failed", f"Base-tool probe failed: {error}")
+        ]
     return DiagnosticResult(
         python_version=probe.python_version(),
         packages=probe.package_versions(),
@@ -103,8 +125,19 @@ def run_diagnostics(probe: DiagnosticProbe) -> DiagnosticResult:
 
 def default_probe(*, desktop_probe: bool = False) -> DiagnosticProbe:
     def package_versions() -> dict[str, str]:
-        names = ("torch", "torchvision", "transformers", "modelscope", "langchain", "langgraph")
-        return {name: importlib.metadata.version(name) for name in names if _is_installed(name)}
+        names = (
+            "torch",
+            "torchvision",
+            "transformers",
+            "modelscope",
+            "langchain",
+            "langgraph",
+        )
+        return {
+            name: importlib.metadata.version(name)
+            for name in names
+            if _is_installed(name)
+        }
 
     def cuda_available() -> bool:
         import torch
@@ -124,8 +157,17 @@ def default_probe(*, desktop_probe: bool = False) -> DiagnosticProbe:
         torch.cuda.synchronize()
 
     def dependency_check() -> list[str]:
-        completed = subprocess.run([sys.executable, "-m", "pip", "check"], capture_output=True, text=True, check=False)
-        return [] if completed.returncode == 0 else [completed.stdout.strip() or completed.stderr.strip()]
+        completed = subprocess.run(
+            [sys.executable, "-m", "pip", "check"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return (
+            []
+            if completed.returncode == 0
+            else [completed.stdout.strip() or completed.stderr.strip()]
+        )
 
     def tool_checks() -> list[CheckResult]:
         checks = [
@@ -135,7 +177,15 @@ def default_probe(*, desktop_probe: bool = False) -> DiagnosticProbe:
             _check_paddleocr(),
             _check_pynput(),
         ]
-        checks.append(_check_desktop_probe() if desktop_probe else CheckResult("desktop_probe", "skipped", "Use --desktop-probe in an interactive session."))
+        checks.append(
+            _check_desktop_probe()
+            if desktop_probe
+            else CheckResult(
+                "desktop_probe",
+                "skipped",
+                "Use --desktop-probe in an interactive session.",
+            )
+        )
         return checks
 
     return DiagnosticProbe(
@@ -197,14 +247,19 @@ def _check_opencv() -> CheckResult:
         import cv2
         import numpy
 
-        converted = cv2.cvtColor(numpy.zeros((1, 1, 3), dtype=numpy.uint8), cv2.COLOR_BGR2GRAY)
+        converted = cv2.cvtColor(
+            numpy.zeros((1, 1, 3), dtype=numpy.uint8), cv2.COLOR_BGR2GRAY
+        )
         return f"synthetic image converted to {converted.shape[1]}x{converted.shape[0]}"
 
     return _check("opencv", probe)
 
 
 def _check_paddleocr() -> CheckResult:
-    return _check("paddleocr", lambda: f"version {importlib.metadata.version('paddleocr')} available")
+    return _check(
+        "paddleocr",
+        lambda: f"version {importlib.metadata.version('paddleocr')} available",
+    )
 
 
 def _check_pynput() -> CheckResult:
@@ -219,9 +274,10 @@ def _check_pynput() -> CheckResult:
 def _check_desktop_probe() -> CheckResult:
     root = None
     try:
-        import tkinter
-        import pyautogui
         import ctypes
+        import tkinter
+
+        import pyautogui
 
         root = tkinter.Tk()
         root.title("MAX Doctor Desktop Probe")
@@ -238,13 +294,22 @@ def _check_desktop_probe() -> CheckResult:
         root.update_idletasks()
         root.update()
         window_handle = root.winfo_id()
-        request_foreground_window(window_handle, ctypes.windll.user32.SetForegroundWindow)
+        request_foreground_window(
+            window_handle, ctypes.windll.user32.SetForegroundWindow
+        )
         root.update()
-        if not is_foreground_window(window_handle, ctypes.windll.user32.GetForegroundWindow):
-            return CheckResult("desktop_probe", "skipped", foreground_probe_skip_detail())
+        if not is_foreground_window(
+            window_handle, ctypes.windll.user32.GetForegroundWindow
+        ):
+            return CheckResult(
+                "desktop_probe", "skipped", foreground_probe_skip_detail()
+            )
 
         def center(widget: object) -> tuple[int, int]:
-            return (widget.winfo_rootx() + widget.winfo_width() // 2, widget.winfo_rooty() + widget.winfo_height() // 2)
+            return (
+                widget.winfo_rootx() + widget.winfo_width() // 2,
+                widget.winfo_rooty() + widget.winfo_height() // 2,
+            )
 
         entry_point = center(entry)
         if root.winfo_containing(*entry_point) is not entry:
@@ -258,20 +323,30 @@ def _check_desktop_probe() -> CheckResult:
         pyautogui.click(*button_point)
         root.update()
         if received.get() != "doctor" or not clicked.get():
-            raise RuntimeError("controlled desktop input did not reach the probe window")
-        return CheckResult("desktop_probe", "passed", "controlled click and text input verified")
+            raise RuntimeError(
+                "controlled desktop input did not reach the probe window"
+            )
+        return CheckResult(
+            "desktop_probe", "passed", "controlled click and text input verified"
+        )
     except Exception as error:  # desktop probe is explicitly opt-in and must never propagate input on setup failure
-        return CheckResult("desktop_probe", "failed", f"{type(error).__name__}: {error}")
+        return CheckResult(
+            "desktop_probe", "failed", f"{type(error).__name__}: {error}"
+        )
     finally:
         if root is not None:
             root.destroy()
 
 
-def is_foreground_window(window_handle: int, get_foreground_window: Callable[[], int]) -> bool:
+def is_foreground_window(
+    window_handle: int, get_foreground_window: Callable[[], int]
+) -> bool:
     return window_handle == get_foreground_window()
 
 
-def request_foreground_window(window_handle: int, set_foreground_window: Callable[[int], object]) -> None:
+def request_foreground_window(
+    window_handle: int, set_foreground_window: Callable[[int], object]
+) -> None:
     set_foreground_window(window_handle)
 
 

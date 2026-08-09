@@ -1,7 +1,7 @@
 import os
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from max_agent.runtime_paths import configure_hf_modules_cache
 

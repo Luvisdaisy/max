@@ -1,37 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-
 from .console_core import OperationResult
 
 
-Dispatch = Callable[[str], OperationResult]
-Render = Callable[[str], None]
-
-
-def run_line_console(*, read_line: Callable[[], str], dispatch: Dispatch, render: Render) -> None:
-    """Run a UI-neutral line loop for the primary CLI interaction path."""
-    while True:
-        result = dispatch(read_line())
-        for message in result.messages:
-            render(message)
-        if result.should_exit:
-            return
-
-
-def run_prompt_toolkit_console(dispatch: Dispatch) -> None:
-    from prompt_toolkit import PromptSession
-    from rich.console import Console
-
-    console = Console()
-    session = PromptSession("MAX > ")
-    try:
-        run_line_console(read_line=session.prompt, dispatch=dispatch, render=console.print)
-    except (EOFError, KeyboardInterrupt):
-        console.print("Session ended.")
-
-
-def run_textual_chat(dispatch: Dispatch) -> None:
+def create_textual_chat_app(dispatch):
+    from textual import work
     from textual.app import App, ComposeResult
     from textual.containers import VerticalScroll
     from textual.widgets import Footer, Header, Input, Static
@@ -42,18 +15,45 @@ def run_textual_chat(dispatch: Dispatch) -> None:
 
         def compose(self) -> ComposeResult:
             yield Header()
-            yield VerticalScroll(Static("AI backend is not configured. Use /doctor or /quit.", id="status"), id="messages")
+            yield VerticalScroll(
+                Static(
+                    "本地 Qwen3.5-2B 已就绪，可输入消息、/doctor 或 /quit。",
+                    id="status",
+                ),
+                id="messages",
+            )
             yield Input(placeholder="Message, /doctor, or /quit", id="chat-input")
             yield Footer()
 
         def on_input_submitted(self, event: Input.Submitted) -> None:
             value = event.value
             event.input.value = ""
+            if not value.strip():
+                return
             messages = self.query_one("#messages", VerticalScroll)
-            result = dispatch(value)
-            for message in result.messages:
+            messages.mount(Static(f"You: {value}"))
+            if value.startswith("/"):
+                self._render_result(dispatch(value))
+                return
+            self.query_one("#status", Static).update("正在加载或生成本地模型回复…")
+            self.generate(value)
+
+        @work(exclusive=True, thread=True)
+        def generate(self, value: str) -> None:
+            self.call_from_thread(self._render_result, dispatch(value))
+
+        def _render_result(self, result: OperationResult) -> None:
+            messages = self.query_one("#messages", VerticalScroll)
+            for message in (
+                result.messages[1:] if result.kind == "chat" else result.messages
+            ):
                 messages.mount(Static(message))
+            self.query_one("#status", Static).update("本地会话就绪。")
             if result.should_exit:
                 self.exit(result.exit_code)
 
-    ChatApp().run()
+    return ChatApp()
+
+
+def run_textual_chat(dispatch) -> None:
+    create_textual_chat_app(dispatch).run()
