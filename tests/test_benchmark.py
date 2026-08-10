@@ -1,3 +1,5 @@
+"""验证基准成功与各失败阶段均写入脱敏且完整的归档证据。"""
+
 import json
 import tempfile
 import unittest

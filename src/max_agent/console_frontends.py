@@ -1,9 +1,12 @@
+"""基于 Textual 的本地聊天前端，负责显示而不承载业务分发逻辑。"""
+
 from __future__ import annotations
 
 from .console_core import OperationResult
 
 
 def create_textual_chat_app(dispatch):
+    """延迟导入 Textual 后创建聊天应用，保持非 UI 场景无需该依赖。"""
     from textual import work
     from textual.app import App, ComposeResult
     from textual.containers import VerticalScroll
@@ -17,12 +20,14 @@ def create_textual_chat_app(dispatch):
             yield Header()
             yield VerticalScroll(
                 Static(
-                    "本地 Qwen3.5-2B 已就绪，可输入消息、/doctor 或 /quit。",
+                    "可输入消息、/model、/doctor 或 /quit。",
                     id="status",
                 ),
                 id="messages",
             )
-            yield Input(placeholder="Message, /doctor, or /quit", id="chat-input")
+            yield Input(
+                placeholder="Message, /model, /doctor, or /quit", id="chat-input"
+            )
             yield Footer()
 
         def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -40,6 +45,7 @@ def create_textual_chat_app(dispatch):
 
         @work(exclusive=True, thread=True)
         def generate(self, value: str) -> None:
+            """在线程执行潜在耗时的模型调用，再安全地回到 UI 线程渲染。"""
             self.call_from_thread(self._render_result, dispatch(value))
 
         def _render_result(self, result: OperationResult) -> None:
@@ -56,4 +62,5 @@ def create_textual_chat_app(dispatch):
 
 
 def run_textual_chat(dispatch) -> None:
+    """创建并运行默认 Textual 聊天前端。"""
     create_textual_chat_app(dispatch).run()

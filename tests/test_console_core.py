@@ -1,6 +1,8 @@
+"""验证 UI 无关的聊天文本与斜杠命令分发结果。"""
+
 import unittest
 
-from max_agent.console_core import dispatch_input
+from max_agent.console_core import OperationResult, dispatch_input
 
 
 class ConsoleCoreTests(unittest.TestCase):
@@ -29,6 +31,26 @@ class ConsoleCoreTests(unittest.TestCase):
         result = dispatch_input("/doctor", doctor=lambda: "doctor-result")
 
         self.assertEqual(result, "doctor-result")
+
+    def test_model_commands_use_model_handler_without_chat(self) -> None:
+        selections: list[str | None] = []
+        result = dispatch_input(
+            "/model Qwen/Qwen3.5-4B",
+            model=lambda name: (
+                selections.append(name) or OperationResult("model", ("selected",))
+            ),
+            chat=lambda text: self.fail("model command must not start chat"),
+        )
+
+        self.assertEqual(selections, ["Qwen/Qwen3.5-4B"])
+        self.assertEqual(result.kind, "model")
+
+    def test_model_list_uses_none_selection(self) -> None:
+        result = dispatch_input(
+            "/model", model=lambda name: OperationResult("model", (str(name),))
+        )
+
+        self.assertEqual(result.messages, ("None",))
 
     def test_legacy_diagnose_command_is_unsupported(self) -> None:
         result = dispatch_input("/diagnose")

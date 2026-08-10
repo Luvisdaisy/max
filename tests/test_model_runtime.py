@@ -1,3 +1,5 @@
+"""验证离线模型与图像预检拒绝不完整、越界或不可读输入。"""
+
 import tempfile
 import unittest
 from pathlib import Path

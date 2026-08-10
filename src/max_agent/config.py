@@ -1,3 +1,5 @@
+"""模型配置与仓库内模型目录的安全边界。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -5,7 +7,7 @@ from pathlib import Path
 
 
 def assert_project_model_dir(repository_root: Path, model_dir: Path) -> None:
-    """Require every model to live under the repository-root ``model`` tree."""
+    """拒绝仓库 `model/` 目录外的模型路径，避免读取未受管控的位置。"""
     expected_root = (repository_root / "model").resolve()
     resolved_model_dir = model_dir.resolve()
     try:
@@ -18,6 +20,8 @@ def assert_project_model_dir(repository_root: Path, model_dir: Path) -> None:
 
 @dataclass(frozen=True, slots=True)
 class ModelConfig:
+    """下载模型元数据所需的稳定标识、版本与本地目标目录。"""
+
     model_id: str
     revision: str
     model_dir: Path

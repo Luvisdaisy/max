@@ -1,3 +1,5 @@
+"""验证模型配置的路径边界和必要版本字段。"""
+
 import unittest
 from pathlib import Path
 

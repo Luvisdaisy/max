@@ -1,8 +1,6 @@
 # MAX 桌面智能体原型
 
-MAX 是面向 Windows 的本地 GUI 智能体原型。当前第一周交付提供 Doctor 环境与基础工具核验；它不会默认控制桌面，也不会在 Doctor 证据中记录任何模型信息。
-
-交互入口采用 CLI 优先策略：Typer 负责命令入口，Rich 负责终端输出，Prompt Toolkit 负责默认交互式会话。Textual 保留为后续可选的高级 UI，不是基础 CLI 运行的必要依赖。
+MAX 是面向 Windows 的本地 GUI 智能体原型。当前版本支持本地简单对话和环境诊断；默认不会控制桌面，也不会在诊断证据中记录模型身份信息。
 
 ## 使用环境
 
@@ -50,54 +48,27 @@ python -m pip check
 
 需要修复本地工作区时，开发者可主动运行 `ruff format src tests` 与 `ruff check --fix src tests`，随后再次执行上述检查。GitHub Actions 会在 `push` 和 `pull_request` 的 Windows / Python 3.12 环境按相同顺序执行这些门禁；CI 不启动 `max-agent`，也不执行模型下载、基准或桌面控制。
 
-## Doctor
+## 开始对话与环境诊断
 
-## Textual 聊天入口（破坏性变更）
-
-当前版本仅支持以下启动形式，两者都会打开同一个 Textual 本地聊天界面：
+在仓库根目录启动本地会话：
 
 ```powershell
 max-agent
 max-agent --chat
 ```
 
-普通文本会按需离线加载 `model/Qwen/Qwen3.5-2B`；模型不完整、CUDA/BF16 不可用或显存不足时，界面会显示本地修复提示，不会下载模型或回退到网络。运行中的 `/doctor` 会执行无输入诊断，`/quit` 退出会话。`doctor`、`download-model`、`validate-model`、`benchmark`、`--doctor`、`--fallback` 和 `--textual` 不再是公开 CLI 操作；相关实现仅保留给未来内部 API 或后续入口使用。
+普通文本会按需离线加载当前选择的模型并生成回复；启动时默认选择 `model/Qwen/Qwen3.5-2B`。模型不完整、CUDA/BF16 不可用或显存不足时，会话会给出本地修复提示，不会下载模型或回退到网络。
 
-以下早期 Doctor 命令示例已废弃，应使用 Textual 会话中的 `/doctor`。
+会话中可使用：
 
-在仓库根目录运行：
+- `/model`：列出 `model/` 下包含 `config.json` 的可选模型目录与当前选择。
+- `/model <模型目录>`：例如 `/model Qwen/Qwen3.5-4B`；切换后清空当前会话历史，下一条普通消息才加载新模型。
+- `/doctor`：执行无输入的环境与基础工具诊断，结果按“通过 / 失败 / 跳过”展示。
+- `/quit`：安全退出会话。
 
-```powershell
-max-agent --artifact-root artifacts doctor
-```
+当普通聊天需要观察当前桌面时，本地模型可以从注册表提供的只读工具中选择一次 `observe_screen`，并在内存中分析截图后回复。该流程不会发送桌面输入、下载模型、访问远程服务或把截图写入日志、结果和归档。需要选择兼容视觉输入且能够在本机显存中加载的模型；不兼容时会显示本地错误。
 
-Doctor 会以“通过 / 失败 / 跳过”分组展示 Python、依赖一致性、CUDA、GPU、BF16，以及 mss、PyAutoGUI、OpenCV、PaddleOCR 和 pynput 的无输入检查。运行记录存于 Git 忽略的 `artifacts/`，其中不包含模型型号、模型目录、远程修订或文件集合身份。
-
-默认交互控制台使用 Prompt Toolkit，可使用 `/doctor`，使用 `/quit` 退出：
-
-```powershell
-max-agent
-```
-
-也可以显式启动同一 CLI 交互路径：
-
-```powershell
-max-agent --chat
-```
-
-`--fallback` 仍作为兼容别名保留。后续如需体验 Textual 高级界面，可显式运行：
-
-```powershell
-max-agent --textual
-```
-
-默认 Doctor 不会发送鼠标或键盘事件。仅在已授权的交互式 Windows 会话中，才可显式运行受控测试窗口探针：
-
-```powershell
-max-agent --artifact-root artifacts doctor --desktop-probe
-```
-
-该探针只对临时测试窗口验证前台句柄、点击和文本输入；同一次 Doctor 还会检查内存截图和 PaddleOCR 包可用性，但不会执行可能隐式下载资源的完整 OCR 识别。窗口不可用、焦点丢失或坐标不匹配时应停止并报告失败。
+诊断会检查 Python、依赖一致性、CUDA、GPU、BF16，以及 mss、PyAutoGUI、OpenCV、PaddleOCR 和 pynput；默认不会发送鼠标或键盘事件。在交互式 Windows 会话中，可显式运行 `max-agent doctor --artifact-root artifacts --desktop-probe`，让短生命周期子进程创建 Win32 原生测试窗口，并仅向其中的 `Edit` 与 `Button` 控件发送受控输入；窗口无法成为前台时不会发送输入。
 
 ## 证据与安全边界
 
@@ -117,19 +88,4 @@ max-agent --artifact-root artifacts doctor --desktop-probe
 | CUDA 或 BF16 检查失败 | 确认已激活完成依赖安装的 Python 环境，并检查驱动与 PyTorch CUDA 构建是否匹配。 |
 | 基础工具检查失败 | 查看 Doctor 的失败条目；在交互式 Windows 会话中复核显示器与桌面权限。 |
 | `pip check` 报冲突 | 在隔离环境中按项目依赖清单重新安装。 |
-| 显式桌面探针失败 | 关闭其他会抢占焦点的窗口，再在受控测试桌面中重试；不要在真实业务应用中运行。 |
-
-## 本地离线 4B 基准
-
-基准只支持已显式下载到仓库 `model/Qwen/Qwen3.5-4B` 的 Qwen3.5-4B。首次下载需要网络，随后基准严格使用本地文件；不会下载缺失的模型文件或回退到远程资源。
-
-```powershell
-max-agent download-model
-max-agent benchmark --model-dir model/Qwen/Qwen3.5-4B --image tests/fixtures/one-pixel.ppm --artifact-root artifacts
-```
-
-运行前会验证固定模型目录、模型配置与全部权重分片，以及 `--image` 指定图像能否解码。完成或在归档创建后失败时，都会在 `artifacts/<timestamp>-benchmark/` 写入 `config.yaml`、`environment.json`、`trajectory.jsonl` 与 `result.json`。证据记录包含离线状态、参数、加载时间、峰值显存、推理延迟和结果阶段，但不包含模型权重、图像内容或绝对本地路径。
-
-真实运行需要已完成下载、可用 CUDA/BF16 环境和足够显存；自动化测试不会执行模型推理。可先检查 `result.json` 的 `status`、`stage` 和计时字段，再将产物保留在 Git 忽略的 `artifacts/` 中。
-
-2026-08-09 的实际验收使用上述夹具和 `--max-new-tokens 8`，预检通过但在加载阶段因显存不足而失败：16 GiB 显卡当时约有 7.46 GiB 空闲，加载还需要额外 40 MiB。再次运行前关闭其他 CUDA 进程，确认有足够可用显存后，重复同一条命令；不要将本次失败当作模型推理成功。
+| 本地对话无法启动或生成回复 | 确认 `model/Qwen/Qwen3.5-2B` 模型文件完整、CUDA/BF16 可用，并释放足够的显存后重试。 |

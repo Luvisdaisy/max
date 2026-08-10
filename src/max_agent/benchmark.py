@@ -1,3 +1,5 @@
+"""执行离线模型基准并归档每个阶段的可复核结果。"""
+
 from __future__ import annotations
 
 import re
@@ -9,6 +11,7 @@ from .artifacts import ExperimentArchive
 
 
 def _safe_error(error: Exception) -> str:
+    """脱敏异常消息中的绝对路径，避免证据文件泄露本机目录。"""
     return re.sub(r"(?:[A-Za-z]:[\\/]|/)[^\s\"']+", "<path>", str(error))
 
 
@@ -22,7 +25,7 @@ def run_benchmark(
     peak_memory_bytes: Callable[[], int],
     preflight: Callable[[], None] = lambda: None,
 ) -> dict[str, Any]:
-    """Run one locally-loaded inference and persist a complete result record."""
+    """运行一次本地推理，并无论成功失败均保存完整阶段记录。"""
     archive.write_config(dict(config))
     archive.write_environment(dict(environment))
     archive.append_trajectory({"event": "benchmark_started"})
@@ -51,6 +54,7 @@ def run_benchmark(
         archive.write_result(result)
         return result
     except Exception as error:
+        # 基准失败同样需要持久化阶段和脱敏原因，才能定位环境或模型问题。
         safe_error = _safe_error(error)
         result = {
             "status": "failure",

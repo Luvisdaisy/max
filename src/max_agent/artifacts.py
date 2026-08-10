@@ -1,3 +1,5 @@
+"""将诊断与基准运行的可复核证据写入 Git 忽略的归档目录。"""
+
 from __future__ import annotations
 
 import json
@@ -13,10 +15,13 @@ def _json_line(payload: Mapping[str, Any]) -> str:
 
 @dataclass(frozen=True, slots=True)
 class ExperimentArchive:
+    """单次命令运行的证据目录，统一保存配置、环境、轨迹和结果。"""
+
     path: Path
 
     @classmethod
     def create(cls, artifact_root: Path, command: str) -> "ExperimentArchive":
+        """以 UTC 时间戳创建互不覆盖的运行归档。"""
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         path = artifact_root / f"{timestamp}-{command}"
         path.mkdir(parents=True, exist_ok=False)
@@ -37,6 +42,7 @@ class ExperimentArchive:
         )
 
     def append_trajectory(self, payload: Mapping[str, Any]) -> None:
+        """以 JSONL 追加事件，便于按发生顺序审计运行过程。"""
         with (self.path / "trajectory.jsonl").open("a", encoding="utf-8") as handle:
             handle.write(_json_line(payload))
 

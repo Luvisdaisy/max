@@ -1,3 +1,5 @@
+"""验证运行证据归档的文件结构与内容可复核性。"""
+
 import json
 import tempfile
 import unittest

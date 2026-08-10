@@ -1,3 +1,5 @@
+"""验证运行时缓存写入可写且 Git 忽略的归档位置。"""
+
 import os
 import tempfile
 import unittest
