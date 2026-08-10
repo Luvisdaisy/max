@@ -1,10 +1,4 @@
-# chat-console-ui Specification
-
-## Purpose
-
-提供唯一的 Textual 本地聊天入口，使开发者能够在同一交互会话中使用本地模型、诊断运行环境并安全退出。
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: 聊天内受限工具循环
 Textual 聊天 SHALL 允许模型在处理一条普通用户消息时选择至多一次已注册的只读工具。工具成功回执中的内存观察 MUST 回传同一模型继续推理；界面 SHALL 显示不含参数与回执数据的工具名称、执行状态和耗时摘要以及最终文本回复，但 MUST NOT 显示或持久化原始截图、工具参数、工具原始数据或模型工具选择提示。
@@ -79,6 +73,8 @@ The application SHALL support `/doctor`, `/help`, `/clear`, `/status` and `/quit
 - **WHEN** a developer enters an unsupported slash command
 - **THEN** the interface reports that the command is unsupported, suggests `/help` and remains available for input
 
+## ADDED Requirements
+
 ### Requirement: 多行键盘输入与本地历史
 Textual 聊天界面 SHALL 提供支持多行文本的编辑区。`Enter` MUST 提交非空内容，`Shift+Enter` MUST 插入换行；空白内容 MUST NOT 创建消息或启动命令。界面 SHALL 允许开发者使用键盘访问本次进程中的已提交输入，输入历史 MUST NOT 跨进程持久化。
 
@@ -123,25 +119,3 @@ Textual 聊天界面 SHALL 在终端尺寸变化时保持内容可读且不要�
 #### Scenario: 缩小终端宽度
 - **WHEN** 终端被缩小到无法容纳完整宽屏状态栏的宽度
 - **THEN** 界面换行会话内容并压缩或隐藏次要状态信息，同时保留编辑区、运行状态和主要消息类型的可辨识性
-
-### Requirement: 交互式模型选择命令
-Textual 聊天界面 SHALL 支持 `/model` 和 `/model <模型目录>`。无参数命令 MUST 显示可选本地模型及当前选择；带参数命令 MUST 请求切换到指定模型，并将成功或失败结果显示在当前会话中，不启动普通聊天推理。
-
-#### Scenario: 查看模型清单
-- **WHEN** 开发者在 Textual 会话输入 `/model`
-- **THEN** 界面显示可选模型、当前模型和选择用法，并保持输入可用
-
-#### Scenario: 会话中切换模型
-- **WHEN** 开发者在已有聊天记录的会话中输入 `/model <模型目录>` 且选择成功
-- **THEN** 界面确认切换，后续普通文本使用新模型，且不会将先前模型的对话历史发送给新模型
-
-#### Scenario: 模型命令参数无效
-- **WHEN** 开发者输入不存在的模型名称或不合法的 `/model` 参数
-- **THEN** 界面显示明确错误并保持当前模型选择与会话可用
-
-### Requirement: Restricted startup surface
-The application SHALL expose only `max-agent` and `max-agent --chat` as supported public startup forms. It MUST NOT expose `doctor`, `download-model`, `validate-model`, `benchmark`, `--doctor`, `--fallback`, or `--textual` as public command-line operations. Removing those public operations MUST NOT require deletion of their underlying local model-management or benchmark implementation modules.
-
-#### Scenario: Unsupported legacy CLI operation
-- **WHEN** a developer invokes a removed command or option
-- **THEN** the command exits with usage feedback and does not start a different frontend or trigger model, desktop, or download work
