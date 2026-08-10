@@ -17,7 +17,8 @@ def load_qwen35_model(model_dir: Path) -> object:
     import torch
     from transformers import AutoModelForMultimodalLM
 
-    torch.cuda.reset_peak_memory_stats()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
     return (
         AutoModelForMultimodalLM.from_pretrained(
             str(model_dir), dtype=torch.bfloat16, local_files_only=True
