@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from max_agent.console_core import OperationResult
+from max_agent.console_core import ConsoleEvent, ConsoleEventKind, OperationResult
 from max_agent.console_frontends import create_textual_chat_app
 from max_agent.local_llm import (
     LocalChatRuntime,
@@ -106,16 +106,61 @@ class LocalLlmTests(unittest.TestCase):
                 runtime.reply("hello")
             self.assertEqual(runtime.state, "failed")
 
+    def test_clear_history_preserves_loaded_model_and_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._model_dir(root)
+            loads: list[Path] = []
+            histories: list[list[dict[str, str]]] = []
+            runtime = LocalChatRuntime(
+                root,
+                loader=lambda path: (loads.append(path) or "model", "processor"),
+                generator=lambda model, processor, history, message: (
+                    histories.append([*history]) or f"reply:{message}"
+                ),
+            )
+
+            runtime.reply("first")
+            runtime.clear_history()
+            runtime.reply("second")
+
+            self.assertEqual(len(loads), 1)
+            self.assertEqual(runtime.selected_model, "Qwen/Qwen3.5-2B")
+            self.assertEqual(histories[-1], [])
+
+    def test_runtime_reports_loading_generation_and_ready_states(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._model_dir(root)
+            runtime = LocalChatRuntime(
+                root,
+                loader=lambda path: ("model", "processor"),
+                generator=lambda model, processor, history, message: "reply",
+            )
+            states: list[str] = []
+
+            runtime.reply("first", states.append)
+            runtime.reply("second", states.append)
+
+            self.assertEqual(
+                states,
+                ["loading", "generating", "ready", "generating", "ready"],
+            )
+
     def test_textual_slash_commands_render_without_model_loading(self) -> None:
         async def exercise() -> None:
             calls: list[str] = []
             app = create_textual_chat_app(
-                lambda value: (
-                    calls.append(value) or OperationResult("doctor", ("doctor-result",))
+                lambda value, emit=None: (
+                    calls.append(value)
+                    or OperationResult(
+                        "doctor",
+                        (ConsoleEvent(ConsoleEventKind.COMMAND, "doctor-result"),),
+                    )
                 )
             )
             async with app.run_test() as pilot:
-                await pilot.click("#chat-input")
+                await pilot.click("#composer")
                 await pilot.press("/", "d", "o", "c", "t", "o", "r", "enter")
                 await pilot.press("/", "m", "o", "d", "e", "l", "enter")
                 self.assertEqual(calls, ["/doctor", "/model"])

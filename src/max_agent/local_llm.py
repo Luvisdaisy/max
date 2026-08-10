@@ -12,6 +12,7 @@ MODEL_ROOT = Path("model")
 REQUIRED_MODEL_FILES = ("config.json", "tokenizer.json", "model.safetensors.index.json")
 QWEN35_2B_MODEL_ID = "Qwen/Qwen3.5-2B"
 QWEN35_2B_MODEL_PATH = MODEL_ROOT / QWEN35_2B_MODEL_ID
+RuntimeStateSink = Callable[[str], None]
 
 
 class LocalRuntimeError(RuntimeError):
@@ -146,26 +147,38 @@ class LocalChatRuntime:
         self._processor = None
         self._history.clear()
 
-    def reply(self, message: str) -> str:
+    def clear_history(self) -> None:
+        """仅清空当前模型的对话历史，保留模型选择与已加载 GPU 资源。"""
+        self._history.clear()
+
+    def _set_state(self, state: str, sink: RuntimeStateSink | None) -> None:
+        """原子更新可查询状态，并按需向交互层报告固定状态名称。"""
+        self.state = state
+        if sink is not None:
+            sink(state)
+
+    def reply(
+        self, message: str, on_state_change: RuntimeStateSink | None = None
+    ) -> str:
         """延迟加载当前模型、生成回复，并仅在成功后写入会话历史。"""
         if self.state == "failed":
             self.state = "unloaded"
         if self._model is None or self._processor is None:
-            self.state = "loading"
+            self._set_state("loading", on_state_change)
             try:
                 self._model, self._processor = self.loader(
                     require_local_model(self.repository_root, self.selected_model)
                 )
-                self.state = "ready"
             except LocalRuntimeError:
-                self.state = "failed"
+                self._set_state("failed", on_state_change)
                 raise
+        self._set_state("generating", on_state_change)
         try:
             response = self.generator(
                 self._model, self._processor, self._history, message
             )
         except LocalRuntimeError:
-            self.state = "failed"
+            self._set_state("failed", on_state_change)
             raise
         self._history.extend(
             (
@@ -173,11 +186,20 @@ class LocalChatRuntime:
                 {"role": "assistant", "content": response},
             )
         )
+        self._set_state("ready", on_state_change)
         return response
 
-    def explain_image(self, goal: str, image: object) -> str:
+    def explain_image(
+        self,
+        goal: str,
+        image: object,
+        on_state_change: RuntimeStateSink | None = None,
+    ) -> str:
+        """使用当前多模态模型解释内存图像，并报告生成阶段。"""
         if self._model is None or self._processor is None:
-            self.reply("Prepare the local model for a visual explanation.")
+            self.reply(
+                "Prepare the local model for a visual explanation.", on_state_change
+            )
         import torch
 
         messages = [
@@ -189,6 +211,7 @@ class LocalChatRuntime:
                 ],
             }
         ]
+        self._set_state("generating", on_state_change)
         try:
             rendered = self._processor.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True
@@ -198,8 +221,11 @@ class LocalChatRuntime:
             ).to("cuda")
             with torch.inference_mode():
                 output = self._model.generate(**inputs, max_new_tokens=256)
-            return self._processor.batch_decode(
+            response = self._processor.batch_decode(
                 output[:, inputs.input_ids.shape[1] :], skip_special_tokens=True
             )[0]
         except (AttributeError, RuntimeError, ValueError, TypeError) as error:
+            self._set_state("failed", on_state_change)
             raise LocalRuntimeError(f"本地模型无法解释图像：{error}") from None
+        self._set_state("ready", on_state_change)
+        return response
