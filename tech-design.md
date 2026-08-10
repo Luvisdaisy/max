@@ -4,8 +4,10 @@
 
 仓库以 Ruff 作为 Python 3.12 的格式化与基础静态检查工具，检查范围为 `src/` 和 `tests/`，并在根目录 `requirements.txt` 固定工具版本。GitHub Actions 在 `push` 与 `pull_request` 上使用 Windows / Python 3.12，依次执行 Ruff 格式检查、Ruff 静态检查、完整单元测试和 `pip check`。该门禁不会启动 Textual、加载或下载本地模型、运行基准，也不会执行桌面控制；这些仍只可在经过授权的本地验证流程中运行。
 
+代码注释采用中文并作为当前实现基线的一部分维护：每个 Python 模块说明职责与边界，公开接口和数据模型说明用途与关键约束，复杂状态转换、路径安全、资源限制及非直观失败处理说明设计原因。语义自明的语句不添加机械逐行注释；实现行为、接口或测试场景变化时，必须同步审查并更新受影响的注释。本约定仅描述已实现代码的可读性要求，不将后续路线图能力表述为已交付。
+
 **版本：** v1.5.0  
-**日期：** 2026-08-07  
+**日期：** 2026-08-10
 **目标平台：** Windows 11、NVIDIA RTX 5070 Ti、32 GB DDR5-6400 内存  
 **编排框架：** LangChain（LCEL + LangGraph 状态机）  
 **模型部署：** Windows Conda Python 3.12 + PyTorch/Transformers 单进程本地推理
@@ -16,16 +18,20 @@
 
 | 已实现模块 | 当前行为 | 明确边界 |
 | --- | --- | --- |
-| `max-agent doctor`、`--doctor`、`/doctor` | 统一环境核验入口，替代已移除的 `diagnose`/`/diagnose`；CLI 输出按“通过 / 失败 / 跳过”分组 | 不启动聊天模型，不执行通用桌面任务 |
+| `max-agent doctor`、`/doctor` | 统一环境核验入口，替代已移除的 `diagnose`/`/diagnose`；输出按“通过 / 失败 / 跳过”分组 | 不启动聊天模型，不执行通用桌面任务；`--desktop-probe` 仅在显式传入时启用 |
 | Doctor 运行时检查 | 检查 Python、`pip check`、CUDA、GPU 名称与 BF16 CUDA 张量运算 | 证据不记录模型型号、目录、远程修订或文件集合身份 |
 | Doctor 基础工具检查 | 默认无输入地验证 mss 内存截图、PyAutoGUI 屏幕尺寸、OpenCV 合成图像处理、PaddleOCR 可用性与 pynput 导入 | 默认不发送鼠标或键盘事件；PaddleOCR 默认不执行会隐式下载资源的完整识别 |
-| `doctor --desktop-probe` | 显式创建临时 Tk 测试窗口，并有限请求该窗口成为 Windows 前台窗口；只有句柄确认成功时，才执行受控点击和文本输入 | 前台焦点不可得时标记为跳过，明确未执行输入测试并在任何输入前停止；不操作真实业务窗口 |
+| `doctor --desktop-probe` | 显式在短生命周期子进程中通过 `ctypes` 创建 Win32 原生临时窗口、`Edit` 与自动复选 `Button` 控件；只有顶层句柄确认成为前台且目标坐标命中对应控件后，才通过 `SendInput` 发送 Unicode 键盘事件和鼠标点击，并从原生控件读取文本与按钮状态验证结果 | 不依赖 Tk 或外部业务应用；每次注入核对 `SendInput` 返回数量，前台窗口不匹配时停止；原生崩溃或超时由父 Doctor 转换为失败结果，不操作真实业务窗口 |
+| 感知工具 | `tools/registry.py` 是唯一调用入口，提供内存截图、显式本地资源的 OCR、只读 UI Automation、OpenCV 图像处理/模板匹配与 Set-of-Mark 标注 | 不提供编排、桌面输入或图像持久化；OCR 不下载资源，UIA 不激活窗口、不提升权限 |
+| Agent Orchestrator | `orchestration/graph.py` 以 LangGraph 显式推进单任务观察、规划、审批、执行、验证和受限恢复；仅经工具注册表消费结构化回执 | 仅以 mock/注入工具验证状态机；不加载模型、不接入 CLI、不启用桌面控制或持久化检查点 |
 | `ExperimentArchive` | 每次 Doctor 在 Git 忽略的 `artifacts/` 下写入 `config.yaml`、`environment.json`、`trajectory.jsonl`、`result.json` | 不归档真实截图、令牌、密钥或模型身份信息 |
-| 聊天控制台 | Typer/Rich/Prompt Toolkit 构成首要 CLI 交互层，将 `/doctor` 分发为本地检查；Textual 作为后续可选高级 UI 复用同一分发核心，普通消息只返回未配置后端提示 | 不提供模型驱动聊天；Textual 不属于基础 CLI 运行必需路径 |
-| Textual 本地聊天 | `max-agent` 与 `max-agent --chat` 均启动同一个 Textual 会话；普通文本按需离线加载项目内 Qwen3.5-2B，`/doctor` 运行无输入诊断 | 不提供桌面控制、远程推理或网络回退；模型加载失败保持会话可用，Qwen3.5-4B 留作后续容量验证 |
+| 聊天控制台 | `console_core.py` 统一分发普通消息、`/model`、`/doctor` 与 `/quit`；Textual 前端仅呈现 `OperationResult` | 不在前端直接加载、发现或切换模型，不启动桌面控制 |
+| Textual 本地聊天 | `max-agent` 与 `max-agent --chat` 均启动同一个 Textual 会话；`/model` 列出 `model/` 下含 `config.json` 的相对模型目录，`/model <目录>` 在会话内切换并清空旧历史；普通文本按当前选择懒加载 | 仅读取仓库 `model/`；不下载、不访问远程推理服务、不自动适配模型兼容性，也不并行驻留多个模型 |
 | 本地辅助实现 | 保留下载、元数据校验和单图基准模块供未来内部 API 或后续入口使用 | 不提供公开 CLI 调用；不下载缺失权重、不回退网络、不归档模型权重、图像内容或绝对本地路径 |
 
-当前 `src/max_agent/` 仅包含归档、诊断、CLI、控制台分发、运行配置与本地辅助命令等基础模块。后文描述的 `Orchestrator`、`Perception`、`Planner`、`Safety Guard`、`Desktop Controller`、`Verifier`、`Recovery` 和 `Session Safety` 仍是待实现设计，不能据此推断仓库已经具备端到端 GUI Agent 能力。未来感知实现的唯一位置为 `src/max_agent/tools/perception/`；当前没有感知模块需要移动，也不为此创建空包。
+当前 `src/max_agent/` 已包含归档、诊断、CLI、控制台分发、运行配置、本地辅助命令、位于 `tools/perception/` 的只读感知工具，以及仅用注入工具验证的 LangGraph 编排器。Textual 会话的模型选择仅限仓库 `model/` 下被发现的目录；选择成功会丢弃旧模型实例、处理器与对话历史，下一条普通消息才按新选择加载。后文描述的 `Planner`、`Safety Guard`、`Desktop Controller`、`Verifier`、`Recovery` 和 `Session Safety` 仍是待实现设计，不能据此推断仓库已经具备端到端 GUI Agent 能力。感知模块仅生成内存中的观察结果；编排器只经 `tools/registry.py` 调用工具，均不具备桌面控制权限。
+
+普通 Textual 聊天已接入一次受限的模型工具循环：模型可选择注册表公开的只读工具；如选择 `observe_screen`，截图仅在内存中回传给同一视觉模型继续推理。工具调用受到名称、参数与一次调用预算限制，步骤记录和最终回复不包含原始图像；该能力不提供桌面输入、网络回退或截图持久化。
 
 2026-08-09 已对仓库内完整 Qwen3.5-4B 与单像素图像夹具执行一次真实离线基准。固定目录、分片与图像预检均通过；模型加载阶段因 16 GiB 显卡当时仅约有 7.46 GiB 空闲而发生 CUDA OOM（还需 40 MiB），因此尚未得到成功推理数据。对应的 Git 忽略基准归档记录 `stage: "load"` 和 `offline: true`；该失败是当前已实现基线的真实验收结果，不能替代后续在空闲显存充足环境中的成功测量。
 
@@ -387,7 +393,7 @@ LangChain 的 `ChatPromptTemplate` 由系统规则、任务目标、标准化观
 
 ## 8. 项目目录与接口组织
 
-建议代码按职责组织，避免 Agent 编排与设备操作互相耦合：
+代码按职责组织；下列感知工具、注册表与编排器为当前已实现基线，其余目录为后续设计，避免 Agent 编排与设备操作互相耦合：
 
 ```text
 src/max_agent/

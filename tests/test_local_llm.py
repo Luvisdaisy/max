@@ -1,3 +1,5 @@
+"""验证本地模型发现、完整性检查、切换与聊天运行时状态机。"""
+
 import asyncio
 import tempfile
 import unittest
@@ -5,12 +7,17 @@ from pathlib import Path
 
 from max_agent.console_core import OperationResult
 from max_agent.console_frontends import create_textual_chat_app
-from max_agent.local_llm import LocalChatRuntime, LocalRuntimeError, require_qwen35_2b
+from max_agent.local_llm import (
+    LocalChatRuntime,
+    LocalRuntimeError,
+    discover_local_models,
+    require_qwen35_2b,
+)
 
 
 class LocalLlmTests(unittest.TestCase):
-    def _model_dir(self, root: Path) -> Path:
-        directory = root / "model" / "Qwen" / "Qwen3.5-2B"
+    def _model_dir(self, root: Path, name: str = "Qwen/Qwen3.5-2B") -> Path:
+        directory = root / "model" / name
         directory.mkdir(parents=True)
         for name in ("config.json", "tokenizer.json"):
             (directory / name).write_text("{}", encoding="utf-8")
@@ -41,6 +48,48 @@ class LocalLlmTests(unittest.TestCase):
             with self.assertRaises(LocalRuntimeError):
                 require_qwen35_2b(Path(temporary))
 
+    def test_discovery_uses_sorted_relative_model_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._model_dir(root, "ZhipuAI/GLM-4V")
+            self._model_dir(root, "Qwen/Qwen3.5-2B")
+
+            self.assertEqual(
+                discover_local_models(root),
+                ("Qwen/Qwen3.5-2B", "ZhipuAI/GLM-4V"),
+            )
+
+    def test_invalid_selection_preserves_current_model(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._model_dir(root)
+            runtime = LocalChatRuntime(root)
+
+            with self.assertRaisesRegex(LocalRuntimeError, "不可选择"):
+                runtime.select_model("missing")
+            self.assertEqual(runtime.selected_model, "Qwen/Qwen3.5-2B")
+
+    def test_switch_resets_history_and_loads_new_model(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._model_dir(root)
+            self._model_dir(root, "ZhipuAI/GLM-4V")
+            loads: list[Path] = []
+            histories: list[list[dict[str, str]]] = []
+            runtime = LocalChatRuntime(
+                root,
+                loader=lambda path: (loads.append(path) or path.name, "processor"),
+                generator=lambda model, processor, history, message: (
+                    histories.append([*history]) or f"{model}:{message}"
+                ),
+            )
+
+            runtime.reply("first")
+            runtime.select_model("ZhipuAI/GLM-4V")
+            self.assertEqual(runtime.reply("second"), "GLM-4V:second")
+            self.assertEqual([path.name for path in loads], ["Qwen3.5-2B", "GLM-4V"])
+            self.assertEqual(histories[-1], [])
+
     def test_generation_failure_keeps_runtime_diagnostic(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -68,6 +117,7 @@ class LocalLlmTests(unittest.TestCase):
             async with app.run_test() as pilot:
                 await pilot.click("#chat-input")
                 await pilot.press("/", "d", "o", "c", "t", "o", "r", "enter")
-                self.assertEqual(calls, ["/doctor"])
+                await pilot.press("/", "m", "o", "d", "e", "l", "enter")
+                self.assertEqual(calls, ["/doctor", "/model"])
 
         asyncio.run(exercise())

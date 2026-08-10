@@ -1,3 +1,5 @@
+"""离线 Qwen 模型与输入图像的加载前置校验。"""
+
 from __future__ import annotations
 
 import json
@@ -13,7 +15,7 @@ REQUIRED_MODEL_FILES = (
 
 
 def load_qwen35_model(model_dir: Path) -> object:
-    """Load Qwen3.5-4B with the native offline Transformers implementation."""
+    """使用原生 Transformers 离线加载 Qwen3.5-4B，并启用 BF16 CUDA 推理。"""
     import torch
     from transformers import AutoModelForMultimodalLM
 
@@ -29,7 +31,7 @@ def load_qwen35_model(model_dir: Path) -> object:
 
 
 def require_complete_local_model(repository_root: Path, model_dir: Path) -> Path:
-    """Validate the supported Qwen3.5-4B files required for offline loading."""
+    """校验受支持模型及其全部权重文件，阻止不完整或仓库外加载。"""
     resolved = model_dir.resolve()
     expected = (repository_root / QWEN35_MODEL_PATH).resolve()
     if resolved != expected:
@@ -60,7 +62,7 @@ def require_complete_local_model(repository_root: Path, model_dir: Path) -> Path
 
 
 def require_readable_image(image: Path) -> Path:
-    """Verify an explicitly supplied image can be decoded without preserving it."""
+    """验证显式传入的本地图像可解码，但不保留或复制输入内容。"""
     from PIL import Image, UnidentifiedImageError
 
     try:

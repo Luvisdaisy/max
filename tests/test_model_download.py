@@ -1,3 +1,5 @@
+"""验证模型元数据与完整下载均使用受管目录和官方 CLI 参数。"""
+
 import unittest
 from pathlib import Path
 

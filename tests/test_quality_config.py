@@ -1,3 +1,5 @@
+"""验证质量工具版本与 CI 门禁保持项目既定约束。"""
+
 from __future__ import annotations
 
 import tomllib

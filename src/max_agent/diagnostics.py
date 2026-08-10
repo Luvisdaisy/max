@@ -1,15 +1,51 @@
+"""采集本地依赖、CUDA 与桌面能力诊断，并避免诊断过程产生控制行为。"""
+
 from __future__ import annotations
 
+import ctypes
 import importlib.metadata
 import platform
 import subprocess
 import sys
+import time
+from ctypes import wintypes
 from dataclasses import dataclass
 from typing import Callable
 
 
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", wintypes.WPARAM),
+    ]
+
+
+class _MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", wintypes.WPARAM),
+    ]
+
+
+class _INPUT_VALUE(ctypes.Union):
+    _fields_ = [("ki", _KEYBDINPUT), ("mi", _MOUSEINPUT)]
+
+
+class _INPUT(ctypes.Structure):
+    _fields_ = [("type", wintypes.DWORD), ("value", _INPUT_VALUE)]
+
+
 @dataclass(frozen=True, slots=True)
 class CheckResult:
+    """单项诊断的名称、状态与可显示详情。"""
+
     name: str
     status: str
     detail: str
@@ -20,6 +56,8 @@ class CheckResult:
 
 @dataclass(frozen=True, slots=True)
 class DiagnosticProbe:
+    """可替换的诊断依赖集合，使平台探测可在测试中隔离。"""
+
     python_version: Callable[[], str]
     package_versions: Callable[[], dict[str, str]]
     cuda_available: Callable[[], bool]
@@ -32,6 +70,8 @@ class DiagnosticProbe:
 
 @dataclass(frozen=True, slots=True)
 class DiagnosticResult:
+    """诊断汇总及其符合性判断，用于 CLI 渲染和证据归档。"""
+
     python_version: str
     packages: dict[str, str]
     cuda_available: bool
@@ -88,6 +128,7 @@ class DiagnosticResult:
 
 
 def run_diagnostics(probe: DiagnosticProbe) -> DiagnosticResult:
+    """按稳定顺序运行环境探针，保证同类诊断结果可比较。"""
     failures: list[str] = []
     cuda_available = probe.cuda_available()
     cuda_version = probe.cuda_version()
@@ -124,6 +165,8 @@ def run_diagnostics(probe: DiagnosticProbe) -> DiagnosticResult:
 
 
 def default_probe(*, desktop_probe: bool = False) -> DiagnosticProbe:
+    """构造默认探针；桌面探测仅在用户显式请求时启用。"""
+
     def package_versions() -> dict[str, str]:
         names = (
             "torch",
@@ -272,70 +315,172 @@ def _check_pynput() -> CheckResult:
 
 
 def _check_desktop_probe() -> CheckResult:
-    root = None
+    import json
+
     try:
-        import ctypes
-        import tkinter
-
-        import pyautogui
-
-        root = tkinter.Tk()
-        root.title("MAX Doctor Desktop Probe")
-        root.geometry("360x140+40+40")
-        received = tkinter.StringVar()
-        clicked = tkinter.BooleanVar(value=False)
-        entry = tkinter.Entry(root, textvariable=received)
-        entry.place(x=20, y=20, width=320, height=28)
-        button = tkinter.Button(root, text="Confirm", command=lambda: clicked.set(True))
-        button.place(x=20, y=65, width=120, height=32)
-        root.attributes("-topmost", True)
-        root.lift()
-        root.focus_force()
-        root.update_idletasks()
-        root.update()
-        window_handle = root.winfo_id()
-        request_foreground_window(
-            window_handle, ctypes.windll.user32.SetForegroundWindow
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from max_agent.diagnostics import _desktop_probe_worker_main; _desktop_probe_worker_main()",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
         )
-        root.update()
-        if not is_foreground_window(
-            window_handle, ctypes.windll.user32.GetForegroundWindow
+    except subprocess.TimeoutExpired:
+        return CheckResult("desktop_probe", "failed", "desktop probe worker timed out")
+    if completed.returncode:
+        status = completed.returncode & 0xFFFFFFFF
+        return CheckResult(
+            "desktop_probe",
+            "failed",
+            f"desktop probe worker exited with status 0x{status:08X}",
+        )
+    try:
+        payload = json.loads(completed.stdout)
+        return CheckResult(**payload)
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        return CheckResult(
+            "desktop_probe",
+            "failed",
+            f"desktop probe worker returned an invalid result: {type(error).__name__}",
+        )
+
+
+def _desktop_probe_worker_main() -> None:
+    import json
+
+    result = _run_desktop_probe()
+    print(
+        json.dumps(
+            {"name": result.name, "status": result.status, "detail": result.detail}
+        )
+    )
+
+
+def _run_desktop_probe() -> CheckResult:
+    """在独立子进程中使用 Win32 原生控件验证受控桌面输入。"""
+    user32 = None
+    window_handle = 0
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        configure_win32_probe_api(user32, kernel32)
+        enable_per_monitor_dpi_awareness(user32.SetProcessDpiAwarenessContext)
+        instance = kernel32.GetModuleHandleW(None)
+        window_handle = int(
+            user32.CreateWindowExW(
+                0,
+                "STATIC",
+                "MAX Doctor Desktop Probe",
+                0x10CF0000,
+                40,
+                40,
+                360,
+                160,
+                None,
+                None,
+                instance,
+                None,
+            )
+            or 0
+        )
+        if not window_handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        edit_handle = int(
+            user32.CreateWindowExW(
+                0x200,
+                "EDIT",
+                "",
+                0x50810080,
+                20,
+                20,
+                320,
+                28,
+                window_handle,
+                1001,
+                instance,
+                None,
+            )
+            or 0
+        )
+        button_handle = int(
+            user32.CreateWindowExW(
+                0,
+                "BUTTON",
+                "Confirm",
+                0x50010003,
+                20,
+                65,
+                120,
+                32,
+                window_handle,
+                1002,
+                instance,
+                None,
+            )
+            or 0
+        )
+        if not edit_handle or not button_handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        user32.ShowWindow(window_handle, 5)
+        user32.UpdateWindow(window_handle)
+        pump_events = lambda: pump_win32_messages(user32)
+        request_controlled_foreground_window(
+            window_handle, user32, kernel32.GetCurrentThreadId
+        )
+        if not wait_for_foreground_window(
+            window_handle, user32.GetForegroundWindow, pump_events
         ):
             return CheckResult(
                 "desktop_probe", "skipped", foreground_probe_skip_detail()
             )
 
-        def center(widget: object) -> tuple[int, int]:
-            return (
-                widget.winfo_rootx() + widget.winfo_width() // 2,
-                widget.winfo_rooty() + widget.winfo_height() // 2,
-            )
-
-        entry_point = center(entry)
-        if root.winfo_containing(*entry_point) is not entry:
+        entry_point = win32_window_center(edit_handle, user32)
+        if win32_window_at(entry_point, user32) != edit_handle:
             raise RuntimeError("controlled input field is unavailable")
-        pyautogui.click(*entry_point)
-        pyautogui.write("doctor")
-        root.update()
-        button_point = center(button)
-        if root.winfo_containing(*button_point) is not button:
-            raise RuntimeError("controlled confirmation button is unavailable")
-        pyautogui.click(*button_point)
-        root.update()
-        if received.get() != "doctor" or not clicked.get():
+        send_controlled_click(entry_point, user32)
+        if not wait_for_probe_condition(
+            lambda: int(user32.GetFocus() or 0) == edit_handle, pump_events
+        ):
+            raise RuntimeError("controlled input field could not receive focus")
+        if not is_foreground_window(window_handle, user32.GetForegroundWindow):
             raise RuntimeError(
-                "controlled desktop input did not reach the probe window"
+                "probe window lost foreground focus before controlled text input"
             )
+        send_controlled_text("doctor", user32)
+        if not wait_for_probe_condition(
+            lambda: win32_window_text(edit_handle, user32) == "doctor", pump_events
+        ):
+            raise RuntimeError("controlled text input did not reach the probe window")
+
+        button_point = win32_window_center(button_handle, user32)
+        if win32_window_at(button_point, user32) != button_handle:
+            raise RuntimeError("controlled confirmation button is unavailable")
+        if not is_foreground_window(window_handle, user32.GetForegroundWindow):
+            raise RuntimeError(
+                "probe window lost foreground focus before controlled click"
+            )
+        send_controlled_click(button_point, user32)
+        if not wait_for_probe_condition(
+            lambda: user32.SendMessageW(button_handle, 0x00F0, 0, 0) == 1,
+            pump_events,
+        ):
+            raise RuntimeError("controlled click did not reach the probe window")
         return CheckResult(
-            "desktop_probe", "passed", "controlled click and text input verified"
+            "desktop_probe",
+            "passed",
+            "Win32 controlled click and text input verified",
         )
     except Exception as error:  # desktop probe is explicitly opt-in and must never propagate input on setup failure
         return CheckResult(
             "desktop_probe", "failed", f"{type(error).__name__}: {error}"
         )
     finally:
-        if root is not None:
-            root.destroy()
+        if window_handle and user32 is not None:
+            user32.DestroyWindow(window_handle)
 
 
 def is_foreground_window(
@@ -344,14 +489,247 @@ def is_foreground_window(
     return window_handle == get_foreground_window()
 
 
+def configure_win32_probe_api(user32: object, kernel32: object) -> None:
+    user32.CreateWindowExW.argtypes = [
+        wintypes.DWORD,
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.HWND,
+        wintypes.HMENU,
+        wintypes.HINSTANCE,
+        wintypes.LPVOID,
+    ]
+    user32.CreateWindowExW.restype = wintypes.HWND
+    user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.ShowWindow.restype = wintypes.BOOL
+    user32.UpdateWindow.argtypes = [wintypes.HWND]
+    user32.UpdateWindow.restype = wintypes.BOOL
+    user32.DestroyWindow.argtypes = [wintypes.HWND]
+    user32.DestroyWindow.restype = wintypes.BOOL
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.GetFocus.restype = wintypes.HWND
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, wintypes.LPVOID]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    user32.AttachThreadInput.argtypes = [
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.BOOL,
+    ]
+    user32.AttachThreadInput.restype = wintypes.BOOL
+    user32.BringWindowToTop.argtypes = [wintypes.HWND]
+    user32.BringWindowToTop.restype = wintypes.BOOL
+    user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+    user32.SetForegroundWindow.restype = wintypes.BOOL
+    user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user32.GetWindowRect.restype = wintypes.BOOL
+    user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    user32.GetWindowTextLengthW.restype = ctypes.c_int
+    user32.GetWindowTextW.argtypes = [
+        wintypes.HWND,
+        wintypes.LPWSTR,
+        ctypes.c_int,
+    ]
+    user32.GetWindowTextW.restype = ctypes.c_int
+    user32.WindowFromPoint.argtypes = [wintypes.POINT]
+    user32.WindowFromPoint.restype = wintypes.HWND
+    user32.PeekMessageW.argtypes = [
+        ctypes.POINTER(wintypes.MSG),
+        wintypes.HWND,
+        wintypes.UINT,
+        wintypes.UINT,
+        wintypes.UINT,
+    ]
+    user32.PeekMessageW.restype = wintypes.BOOL
+    user32.TranslateMessage.argtypes = [ctypes.POINTER(wintypes.MSG)]
+    user32.TranslateMessage.restype = wintypes.BOOL
+    user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
+    user32.DispatchMessageW.restype = ctypes.c_ssize_t
+    user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+    user32.SetCursorPos.restype = wintypes.BOOL
+    user32.SendInput.argtypes = [
+        wintypes.UINT,
+        ctypes.POINTER(_INPUT),
+        ctypes.c_int,
+    ]
+    user32.SendInput.restype = wintypes.UINT
+    user32.SendMessageW.argtypes = [
+        wintypes.HWND,
+        wintypes.UINT,
+        wintypes.WPARAM,
+        wintypes.LPARAM,
+    ]
+    user32.SendMessageW.restype = ctypes.c_ssize_t
+    kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+    kernel32.GetModuleHandleW.restype = wintypes.HINSTANCE
+    kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+
+
+def pump_win32_messages(user32: object) -> None:
+    message = wintypes.MSG()
+    while user32.PeekMessageW(ctypes.byref(message), None, 0, 0, 1):
+        user32.TranslateMessage(ctypes.byref(message))
+        user32.DispatchMessageW(ctypes.byref(message))
+
+
+def win32_window_center(window_handle: int, user32: object) -> tuple[int, int]:
+    rectangle = wintypes.RECT()
+    if not user32.GetWindowRect(window_handle, ctypes.byref(rectangle)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return (
+        (rectangle.left + rectangle.right) // 2,
+        (rectangle.top + rectangle.bottom) // 2,
+    )
+
+
+def win32_window_at(point: tuple[int, int], user32: object) -> int:
+    return int(user32.WindowFromPoint(wintypes.POINT(*point)) or 0)
+
+
+def win32_window_text(window_handle: int, user32: object) -> str:
+    length = user32.GetWindowTextLengthW(window_handle)
+    buffer = ctypes.create_unicode_buffer(length + 1)
+    if not user32.GetWindowTextW(window_handle, buffer, len(buffer)) and length:
+        raise ctypes.WinError(ctypes.get_last_error())
+    return buffer.value
+
+
+def enable_per_monitor_dpi_awareness(
+    set_process_dpi_awareness_context: Callable[[int], object],
+) -> None:
+    set_process_dpi_awareness_context(-4)
+
+
+def send_controlled_text(text: str, user32: object) -> None:
+    encoded = text.encode("utf-16-le")
+    units = [
+        int.from_bytes(encoded[index : index + 2], "little")
+        for index in range(0, len(encoded), 2)
+    ]
+    events: list[_INPUT] = []
+    for unit in units:
+        events.extend(
+            [
+                _INPUT(
+                    type=1,
+                    value=_INPUT_VALUE(ki=_KEYBDINPUT(wScan=unit, dwFlags=0x0004)),
+                ),
+                _INPUT(
+                    type=1,
+                    value=_INPUT_VALUE(ki=_KEYBDINPUT(wScan=unit, dwFlags=0x0006)),
+                ),
+            ]
+        )
+    send_input_checked(events, user32)
+
+
+def send_controlled_click(point: tuple[int, int], user32: object) -> None:
+    ctypes.set_last_error(0)
+    if not user32.SetCursorPos(*point):
+        raise ctypes.WinError(ctypes.get_last_error())
+    send_input_checked(
+        [
+            _INPUT(
+                type=0,
+                value=_INPUT_VALUE(mi=_MOUSEINPUT(dwFlags=0x0002)),
+            ),
+            _INPUT(
+                type=0,
+                value=_INPUT_VALUE(mi=_MOUSEINPUT(dwFlags=0x0004)),
+            ),
+        ],
+        user32,
+    )
+
+
+def send_input_checked(events: list[_INPUT], user32: object) -> None:
+    if not events:
+        return
+    event_array = (_INPUT * len(events))(*events)
+    ctypes.set_last_error(0)
+    inserted = user32.SendInput(len(events), event_array, ctypes.sizeof(_INPUT))
+    if inserted != len(events):
+        error_code = ctypes.get_last_error()
+        raise RuntimeError(
+            f"SendInput inserted {inserted} of {len(events)} events "
+            f"(GetLastError={error_code})"
+        )
+
+
+def wait_for_probe_condition(
+    condition: Callable[[], bool],
+    pump_events: Callable[[], None],
+    timeout_s: float = 1.0,
+    time_fn: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    deadline = time_fn() + timeout_s
+    while True:
+        pump_events()
+        if condition():
+            return True
+        if time_fn() >= deadline:
+            return False
+        sleep(0.01)
+
+
+def wait_for_foreground_window(
+    window_handle: int,
+    get_foreground_window: Callable[[], int],
+    pump_events: Callable[[], None],
+    timeout_s: float = 3.0,
+    time_fn: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    deadline = time_fn() + timeout_s
+    while True:
+        pump_events()
+        if is_foreground_window(window_handle, get_foreground_window):
+            return True
+        if time_fn() >= deadline:
+            return False
+        sleep(0.05)
+
+
 def request_foreground_window(
     window_handle: int, set_foreground_window: Callable[[int], object]
 ) -> None:
     set_foreground_window(window_handle)
 
 
+def request_controlled_foreground_window(
+    window_handle: int,
+    user32: object,
+    get_current_thread_id: Callable[[], int] | None = None,
+) -> None:
+    if get_current_thread_id is None:
+        import ctypes
+
+        get_current_thread_id = ctypes.windll.kernel32.GetCurrentThreadId
+    foreground_handle = user32.GetForegroundWindow()
+    current_thread = get_current_thread_id()
+    foreground_thread = (
+        user32.GetWindowThreadProcessId(foreground_handle, None)
+        if foreground_handle
+        else current_thread
+    )
+    attached = foreground_thread != current_thread and bool(
+        user32.AttachThreadInput(current_thread, foreground_thread, True)
+    )
+    try:
+        user32.BringWindowToTop(window_handle)
+        user32.SetForegroundWindow(window_handle)
+    finally:
+        if attached:
+            user32.AttachThreadInput(current_thread, foreground_thread, False)
+
+
 def foreground_probe_skip_detail() -> str:
-    return "temporary probe window could not obtain Windows foreground focus; no desktop input was sent. Bring the interactive Windows session to the foreground and rerun --desktop-probe."
+    return "temporary probe window could not obtain Windows foreground focus within 3 seconds; no desktop input was sent. In an interactive Windows session, use Alt+Tab to focus the temporary window and rerun --desktop-probe."
 
 
 def _is_installed(package: str) -> bool:

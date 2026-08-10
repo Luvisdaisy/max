@@ -1,3 +1,5 @@
+"""验证根依赖清单是唯一且版本固定的安装入口。"""
+
 from __future__ import annotations
 
 import tomllib
