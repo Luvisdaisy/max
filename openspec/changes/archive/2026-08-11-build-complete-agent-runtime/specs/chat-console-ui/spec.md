@@ -1,10 +1,4 @@
-# chat-console-ui Specification
-
-## Purpose
-
-提供唯一的 Textual 本地聊天入口，使开发者能够在同一交互会话中使用本地模型、诊断运行环境并安全退出。
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: 聊天内受限工具循环
 Textual 聊天 SHALL 将每条普通用户消息交给完整 `AgentRuntime`。运行时 SHALL 重复请求模型返回最终文本或一个结构化工具调用：最终文本结束任务；工具调用经注册表、预算和权限策略处理后，其净化结果加入同一任务消息上下文并进入下一模型轮次。有副作用工具 MUST 额外经过 Guard、动作后观察和验证。界面 SHALL 通过现有事件接收器显示不含参数与回执数据的阶段通知、工具名称、执行状态、耗时摘要以及最终文本，但 MUST NOT 显示或持久化原始截图、完整 OCR 文本、工具参数、工具原始数据、模型思维过程或输入文本。
@@ -79,21 +73,6 @@ The application SHALL continue to support `/doctor`, `/help`, `/clear`, `/status
 - **WHEN** a developer enters an unsupported slash command
 - **THEN** the interface reports that the command is unsupported, suggests `/help` and remains available for input
 
-### Requirement: 多行键盘输入与本地历史
-Textual 聊天界面 SHALL 提供支持多行文本的编辑区。`Enter` MUST 提交非空内容，`Shift+Enter` MUST 插入换行；空白内容 MUST NOT 创建消息或启动命令。界面 SHALL 允许开发者使用键盘访问本次进程中的已提交输入，输入历史 MUST NOT 跨进程持久化。
-
-#### Scenario: 提交多行任务
-- **WHEN** 开发者使用 `Shift+Enter` 编写多行内容后按 `Enter`
-- **THEN** 界面将完整多行内容作为一条用户消息提交，并清空编辑区
-
-#### Scenario: 忽略空白输入
-- **WHEN** 编辑区仅包含空白字符且开发者按 `Enter`
-- **THEN** 界面不追加消息、不改变运行状态且保持编辑区可用
-
-#### Scenario: 浏览本地输入历史
-- **WHEN** 编辑区没有未提交修改且开发者触发上一条或下一条历史输入操作
-- **THEN** 界面在本次进程已提交的输入之间导航，不读取或写入持久化会话数据
-
 ### Requirement: 单活动请求与可恢复运行状态
 Textual 聊天界面 SHALL 在任一时刻只允许一个普通消息对应的 AgentRuntime 调用执行。请求执行期间，界面 MUST 阻止重复提交并持续显示当前阶段与已用时间；调用返回 `SUCCEEDED`、`WAITING_USER`、`FAILED` 或 `ABORTED` 后 MUST 停止忙碌指示、恢复编辑区和键盘焦点，并保持既有会话内容可读。`WAITING_USER` 的下一条普通消息 SHALL 恢复同一挂起任务，但仍作为一个新的单活动调用经过现有门禁。
 
@@ -109,21 +88,6 @@ Textual 聊天界面 SHALL 在任一时刻只允许一个普通消息对应的 A
 - **WHEN** AgentRuntime 返回最终答复、用户问题或本地错误
 - **THEN** 界面呈现对应结果、结束忙碌状态、重新允许输入并将焦点恢复到编辑区
 
-### Requirement: 可预测的会话滚动与窄终端布局
-Textual 聊天界面 SHALL 在终端尺寸变化时保持内容可读且不要求水平滚动。新内容到达时，若开发者位于记录底部，界面 MUST 跟随最新内容；若开发者正在回看较早内容，界面 MUST 保持当前位置并提示存在新内容，直至开发者主动返回底部。
-
-#### Scenario: 跟随最新回复
-- **WHEN** 新会话内容到达且开发者当前位于记录底部
-- **THEN** 界面自动滚动以展示最新内容
-
-#### Scenario: 回看历史时收到回复
-- **WHEN** 开发者已向上滚动查看较早内容且新会话内容到达
-- **THEN** 界面保留当前阅读位置并显示可通过键盘返回最新内容的提示
-
-#### Scenario: 缩小终端宽度
-- **WHEN** 终端被缩小到无法容纳完整宽屏状态栏的宽度
-- **THEN** 界面换行会话内容并压缩或隐藏次要状态信息，同时保留编辑区、运行状态和主要消息类型的可辨识性
-
 ### Requirement: 交互式模型选择命令
 Textual 聊天界面 SHALL 支持 `/model` 和 `/model <模型目录>`。无参数命令 MUST 显示可选本地模型及当前选择；带参数命令 MUST 请求切换到指定模型，并将成功或失败结果显示在当前会话中，不启动普通 AgentRuntime 调用。成功切换模型 MUST 清除旧模型的对话历史、规划会话和 `WAITING_USER` 任务，使后续普通文本创建使用新模型的新任务。
 
@@ -138,10 +102,3 @@ Textual 聊天界面 SHALL 支持 `/model` 和 `/model <模型目录>`。无参�
 #### Scenario: 模型命令参数无效
 - **WHEN** 开发者输入不存在的模型名称或不合法的 `/model` 参数
 - **THEN** 界面显示明确错误并保持当前模型选择、规划状态与会话可用
-
-### Requirement: Restricted startup surface
-The application SHALL expose only `max-agent` and `max-agent --chat` as supported public startup forms. It MUST NOT expose `doctor`, `download-model`, `validate-model`, `benchmark`, `--doctor`, `--fallback`, or `--textual` as public command-line operations. Removing those public operations MUST NOT require deletion of their underlying local model-management or benchmark implementation modules.
-
-#### Scenario: Unsupported legacy CLI operation
-- **WHEN** a developer invokes a removed command or option
-- **THEN** the command exits with usage feedback and does not start a different frontend or trigger model, desktop, or download work

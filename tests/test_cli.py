@@ -5,15 +5,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from PIL import Image
-
 from max_agent.cli import _doctor_operation, _interactive_dispatch, main
 from max_agent.console_core import ConsoleEventKind
 from max_agent.diagnostics import DiagnosticResult
-from max_agent.local_llm import LocalRuntimeError
-from max_agent.tools.perception.ocr import RecognizeTextTool
-from max_agent.tools.perception.screen import ObserveScreenTool
-from max_agent.tools.registry import ToolRegistry
+from max_agent.orchestration.models import AgentResult, RuntimeEvent, TaskStatus
+
+
+def _agent_result(text: str, status: TaskStatus = TaskStatus.SUCCEEDED) -> AgentResult:
+    return AgentResult(task_id="task", status=status, response_text=text)
 
 
 class CliTests(unittest.TestCase):
@@ -77,6 +76,7 @@ class CliTests(unittest.TestCase):
         with (
             patch("max_agent.cli.LocalChatRuntime") as runtime_type,
             patch("max_agent.cli.run_textual_chat") as start_chat,
+            patch("max_agent.cli.build_agent_runtime") as build_runtime,
         ):
             runtime = runtime_type.return_value
             runtime.available_models.return_value = ("Qwen/Qwen3.5-2B",)
@@ -91,88 +91,114 @@ class CliTests(unittest.TestCase):
             "Qwen/Qwen3.5-2B", "\n".join(event.text for event in result.events)
         )
         runtime.reply.assert_not_called()
+        build_runtime.return_value.run.assert_not_called()
 
-    def test_chat_allows_model_to_decline_tools(self) -> None:
+    def test_chat_creates_exactly_one_agent_runtime_request(self) -> None:
         runtime = Mock()
-        runtime.reply.side_effect = ['{"tool_name": null}', "普通回复"]
-        dispatch, _ = _interactive_dispatch(Path("artifacts"), runtime)
+        runtime.selected_model = "fake"
+        runtime.state = "ready"
+        agent = Mock()
+        agent.suspended_task_id = None
+        agent.run.return_value = _agent_result("普通回复")
+        dispatch, _ = _interactive_dispatch(Path("artifacts"), runtime, agent)
         emitted = []
 
         result = dispatch("你好", emitted.append)
 
         self.assertEqual(result.events[-1].text, "普通回复")
         self.assertFalse(any(event.kind == ConsoleEventKind.TOOL for event in emitted))
-        self.assertEqual(runtime.reply.call_count, 2)
+        agent.run.assert_called_once()
+        self.assertEqual(agent.run.call_args.args[0].user_goal, "你好")
+        runtime.reply.assert_not_called()
 
-    def test_greeting_continues_after_model_selects_ocr_without_image(self) -> None:
-        registry = ToolRegistry()
-        registry.register(RecognizeTextTool())
+    def test_runtime_events_map_to_existing_notice_and_tool_events(self) -> None:
         runtime = Mock()
-        runtime.reply.side_effect = [
-            '{"tool_name": "recognize_text", "arguments": {}}',
-            "文字识别缺少图像输入，但不影响对话。你好！",
-        ]
+        runtime.selected_model = "fake"
+        runtime.state = "ready"
+        agent = Mock()
+        agent.suspended_task_id = None
+
+        def run(_request, emit):
+            emit(
+                RuntimeEvent(phase="reason", state="running", tool_name="invoke_model")
+            )
+            emit(
+                RuntimeEvent(
+                    phase="reason",
+                    state="succeeded",
+                    tool_name="invoke_model",
+                    elapsed_seconds=0.1,
+                )
+            )
+            emit(
+                RuntimeEvent(phase="tool", state="running", tool_name="observe_windows")
+            )
+            emit(
+                RuntimeEvent(
+                    phase="tool",
+                    state="succeeded",
+                    tool_name="observe_windows",
+                    elapsed_seconds=0.2,
+                )
+            )
+            return _agent_result("完成")
+
+        agent.run.side_effect = run
         emitted = []
-        with patch("max_agent.cli.build_default_registry", return_value=registry):
-            dispatch, _ = _interactive_dispatch(Path("artifacts"), runtime)
-            result = dispatch("你好", emitted.append)
+        dispatch, _ = _interactive_dispatch(Path("artifacts"), runtime, agent)
+        result = dispatch("查看窗口", emitted.append)
 
         self.assertEqual(result.kind, "chat")
         self.assertEqual(
-            result.events[-1].text, "文字识别缺少图像输入，但不影响对话。你好！"
+            [event.kind for event in emitted],
+            [
+                ConsoleEventKind.NOTICE,
+                ConsoleEventKind.NOTICE,
+                ConsoleEventKind.TOOL,
+                ConsoleEventKind.TOOL,
+            ],
         )
-        tool_events = [
-            event for event in emitted if event.kind == ConsoleEventKind.TOOL
-        ]
-        self.assertEqual([event.state for event in tool_events], ["running", "failed"])
-        final_prompt = runtime.reply.call_args_list[1].args[0]
-        self.assertIn("用户原始消息：你好", final_prompt)
-        self.assertIn('"code": "invalid_input"', final_prompt)
-        self.assertNotIn("Field required", final_prompt)
+        self.assertEqual({event.text for event in emitted[-2:]}, {"observe_windows"})
 
-    def test_only_final_generation_failure_ends_recovered_tool_turn(self) -> None:
-        registry = ToolRegistry()
-        registry.register(RecognizeTextTool())
+    def test_waiting_result_status_and_next_input_share_same_adapter(self) -> None:
         runtime = Mock()
-        runtime.reply.side_effect = [
-            '{"tool_name": "recognize_text", "arguments": {}}',
-            LocalRuntimeError("最终回复生成失败"),
+        runtime.selected_model = "fake"
+        runtime.state = "ready"
+        agent = Mock()
+        agent.suspended_task_id = "task"
+        agent.run.side_effect = [
+            _agent_result("请先登录", TaskStatus.WAITING_USER),
+            _agent_result("已继续"),
         ]
-        with patch("max_agent.cli.build_default_registry", return_value=registry):
-            dispatch, _ = _interactive_dispatch(Path("artifacts"), runtime)
-            result = dispatch("你好")
+        dispatch, status = _interactive_dispatch(Path("artifacts"), runtime, agent)
 
-        self.assertEqual(result.kind, "runtime_error")
-        self.assertIn("最终回复生成失败", result.events[-1].text)
-        self.assertEqual(runtime.reply.call_count, 2)
+        first = dispatch("登录后继续")
+        second = dispatch("已登录")
 
-    def test_chat_returns_visual_explanation_after_screen_tool_call(self) -> None:
-        registry = ToolRegistry()
-        registry.register(
-            ObserveScreenTool(
-                capture=lambda _: {
-                    "image": Image.new("RGB", (1, 1)),
-                    "width": 1,
-                    "height": 1,
-                    "bounds": {},
-                    "dpi": None,
-                }
-            )
-        )
+        self.assertEqual(first.events[-1].text, "请先登录")
+        self.assertEqual(second.events[-1].text, "已继续")
+        self.assertEqual(agent.run.call_count, 2)
+        self.assertEqual(status().runtime_state, "waiting_user")
+
+    def test_model_clear_quit_and_status_coordinate_agent_lifecycle(self) -> None:
         runtime = Mock()
-        runtime.reply.return_value = '{"tool_name": "observe_screen"}'
-        runtime.explain_image.return_value = "这是当前桌面的解释。"
-        emitted = []
-        with patch("max_agent.cli.build_default_registry", return_value=registry):
-            dispatch, _ = _interactive_dispatch(Path("artifacts"), runtime)
-            result = dispatch("描述当前桌面", emitted.append)
+        runtime.selected_model = "old"
+        runtime.state = "ready"
+        runtime.available_models.return_value = ("old", "new")
 
-        self.assertEqual(result.events[-1].text, "这是当前桌面的解释。")
-        tool_events = [
-            event for event in emitted if event.kind == ConsoleEventKind.TOOL
-        ]
+        def select(name):
+            runtime.selected_model = name
+
+        runtime.select_model.side_effect = select
+        agent = Mock()
+        agent.suspended_task_id = None
+        dispatch, status = _interactive_dispatch(Path("artifacts"), runtime, agent)
+
+        self.assertEqual(dispatch("/model new").kind, "model")
+        self.assertEqual(dispatch("/clear").kind, "clear")
+        self.assertTrue(dispatch("/quit").should_exit)
+        self.assertEqual(agent.clear.call_count, 3)
+        self.assertEqual(runtime.clear_history.call_count, 2)
         self.assertEqual(
-            [event.state for event in tool_events], ["running", "succeeded"]
+            status().safety_boundary, "本地 · Agent Guard · 受控桌面 · 无网络"
         )
-        self.assertEqual({event.text for event in tool_events}, {"observe_screen"})
-        runtime.explain_image.assert_called_once()

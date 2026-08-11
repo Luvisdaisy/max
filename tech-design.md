@@ -6,13 +6,13 @@
 
 代码注释采用中文并作为当前实现基线的一部分维护：每个 Python 模块说明职责与边界，公开接口和数据模型说明用途与关键约束，复杂状态转换、路径安全、资源限制及非直观失败处理说明设计原因。语义自明的语句不添加机械逐行注释；实现行为、接口或测试场景变化时，必须同步审查并更新受影响的注释。本约定仅描述已实现代码的可读性要求，不将后续路线图能力表述为已交付。
 
-**版本：** v1.5.0  
-**日期：** 2026-08-10
+**版本：** v1.6.0
+**日期：** 2026-08-11
 **目标平台：** Windows 11、NVIDIA RTX 5070 Ti、32 GB DDR5-6400 内存  
 **编排框架：** LangChain（LCEL + LangGraph 状态机）  
 **模型部署：** Windows Conda Python 3.12 + PyTorch/Transformers 单进程本地推理
 
-## 当前实现基线（2026-08-07）
+## 当前实现基线（2026-08-11）
 
 本报告后续章节保留第 1～8 周的目标架构、接口契约和路线图，其中部分组件尚未实现。当前仓库已实现的代码边界如下；除非本节明确说明，不得将后文的设计当作已交付功能。
 
@@ -22,20 +22,23 @@
 | Doctor 运行时检查 | 检查 Python、`pip check`、CUDA、GPU 名称与 BF16 CUDA 张量运算 | 证据不记录模型型号、目录、远程修订或文件集合身份 |
 | Doctor 基础工具检查 | 默认无输入地验证 mss 内存截图、PyAutoGUI 屏幕尺寸、OpenCV 合成图像处理、PaddleOCR 可用性与 pynput 导入 | 默认不发送鼠标或键盘事件；PaddleOCR 默认不执行会隐式下载资源的完整识别 |
 | `doctor --desktop-probe` | 显式在短生命周期子进程中通过 `ctypes` 创建 Win32 原生临时窗口、`Edit` 与自动复选 `Button` 控件；只有顶层句柄确认成为前台且目标坐标命中对应控件后，才通过 `SendInput` 发送 Unicode 键盘事件和鼠标点击，并从原生控件读取文本与按钮状态验证结果 | 不依赖 Tk 或外部业务应用；每次注入核对 `SendInput` 返回数量，前台窗口不匹配时停止；原生崩溃或超时由父 Doctor 转换为失败结果，不操作真实业务窗口 |
-| 感知工具 | `tools/registry.py` 是唯一调用入口，提供内存截图、显式本地资源的 OCR、只读 UI Automation、OpenCV 图像处理/模板匹配与 Set-of-Mark 标注 | 不提供编排、桌面输入或图像持久化；OCR 不下载资源，UIA 不激活窗口、不提升权限 |
-| Agent Orchestrator | `orchestration/graph.py` 以 LangGraph 显式推进单任务观察、规划、审批、执行、验证和受限恢复；仅经工具注册表消费结构化回执 | 仅以 mock/注入工具验证状态机；不加载模型、不接入 CLI、不启用桌面控制或持久化检查点 |
-| `ExperimentArchive` | 每次 Doctor 在 Git 忽略的 `artifacts/` 下写入 `config.yaml`、`environment.json`、`trajectory.jsonl`、`result.json` | 不归档真实截图、令牌、密钥或模型身份信息 |
+| 感知工具 | `tools/registry.py` 是唯一调用入口；窗口发现与截图后按需走本地 OCR 主路径，UIA、模板与 SoM 是显式增强能力；截图通过不可猜测的任务级 `ResourceRef` 留在内存 | OCR 仅从 `model/ocr/` 读取本地模型且不下载；UIA 不激活窗口、不提升权限；普通问答不会自动观察桌面 |
+| Agent Runtime | `orchestration/graph.py` 实现受控 text-or-tool ReAct：`REASON` 每轮返回最终文本或一个工具调用；只读工具结果回填模型，有副作用动作固定经过 Guard、执行、动作后观察与验证 | 单进程、单活动桌面会话；不持久化检查点，不支持跨进程恢复；底层模型推理已经开始后仍不能强制抢占 |
+| Guard 与桌面执行 | 默认装配窗口三元组、状态指纹、DPI/物理坐标、按键白名单、时效与高影响确认；执行前再次复核目标焦点，异常统一释放输入状态 | 不提供 Shell、任意脚本、剪贴板、文件或进程工具；保存、发送、删除、支付、凭据和关闭未保存内容等待用户确认 |
+| 验证、恢复与归档 | 动作后强制重新观察；记事本文本追加必须由目标前台窗口的新 OCR 命中确认；重复无进展最多经历重观察、一次审慎轮次和人工接管；Doctor 与 Agent 终态写入 `artifacts/` | 只归档白名单审计投影；截图、完整 OCR、输入文本、模型原始响应、密码和剪贴板内容不落盘 |
 | 聊天控制台 | `console_core.py` 以封闭 `ConsoleEvent` 顺序分发普通消息、`/help`、`/status`、`/model`、`/doctor`、`/clear` 与 `/quit`；命令帮助和 Textual 补全复用同一命令定义 | 展示事件不是通用 Agent 事件总线；工具事件只允许名称、固定状态和耗时，不携带参数、截图或原始回执 |
-| Textual 本地聊天 | `max-agent` 与 `max-agent --chat` 均启动同一个键盘优先会话；语义化区域区分用户、Markdown 模型回复、命令、工具与错误，多行编辑器提供发送、换行、进程内历史和命令筛选；普通文本按当前选择懒加载 | 仅读取仓库 `model/`；单活动请求，不下载、不访问远程推理服务、不自动适配模型兼容性，也不并行驻留多个模型 |
+| Textual 本地聊天 | `max-agent` 与 `max-agent --chat` 默认进入同一 AgentRuntime；`cli.py` 将净化模型轮次映射为 NOTICE、工具进度映射为 TOOL、最终文本映射为 ASSISTANT；`WAITING_USER` 返回编辑权并由下一条消息恢复同一任务 | 未修改控制台核心、Textual widgets、`LocalChatRuntime` 或旧只读解释器；仅读取仓库 `model/`，不下载、不访问远程推理服务 |
 | 本地辅助实现 | 保留下载、元数据校验和单图基准模块供未来内部 API 或后续入口使用 | 不提供公开 CLI 调用；不下载缺失权重、不回退网络、不归档模型权重、图像内容或绝对本地路径 |
 
-当前 `src/max_agent/` 已包含归档、诊断、CLI、控制台分发、运行配置、本地辅助命令、位于 `tools/perception/` 的只读感知工具，以及仅用注入工具验证的 LangGraph 编排器。Textual 会话的模型选择仅限仓库 `model/` 下被发现的目录；选择成功会丢弃旧模型实例、处理器与对话历史，下一条普通消息才按新选择加载。`/clear` 仅清空当前模型的对话历史并保留选择与已加载资源。会话通过单活动 turn、递增 turn id 和 UI 线程回调避免后一次提交取消仍在执行的本地推理；加载、生成、完成或失败后统一恢复编辑区与焦点。
+当前 `src/max_agent/` 已包含完整 AgentRuntime、任务内存资源、独立 Agent 模型会话、感知、Guard、桌面执行、验证、恢复、归档、诊断和 CLI 适配。Textual 模型选择仅限仓库 `model/` 下被发现的目录；选择成功会丢弃旧模型实例、处理器、本地历史、Agent 模型会话与挂起任务。`/clear` 同时清理本地历史和挂起 Agent 任务，`/quit` 取消并清理活动或挂起任务。会话仍通过既有单活动 turn 和 UI 线程回调维持前端门禁，AgentRuntime 在完成、等待用户、失败或取消后统一释放截图资源、桌面锁和输入状态。
 
-Textual 前端使用受控 Markdown 呈现最终回复，用户输入和命令/错误文本不作为 Rich markup 解释。会话位于记录底部时自动跟随新内容，开发者回看历史时保留视口并提示新内容；窄终端会隐藏次要状态并压缩留白。输入历史、聊天记录和 UI 偏好均不跨进程持久化，当前也不提供 token 级流式输出、底层推理取消、请求排队、完整权限系统或 Plan/执行模式。
+Textual 前端使用受控 Markdown 呈现最终回复，用户输入和命令/错误文本不作为 Rich markup 解释。会话位于记录底部时自动跟随新内容，开发者回看历史时保留视口并提示新内容；窄终端会隐藏次要状态并压缩留白。输入历史、聊天记录和 UI 偏好均不跨进程持久化，当前也不提供 token 级流式输出、底层推理强制取消、请求排队或跨进程恢复。
 
-后文描述的 `Planner`、`Safety Guard`、`Desktop Controller`、`Verifier`、`Recovery` 和 `Session Safety` 仍是待实现设计，不能据此推断仓库已经具备端到端 GUI Agent 能力。感知模块仅生成内存中的观察结果；编排器只经 `tools/registry.py` 调用工具，均不具备桌面控制权限。
+后文原有的独立固定 `Planner` 链路已被本次受控 ReAct 实现取代；`Safety Guard`、`Desktop Controller`、`Verifier`、`Recovery` 和 `Session Safety` 已有可注入实现与自动化夹具覆盖。后文涉及跨进程持久化、通用应用成功率、完整真实模型/OCR基准、训练和二十任务评测的内容仍是路线图，不得表述为已交付。
 
-普通 Textual 聊天已接入一次受限的模型工具循环：模型可选择注册表公开的只读工具；如选择 `observe_screen`，截图仅在内存中回传给同一视觉模型继续推理。工具调用受到名称、参数与一次调用预算限制，UI 仅接收工具名、运行/成功/失败状态和非负耗时，步骤记录和最终回复不包含原始图像、工具参数或原始回执。工具选择结构无效、工具未授权、参数校验失败或执行失败时，解释器将其归一化为仅含可选注册工具名、稳定错误分类和固定安全摘要的观察，禁止再次选择工具，并要求同一模型结合原始消息继续生成最终回复；原始校验信息、异常文本和回执不会进入最终提示。只有最终生成本身失败才终止该轮；该能力不提供桌面输入、网络回退或截图持久化。
+普通 Textual 聊天已接入有限多轮受控 ReAct。模型每轮只能返回纯最终文本，或一个符合严格 Pydantic schema 的工具调用；不解析自由文本里的 Thought/Action 标签，也不保存内部思维链。模型只能选择注册表公开子集，Guard、执行、验证、恢复、归档和资源清理均为内部工具。只读工具结果可直接回填；有副作用调用必须组合执行回执、动作后观察和验证的净化结果后回填。模型轮次、工具、动作、格式纠正、恢复、重复调用和总时间均有硬预算。首轮文本直接结束，因此普通问答的截图、OCR 和桌面锁调用数为零。
+
+默认启动不再要求 `--enable-desktop-control`；能力边界由工具白名单、Guard、桌面会话锁和确认策略确定。截图只作为任务级内存资源传递；文字识别以本地 OCR 为主，UIA 仅作显式辅助。`WAITING_USER` 只保留最小消息摘要与不可逆动作哈希，释放图像、坐标、旧批准和输入状态；用户下一条消息恢复同一任务后必须重新观察和重新审批。自动化受控记事本夹具已经覆盖窗口发现、截图、OCR、置前、`Ctrl+End`、Unicode 追加和动作后 OCR 验证。2026-08-10 又在授权交互式 Windows 会话中完成真实 Notepad 验收：运行时从任务栏发现专用未保存缓冲区，置前后精确 OCR 初始内容，追加唯一标记，再由动作后 OCR 与输入哈希共同确认成功；全过程无保存动作和清理错误，脱敏结果归档于 `artifacts/20260810T184128Z-manual-notepad-acceptance/`。
 
 2026-08-09 已对仓库内完整 Qwen3.5-4B 与单像素图像夹具执行一次真实离线基准。固定目录、分片与图像预检均通过；模型加载阶段因 16 GiB 显卡当时仅约有 7.46 GiB 空闲而发生 CUDA OOM（还需 40 MiB），因此尚未得到成功推理数据。对应的 Git 忽略基准归档记录 `stage: "load"` 和 `offline: true`；该失败是当前已实现基线的真实验收结果，不能替代后续在空闲显存充足环境中的成功测量。
 
@@ -157,16 +160,16 @@ LangChain 不使用 `ChatOpenAI`。`invoke_model` 工具插件将标准化观察
 flowchart LR
     U[用户 / CLI] --> O[Agent Orchestrator\nLangGraph 状态机]
     O --> S[Agent State]
-    O --> P[observe_screen 工具插件\n截图、OCR、UIA、OpenCV]
+    O --> P[感知工具插件\n窗口、内存截图、OCR、可选增强]
     O --> M[invoke_model 工具插件\nQwen3.5 2B / 4B / 9B]
     O --> G[approve_action 工具插件\n策略、坐标、确认]
     O --> E[execute_action 工具插件\nPyAutoGUI / pynput]
     O --> V[verify_result 工具插件\n功能谓词、UI 状态、截图差异]
     O --> R[recover 工具插件\n重观察、重规划、人工接管]
     O --> C[Session Safety 工具插件\n能力闸门、会话锁、异常清理]
-    O --> L[archive_run 工具插件\n日志、截图、轨迹]
+    O --> L[archive_run 工具插件\n脱敏配置、轨迹、结果]
     P -->|Observation| O
-    M -->|候选动作| O
+    M -->|最终文本或一个工具调用| O
     G -->|审批结果| O
     E -->|执行回执| O
     V -->|验证证据| O
@@ -200,15 +203,17 @@ flowchart LR
 | CLI | 接收任务、显示进度和最终结果 | Agent Orchestrator | 不直接访问鼠标键盘 |
 | Agent Orchestrator | 唯一维护任务状态、预算与状态转换；选择并调用工具插件 | LangGraph、工具注册表 | 不实现 OCR、推理、坐标换算或输入细节 |
 | 观察工具插件 | 截图、显示器/缩放信息、OCR、UI Automation、状态变化检测 | mss、OpenCV、PaddleOCR、pywinauto | 不执行动作、不推进任务状态 |
-| `invoke_model` 工具插件 | 串行加载一个 Qwen3.5 测试配置，完成预处理、推理、解码与结构化输出 | torch、transformers | 不接触桌面控制器、不持有任务循环 |
+| `invoke_model` 工具插件 | 串行加载当前选择的本地模型，按每轮协议返回最终文本或一个工具调用 | torch、transformers | 不接触桌面控制器、不持有任务循环、不输出自由格式动作标签 |
 | `approve_action` 工具插件 | 对动作、坐标、目标窗口、频率、轮数实施策略 | 配置、当前状态 | 不调用模型做安全放行 |
 | `execute_action` 工具插件 | 受控点击、输入、滚动、拖拽、停止 | PyAutoGUI、pynput | 不判断任务是否成功、不跳过审批 |
 | `verify_result` 工具插件 | 以屏幕变化、OCR 文字和规则验证动作结果 | 观察工具插件 | 不重试或自行执行 |
 | `recover` 工具插件 | 根据失败证据给出等待、重观察、重规划或人工接管建议 | 验证证据、AgentState | 不绕过审批工具 |
-| `archive_run` 工具插件 | 按任务保存 JSONL 轨迹、截图及环境元数据 | 文件系统、logging | 不保存密钥或原始敏感内容 |
+| `archive_run` 工具插件 | 按任务保存脱敏 JSONL 轨迹、配置摘要、环境摘要和结果 | 文件系统 | 不保存截图、完整 OCR、输入文本、模型原始响应、密码或剪贴板 |
 | Infrastructure | 仅在确有跨进程查询、并发写或队列需求时提供有状态服务 | Docker Compose、命名卷 | 第一版不引入数据库；不在宿主机安装 PostgreSQL/Redis |
 
-## 4. 核心数据契约
+## 4. 核心数据契约（当前实现与历史草案）
+
+当前稳定契约以 `orchestration/models.py`、`orchestration/resources.py` 和 `tools/base.py` 为准，包括 `AgentMessage`、`FinalTextResponse | ToolUseResponse`、`BudgetLimits`、`StandardObservation`、`DesktopAction`、`ApprovedAction`、`ToolContext`、`ToolReceipt` 与 `AgentResult`。工作上下文可持有完整工具结果和内存资源；审计投影只经 `summarize_data()` 生成。下面的 `ScreenMeta`、`Observation`、`ExecutionReceipt` 与旧 `AgentState` 代码块保留为早期路线图草案，未作为当前 Python API 实现，尤其不得据此把截图引用或原始输入写入归档。
 
 模型与数据层使用范围为 `[0.0, 1.0]` 的归一化坐标；执行层使用 Windows 虚拟桌面物理像素坐标。`ScreenMeta` 必须记录目标显示器在虚拟桌面中的矩形，因而允许 `left/top` 为负值；归一化坐标相对该显示器的捕获矩形计算。进程在首次截图或输入前设置 DPI awareness，`mss` 截图、UIA 边界框与 PyAutoGUI 输入统一以物理像素表示。模型可以输出元素 ID 或归一化坐标，但只有 Guard 能完成物理像素转换并生成 `ApprovedAction`。
 
@@ -308,47 +313,50 @@ class AgentState(BaseModel):
 
 授权窗口以 `HWND + PID + 已解析进程路径` 三元组标识；窗口标题仅作可读日志和二次匹配，不能单独作为放行依据。Guard 在生成 `ApprovedAction` 前及 Controller 实际输入前各验证一次三元组、窗口前台状态和元素/坐标有效性；两次校验任一不符即重新观察，不复用旧坐标。
 
-高影响动作进入 `WAITING_USER`：Guard 对规范化动作、窗口三元组、目标坐标、文本摘要和当前 `state_fingerprint` 计算 `approval_hash`，CLI 展示摘要并等待本地显式确认。确认仅对同一 `approval_hash` 有效，有效期 60 秒；确认后重新截图并再次执行 Guard，画面或窗口变化即失效。拒绝或超时不执行输入，分别记录 `POLICY_DENIED` 或 `TIMEOUT`。
+高影响动作进入 `WAITING_USER`：Guard 对规范化动作计算不可逆动作哈希并绑定当前 `state_fingerprint`，CLI 展示固定确认说明并等待本地显式确认。挂起态不保留截图、坐标或 `ApprovedAction`；用户恢复后必须重新观察并重新提出同一动作，确认哈希只允许该动作重新进入 Guard。新的批准默认仅有效 3 秒，执行前窗口、焦点、状态或时效任一不符都拒绝输入。
 
-默认参数写入 `configs/default.yaml`：最小动作间隔 200 ms、`step_timeout_s=20`、`task_timeout_s=300`、`max_steps=12`、相邻两帧状态指纹相同且变化区域占比小于 1% 时记为无进展。连续两次无进展依次触发重新观察和一次审慎重规划；第三次转 `WAITING_USER`，无人处理则失败。所有阈值均随轨迹归档。
+当前默认预算由 `BudgetLimits` 定义：模型轮次 12、工具调用 24、动作 12、格式纠正 1、恢复 3、重复等价调用 2、总时间 300 秒。相同状态与动作先重新观察，再允许一次审慎模型轮次，第三次转 `WAITING_USER` 或 `NO_PROGRESS`。独立 `configs/default.yaml` 仍属于后续配置外置路线图，当前不存在该文件。
 
 ## 5. 执行工作流与状态机
 
-每个任务按下列状态推进，任何异常均落到可审计的终态：
+当前实现以模型驱动“下一步选择”、程序控制路由的受控 ReAct 推进任务；任何异常均落到可审计终态：
 
 ```mermaid
 stateDiagram-v2
     [*] --> INIT
-    INIT --> OBSERVING
-    OBSERVING --> PLANNING: 截图与感知成功
-    PLANNING --> GUARDING: 得到合法 Action JSON
+    INIT --> REASONING
+    REASONING --> SUCCEEDED: 最终文本且目标可验证
+    REASONING --> TOOL_GATE: 一个结构化工具调用
+    TOOL_GATE --> EXECUTING_TOOL: 只读工具
+    EXECUTING_TOOL --> APPENDING_RESULT
+    APPENDING_RESULT --> REASONING
+    TOOL_GATE --> GUARDING: 一个原子桌面动作
     GUARDING --> ACTING: 策略放行
     GUARDING --> WAITING_USER: 高影响动作待确认
-    GUARDING --> FAILED: 策略拒绝
-    ACTING --> VERIFYING: 操作完成
-    VERIFYING --> SUCCEEDED: 成功条件满足
+    GUARDING --> APPENDING_RESULT: 策略拒绝或目标失效
+    ACTING --> OBSERVING: 操作完成
+    OBSERVING --> VERIFYING: 强制动作后观察
+    VERIFYING --> APPENDING_RESULT: 成功证据或失败证据
     VERIFYING --> RECOVERING: 失败、冲突或无进展
-    RECOVERING --> OBSERVING: 等待或重新观察
-    RECOVERING --> PLANNING: 切换审慎路径并重新规划
+    RECOVERING --> APPENDING_RESULT: 重观察或一次审慎轮次
     RECOVERING --> WAITING_USER: 需要登录、确认或人工处理
     RECOVERING --> FAILED: 超时、重复失败或达到预算
-    WAITING_USER --> OBSERVING: 用户处理完成
+    WAITING_USER --> REASONING: 用户消息恢复，旧资源与批准失效
     WAITING_USER --> ABORTED: 用户取消
-    INIT --> ABORTED: 用户停止
-    OBSERVING --> ABORTED: 用户停止
-    PLANNING --> ABORTED: 用户停止
+    REASONING --> FAILED: 模型或预算不可用
+    REASONING --> ABORTED: 用户停止
     ACTING --> ABORTED: Fail-safe 或用户停止
 ```
 
-1. CLI 创建唯一 `task_id`，记录启动环境、模型配置和任务文本。
-2. Perception 用 `mss` 捕获指定显示器并生成缩放后的模型图像，合并 PaddleOCR、可选 Windows UI Automation 和 OpenCV 结果；只有元素密集或定位歧义时才生成 Set-of-Mark 标注图。
-3. Perception 根据窗口标题、关键 OCR/UIA 状态和截图感知哈希计算 `state_fingerprint`，并输出相对上一帧的变化区域。
-4. Planner 使用“当前观察 + 精简历史 + 用户目标”生成**仅一个** `DesktopAction`。快速路径不展开长推理；存在歧义或恢复失败时才使用审慎路径。提示词要求优先引用元素 ID，其次使用归一化坐标，不允许编造不可见元素。
-5. Guard 检查动作种类、目标窗口、元素是否仍存在、坐标转换、黑名单区域、最小动作间隔、最大步数和确认要求。
-6. Controller 执行动作；每个动作前后写入时间戳、鼠标位置和截图引用。输入文本不写入明文日志，改记长度和 SHA-256 摘要。
-7. Verifier 按“任务专用功能谓词 → 窗口/UIA 状态 → OCR 目标文字 → 局部截图变化 → VLM 兜底”的顺序验证，不要求执行固定的标准动作序列。
-8. 若动作相同且连续两轮 `state_fingerprint` 基本不变，则进入 Recovery：第一次重新观察，第二次切换审慎路径重规划，第三次请求用户或失败退出。恢复动作仍须重新通过 Guard。
-9. 成功、失败或中止均生成 `result.json`，包括结果、验证证据、耗时、步数、失败码、截图索引和可复现实验配置。
+1. CLI 创建 `AgentRequest`；若存在 `WAITING_USER` 任务，则下一条消息恢复原任务而不是创建第二个桌面会话。
+2. `invoke_model` 接收任务消息与模型可见工具 schema。纯文本直接结束；一个 `tool_use` 进入工具门。普通问答不会预先截图。
+3. 工具门校验名称、Pydantic 输入、权限、阶段和预算。只读工具执行后把结果追加到任务消息；模型不能选择内部 Guard、执行、验证、恢复、归档或系统 API。
+4. 按需观察依次执行窗口发现、内存截图和 OCR；同一显示拓扑的后续帧只识别变化区域，无变化时复用上一帧 OCR。UIA、模板匹配和 SoM 不在默认观察链中。
+5. `desktop_action` 每次只允许一个原子动作。Guard 检查窗口三元组、状态指纹、DPI、物理坐标、按键白名单、时效和高影响分类；执行器再次检查焦点与批准。
+6. 每次动作后强制重观察。验证结果把执行、动作后观察和结构化证据组合为净化工具结果，再回填模型；执行回执或字符数本身不得判定成功。
+7. 状态指纹和不可逆参数摘要检测重复无进展；恢复依次为重新观察、至多一次审慎模型轮次、`WAITING_USER` 或失败，任何新动作仍重新经过 Guard。
+8. 模型轮次、工具、动作、格式纠正、恢复、重复调用与总时间各有独立硬预算。完成、等待用户、失败和取消路径均清理输入、任务资源和桌面锁。
+9. 终态只归档配置摘要、净化轨迹、验证哈希和结果；不归档截图、完整 OCR、输入文本或模型原始响应。
 
 ## 6. 安全与故障控制
 
@@ -359,8 +367,8 @@ stateDiagram-v2
 - 坐标必须落在目标显示器边界且不得位于配置的禁用区域；点击前移动鼠标并保留 200 ms 以上间隔。
 - PyAutoGUI `FAILSAFE=True`；鼠标移至屏幕角落或 Ctrl+Alt+Esc 触发 `ABORTED`。中止后立即释放按键和鼠标按键，不再重试。
 - “发送”“提交”“支付”“删除”“关闭未保存内容”等高影响动作标记 `requires_confirmation=True`，CLI 显示动作摘要并等待明确的本地确认；没有确认即拒绝执行。
-- 截图、OCR 文本与日志仅保存在本地任务目录；日志字段进行脱敏，禁止写入 API Key、Cookie、剪贴板内容或完整密码文本。
-- 真实桌面控制必须同时满足配置总开关和 CLI `--enable-desktop-control` 参数；默认模式只观察并输出候选动作。
+- 截图与完整 OCR 只存在于当前任务内存资源；归档只写入脱敏阶段、稳定错误码、哈希证据和最终状态，禁止写入 API Key、Cookie、剪贴板、输入文本或完整密码。
+- `max-agent` 默认装配桌面能力，不设置单独的 CLI 控制开关；任何输入仍必须经过模型可见工具白名单、Guard、桌面会话锁、执行前复核和高影响确认。
 - `DesktopSessionLock` 保证同一时刻只有一个任务控制真实桌面，并排除当前 CLI/终端窗口，防止 Agent 点击自己的宿主界面。
 - `InputStateCleanup` 在成功、失败、热键中止、异常和进程退出路径中统一释放鼠标按键与 Ctrl/Alt/Shift 等修饰键；清理失败写入独立高优先级日志。
 
@@ -438,7 +446,7 @@ tests/                       # 单元、集成和受控端到端测试
 artifacts/<task_id>/         # 运行期产物；加入 .gitignore
 ```
 
-工具/插件的稳定接口为 `invoke(input: ToolInput, context: AgentState) -> ToolReceipt`；其中 `invoke_model` 的输入包括观察、目标和历史，输出候选 `DesktopAction`。Qwen3.5 工具插件只负责加载 2B、4B 或 9B 的一个本地测试配置、构造多模态输入、调用 `generate()`、记录耗时/显存并解析响应；它不得下载模型、读取实时屏幕、推进任务状态或执行动作。`execute_action` 工具的稳定接口为 `execute(action: ApprovedAction) -> ExecutionReceipt`。Agent Orchestrator 只能通过 `tools/registry.py` 调用领域工具，工具之间不得直接串联高风险能力。
+工具/插件的稳定接口为 `invoke(input: ToolInput, context: ToolContext) -> ToolReceipt`；`ToolContext` 只暴露任务内存资源、阶段、预算、取消与净化事件能力。`invoke_model` 输入任务级消息、公开工具 schema、推理模式和按需图像引用，输出 `FinalTextResponse | ToolUseResponse`。本地模型插件只负责离线加载当前选择、构造输入、调用 `generate()` 并严格解析一段最终文本或一个工具调用；它不得下载模型、主动读取屏幕、推进任务状态或执行动作。`execute_action` 仅消费短时有效的 `ApprovedAction`。AgentRuntime 只能通过 `tools/registry.py` 调用领域工具，工具之间不得直接串联高风险能力。
 
 ## 9. 数据处理与评测设计
 
@@ -470,10 +478,10 @@ artifacts/<task_id>/         # 运行期产物；加入 .gitignore
 | 模型测试 | PyTorch CUDA、ModelScope 快照、本地单图推理 | BF16 GPU 运算成功；仅从本地快照生成有效动作 JSON |
 | 集成测试 | 截图→OCR、Guard→Controller、Verifier | 在受控窗口点击指定按钮后识别“完成”文字 |
 | 端到端测试 | 完整状态机、功能性验证、恢复和中止 | 重复动作触发恢复；热键中止后没有遗留按键状态 |
-| 安全测试 | 能力闸门、会话锁、窗口隔离和清理 | 默认不能控制桌面；并发任务不能获得第二把锁 |
+| 安全测试 | 能力闸门、会话锁、窗口隔离和清理 | 未经 Guard 不能控制桌面；并发任务不能获得第二把锁 |
 | 性能测试 | GPU/内存/延迟与稳定性 | 连续执行 10 个受控任务，无显存单调增长 |
 
-测试默认使用 mock Provider 和模拟/专用窗口；真实鼠标键盘集成测试须显式加 `--enable-desktop-control` 标志，CI 不执行真实桌面控制。
+测试默认使用 fake 模型和模拟/专用窗口；CI 不启动 `max-agent`，也不执行真实桌面控制。真实鼠标键盘集成验收必须在授权交互式 Windows 会话中使用专用未保存缓冲区和唯一测试标记，并显式记录脱敏证据。
 
 ## 11. 八周实施映射
 
@@ -522,7 +530,7 @@ PostgreSQL、Redis、消息队列等会注册服务、占用端口或持久化�
 
 环境文档必须提供 Python、GPU、PyTorch CUDA/BF16、ModelScope 小文件下载、本地单图推理、截图、OCR/UIA 和受控点击的验证命令。模型权重、缓存、截图和运行产物不提交 Git；配置中不包含真实密钥。
 
-每次实验至少归档 `config.yaml` 副本、`environment.json`、`trajectory.jsonl`、关键截图、`result.json`。最终 README 要能让新环境按步骤安装、选择本地 Qwen3.5-4B 模型、启动安全模式，并复现至少一个无副作用任务。
+每次实验至少归档 `config.yaml` 副本、`environment.json`、脱敏 `trajectory.jsonl` 与 `result.json`；截图和完整 OCR 不属于默认归档内容。最终 README 要能让新环境按步骤安装、选择本地 Qwen3.5 模型、准备离线 OCR 模型、启动受控 Agent，并复现至少一个无副作用任务。
 
 第 5–8 周的额外交付也必须可复现：训练阶段归档 `dataset_manifest.json`、数据划分哈希、训练配置、随机种子、基座与 LoRA 检查点哈希；评测阶段归档任务夹具版本、逐次结果、聚合统计与生成图表脚本。第 8 周交付的仓库不得包含模型权重、个人数据、真实截图、令牌或未获许可的数据；技术报告须区分已实测结果、对照实验结论与后续假设。
 

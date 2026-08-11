@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 from .artifacts import ExperimentArchive
@@ -16,8 +15,9 @@ from .console_core import (
 from .console_frontends import run_textual_chat
 from .diagnostics import default_probe, render_doctor, run_diagnostics
 from .local_llm import LocalChatRuntime, LocalRuntimeError
-from .orchestration.tool_calling import ReadOnlyToolExplainer, ToolSelectionError
-from .tools.registry import build_default_registry
+from .orchestration.graph import AgentRuntime
+from .orchestration.models import AgentRequest, RuntimeEvent
+from .runtime import build_agent_runtime
 
 
 def _repository_root() -> Path:
@@ -48,81 +48,50 @@ def _doctor(artifact_root: Path, *, desktop_probe: bool = False) -> int:
     return operation.exit_code
 
 
-def _interactive_dispatch(artifact_root: Path, runtime: LocalChatRuntime):
-    """组装 UI 无关的本地聊天分发器，并只发布经过净化的进度事件。"""
-    registry = build_default_registry()
+def _interactive_dispatch(
+    artifact_root: Path,
+    runtime: LocalChatRuntime,
+    agent_runtime: AgentRuntime | None = None,
+):
+    """仅在 CLI 适配层把现有控制台协议连接到完整 AgentRuntime。"""
+    agent = agent_runtime or build_agent_runtime(
+        _repository_root(),
+        artifact_root,
+        lambda: runtime.selected_model,
+    )
 
     def session_status() -> SessionStatus:
         """返回状态栏与 `/status` 命令共享的只读快照。"""
-        return SessionStatus(runtime.selected_model, runtime.state)
+        agent_state = "waiting_user" if agent.suspended_task_id else runtime.state
+        return SessionStatus(
+            runtime.selected_model,
+            agent_state,
+            "本地 · Agent Guard · 受控桌面 · 无网络",
+        )
 
     def chat(goal: str, emit: EventSink) -> str:
-        """完成一次可选只读工具循环，并将阶段状态报告给前端。"""
+        """一个 UI 请求内运行有限多轮 text-or-tool 循环，并只映射净化事件。"""
 
-        def report_runtime_state(state: str) -> None:
-            labels = {
-                "loading": "正在加载本地模型",
-                "generating": "正在生成本地回复",
-                "ready": "本地会话就绪",
-                "failed": "本地运行时失败",
-            }
-            emit(
-                ConsoleEvent(
-                    ConsoleEventKind.NOTICE,
-                    labels.get(state, state),
-                    state=state,
-                )
-            )
-
-        def select(
-            user_goal: str, tools: tuple[dict[str, object], ...]
-        ) -> dict[str, object]:
-            prompt = (
-                "Return only JSON with tool_name and arguments. Choose at most one "
-                "read-only tool when it is needed to answer the user; otherwise return "
-                f'{{"tool_name": null}}. User goal: {user_goal}. Tools: {json.dumps(tools)}'
-            )
-            try:
-                response = runtime.reply(prompt, report_runtime_state)
-                return json.JSONDecoder().raw_decode(response[response.find("{") :])[0]
-            except json.JSONDecodeError as error:
-                raise ToolSelectionError(
-                    "model returned an invalid tool selection"
-                ) from error
-
-        def explain(user_goal: str, observation: dict[str, object]) -> str:
-            failure = observation.get("tool_failure")
-            if failure is not None:
-                # 最终提示只携带工具层生成的白名单观察；要求先回应用户，且禁止递归工具调用。
-                prompt = "\n".join(
-                    (
-                        "继续回答用户的原始消息。一次只读工具尝试失败，但这不是对话终点。",
-                        "请理解净化后的失败原因，优先完成用户原始意图；必要时简要说明能力限制。",
-                        "不得请求或调用第二个工具，不得猜测未提供的参数、回执或异常细节。",
-                        f"用户原始消息：{user_goal}",
-                        f"净化失败观察：{json.dumps(failure, ensure_ascii=False)}",
+        def report(event: RuntimeEvent) -> None:
+            if event.phase == "reason":
+                labels = {
+                    "running": "Agent 正在判断下一步",
+                    "succeeded": "Agent 已完成本轮判断",
+                    "failed": "Agent 本轮判断失败",
+                }
+                emit(
+                    ConsoleEvent(
+                        ConsoleEventKind.NOTICE, labels[event.state], state=event.state
                     )
                 )
-                return runtime.reply(prompt, report_runtime_state)
-            image = observation.get("image")
-            return (
-                runtime.explain_image(user_goal, image, report_runtime_state)
-                if image is not None
-                else runtime.reply(user_goal, report_runtime_state)
+                return
+            emit(
+                ConsoleEvent.tool(
+                    event.tool_name or event.phase, event.state, event.elapsed_seconds
+                )
             )
 
-        return (
-            ReadOnlyToolExplainer(
-                registry,
-                select,
-                explain,
-                on_tool_event=lambda name, state, elapsed: emit(
-                    ConsoleEvent.tool(name, state, elapsed)
-                ),
-            )
-            .run(goal)
-            .text
-        )
+        return agent.run(AgentRequest(user_goal=goal), report).response_text
 
     def model_operation(model_name: str | None) -> OperationResult:
         if model_name is None:
@@ -152,6 +121,8 @@ def _interactive_dispatch(artifact_root: Path, runtime: LocalChatRuntime):
             return OperationResult(
                 "model_error", (ConsoleEvent(ConsoleEventKind.ERROR, str(error)),)
             )
+        # Agent 模型会话与挂起任务必须随模型切换一起失效，避免跨模型复用旧批准语境。
+        agent.clear()
         return OperationResult(
             "model",
             (
@@ -181,17 +152,26 @@ def _interactive_dispatch(artifact_root: Path, runtime: LocalChatRuntime):
             ),
         )
 
+    def clear_session() -> None:
+        """保持既有 `/clear` 展示语义，同时清除两个彼此隔离的模型上下文。"""
+        runtime.clear_history()
+        agent.clear()
+
     def dispatch(value: str, emit: EventSink | None = None) -> OperationResult:
         """分发一条输入；进度回调为空时仍可用于同步单元测试。"""
-        return dispatch_input(
+        result = dispatch_input(
             value,
             doctor=lambda: _doctor_operation(artifact_root),
             chat=chat,
             model=model_operation,
-            clear=runtime.clear_history,
+            clear=clear_session,
             status=status_operation,
             emit=emit,
         )
+        if result.should_exit:
+            agent.clear()
+            runtime.clear_history()
+        return result
 
     return dispatch, session_status
 

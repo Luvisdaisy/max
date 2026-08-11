@@ -1,11 +1,18 @@
-"""Set-of-Mark 标注工具：为调用方提供的图像标记候选区域。"""
+"""Set-of-Mark 工具：只处理任务内图像并返回新的资源引用。"""
 
 from __future__ import annotations
 
 from PIL import Image, ImageDraw
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from max_agent.tools.base import ToolReceipt
+from max_agent.orchestration.resources import ResourceError, ResourceRef
+from max_agent.tools.base import (
+    ToolContext,
+    ToolFailureCode,
+    ToolPermission,
+    ToolPhase,
+    ToolReceipt,
+)
 
 
 class SomMark(BaseModel):
@@ -19,18 +26,49 @@ class SomMark(BaseModel):
 class AnnotateSomInput(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    image: Image.Image
+    image_ref: ResourceRef | None = None
+    image: Image.Image | None = None
     marks: list[SomMark]
+
+    @model_validator(mode="after")
+    def require_source(self) -> "AnnotateSomInput":
+        if (self.image_ref is None) == (self.image is None):
+            raise ValueError("provide exactly one image_ref or image")
+        return self
 
 
 class AnnotateSomTool:
-    """生成标注结果，但不执行点击、输入或其他桌面控制操作。"""
-
     name = "annotate_som"
+    description = "Annotate candidate regions in a task image."
+    permission = ToolPermission.OBSERVE
+    allowed_phases = frozenset({ToolPhase.TOOL})
+    timeout_seconds = 15.0
+    recoverable = True
+    model_visible = True
+    side_effect = False
+    read_only = True
     input_model = AnnotateSomInput
 
-    def invoke(self, tool_input: AnnotateSomInput) -> ToolReceipt:
-        annotated = tool_input.image.convert("RGB").copy()
+    def invoke(
+        self, tool_input: AnnotateSomInput, context: ToolContext | None = None
+    ) -> ToolReceipt:
+        try:
+            image = tool_input.image or (
+                context.resources.get(tool_input.image_ref, context.task_id, "image")
+                if context is not None and tool_input.image_ref is not None
+                else None
+            )
+        except ResourceError as error:
+            return ToolReceipt.failure(
+                self.name, ToolFailureCode.INVALID_INPUT, str(error)
+            )
+        if image is None:
+            return ToolReceipt.failure(
+                self.name,
+                ToolFailureCode.INVALID_INPUT,
+                "image_ref requires task context",
+            )
+        annotated = image.convert("RGB").copy()
         draw = ImageDraw.Draw(annotated)
         annotations: list[dict[str, object]] = []
         for mark in tool_input.marks:
@@ -48,8 +86,11 @@ class AnnotateSomTool:
                     },
                 }
             )
-        return ToolReceipt(
-            tool_name=self.name,
-            success=True,
-            data={"image": annotated, "annotations": annotations},
-        )
+        data: dict[str, object] = {"annotations": annotations}
+        if context is None:
+            data["image"] = annotated
+        else:
+            data["image_ref"] = context.resources.put(
+                context.task_id, "image", annotated
+            ).model_dump()
+        return ToolReceipt(tool_name=self.name, success=True, data=data)
