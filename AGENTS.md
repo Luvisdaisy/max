@@ -4,7 +4,7 @@
 
 ## 项目是什么
 
-`max-gui` 是基于本地模型的多模态 ReAct GUI Agent CLI。已落地：Textual REPL、LangGraph ReAct、OpenAI 兼容 vLLM 客户端（开发默认 `model/qwen3.5-2b`）、工作区文件/搜索/沙箱 Python 工具、PyAutoGUI 桌面工具（截图回注、移鼠、点按、拖拽、`keyboard_type` / `keyboard_press`），以及 `artifacts/sessions/` 下按时间戳命名的 JSON 会话。桌面调研记录见 `docs/gui-tools.md`。
+`max-gui` 是基于本地模型的多模态 ReAct GUI Agent CLI。已落地：Textual REPL、LangGraph ReAct、OpenAI 兼容 vLLM 客户端（开发默认 `model/qwen3.5-4b`，可切 `2b` / `9b`）、工作区文件/搜索工具、PyAutoGUI 桌面工具（截图回注、移鼠、点按、拖拽、滚轮、`keyboard_type` / `keyboard_press`；鼠标坐标按模型看见的视图像素换算，坐标系写入会话以免跨回合丢失）、整图 `ocr` 与文字定位 `ocr_locate`（首次调用再拉起独立 PaddleOCR-VL-1.5，失败回退 transformers，再失败则跳过），以及 `artifacts/sessions/` 下按时间戳命名的 JSON 会话。桌面调研记录见 `docs/gui-tools.md`。
 
 ## 语言
 
@@ -22,7 +22,7 @@
 
 1. **探索**（可选）：需求不清时用 `openspec-explore`，先对齐再写变更。
 2. **提案**：用 `openspec-propose` 生成 change，至少包含 `proposal.md`、`design.md`、`specs/`、`tasks.md`。
-3. **实现**：用 `openspec-apply-change` 按 `tasks.md` 逐项实现，完成后立刻把对应任务标为 `[x]`。
+3. **实现**：提案产物齐备后，同一轮立刻用 `openspec-apply-change` 按 `tasks.md` 逐项实现，完成后立刻把对应任务标为 `[x]`。不要停下来等人再发「开始实现」或 `/opsx:apply`。用户当轮明确说只要提案、先不要改代码时除外。
 4. **归档**：实现完成后用 `openspec-archive-change` 归档到 `openspec/changes/archive/`。禁止删除变更记录。归档后立刻同步更新项目级说明文件，但不额外需要记录具体的归档信息。
 
 约束：
@@ -90,6 +90,7 @@ Ruff 是唯一的格式化与 lint 工具，配置在 `pyproject.toml` 的 `[too
 - 行宽 100，双引号，4 空格缩进，换行用 LF。
 - 代码标识符用英文；用户可见文案与文档用中文，中文标点保持全角。
 - 公开函数与模块级 API 使用类型标注；测试夹具与一次性回调不必为过关而堆注解。
+- 所有代码必须按下方「中文代码文档」补齐说明；缺文档视为未完成。
 - 完成实现后必须运行：
 
 ```
@@ -98,6 +99,22 @@ uv run ruff check src tests
 ```
 
 - 只在规则误报或有意违反时写 `# noqa`，并写明规则码。不要为未启用的规则留 noqa。
+
+## 中文代码文档
+
+本仓库所有 Python 代码必须具备完善的中文文档。标识符仍用英文；说明一律中文，中文标点全角。没有对应说明的新增或改动视为未完成。
+
+最低要求：
+
+- 每个 `.py` 模块在文件开头写模块级 docstring：职责、对外入口、关键约束。
+- 每个类、函数、方法在定义处（签名正下方）写中文 docstring，覆盖：做什么、参数含义、返回值、可能抛出的异常、非显而易见的副作用。
+- 包 `__init__.py` 说明该包职责，并点明再导出的公开符号。
+- 私有函数（`_` 前缀）若逻辑不是一眼能懂，同样写 docstring；一行辅助可用单行说明。
+- 协议 / 抽象方法也要在签名处写清契约，不能只靠类型注解。
+- 行内 `#` 注释只解释「为什么」或非显而易见的约束，不复述代码在做什么。
+- 测试文件写模块说明与用例意图；夹具说明提供什么、为何这样构造。
+- 新增或修改代码时同步更新文档；禁止留下与实现不符的 docstring。
+- 用简洁中文段落，必要时用「参数 / 返回 / 异常」列表。不要套用英文 Google / NumPy 模板套话。
 
 ## 实现时
 

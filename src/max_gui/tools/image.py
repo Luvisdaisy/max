@@ -1,3 +1,5 @@
+"""工作区图像校验工具：缩放后报告 data URL 长度，供模型确认附件可用。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,15 +11,23 @@ from max_gui.tools.protocol import Tool, ToolError
 
 
 def image_tool(workspace: Path, settings: Settings) -> Tool:
+    """构造 `prepare_image` 工具。
+
+    参数：
+        workspace: 图像必须位于此根下。
+        settings: 提供 `max_image_edge` / `max_image_bytes`。
+    """
+
     async def prepare(args: dict) -> str:
+        """校验并缩放工作区图像。参数：`path`。"""
         path = resolve_workspace_path(workspace, str(args.get("path") or ""))
         try:
-            part = prepare_image(
+            prepared = prepare_image(
                 path, max_edge=settings.max_image_edge, max_bytes=settings.max_image_bytes
             )
         except ImagePrepError as exc:
             raise ToolError(str(exc)) from exc
-        url = part["image_url"]["url"]
+        url = prepared.part["image_url"]["url"]
         return f"已预处理图像 {path.name}，data URL 长度 {len(url)}"
 
     return Tool(

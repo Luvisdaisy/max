@@ -1,3 +1,5 @@
+"""共享夹具：在临时目录构造带占位权重的 `Settings`。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,6 +11,7 @@ from max_gui.config import Settings
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
+    """隔离工作区、会话目录与假 `qwen3.5-2b` 权重，推理端口指向不可达地址。"""
     workspace = tmp_path / "work"
     workspace.mkdir()
     sessions = tmp_path / "artifacts" / "sessions"

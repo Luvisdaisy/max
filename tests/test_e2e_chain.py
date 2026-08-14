@@ -1,3 +1,5 @@
+"""端到端：Enter 经 stub 推理服务落到会话 JSON。"""
+
 from __future__ import annotations
 
 import json
@@ -10,8 +12,11 @@ from max_gui.widgets.prompt import PromptInput
 
 
 def _start_stub() -> tuple[ThreadingHTTPServer, str]:
+    """启动本机流式 chat 桩，返回 `(server, base_url)`。"""
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
+            """返回假的 `/v1/models` 列表。"""
             if self.path.startswith("/v1/models"):
                 body = json.dumps({"data": [{"id": "qwen3.5-2b"}]}).encode()
                 self.send_response(200)
@@ -23,6 +28,7 @@ def _start_stub() -> tuple[ThreadingHTTPServer, str]:
             self.send_error(404)
 
         def do_POST(self) -> None:
+            """忽略请求体，流式返回固定「链路通了」。"""
             length = int(self.headers.get("Content-Length") or 0)
             _ = self.rfile.read(length)
             chunks = [
@@ -41,6 +47,7 @@ def _start_stub() -> tuple[ThreadingHTTPServer, str]:
             self.wfile.write(raw)
 
         def log_message(self, format: str, *args: object) -> None:
+            """静默访问日志，避免污染 pytest 输出。"""
             return
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -51,6 +58,7 @@ def _start_stub() -> tuple[ThreadingHTTPServer, str]:
 
 
 async def test_enter_to_session_json_via_stub(settings: Settings) -> None:
+    """在 TUI 按 Enter 后，用户输入与助手回复写入会话文件。"""
     server, base_url = _start_stub()
     try:
         settings.base_url = base_url

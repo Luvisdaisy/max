@@ -12,10 +12,13 @@
 | `screenshot` | 全屏或区域截图，把图送回下一轮 `think` | 否 |
 | `screen_info` | 返回逻辑分辨率与当前鼠标坐标 | 否 |
 | `mouse_move` | 移动指针到 `(x, y)` | 否 |
-| `mouse_click` | 单击 / 双击 / 右键，可选先移动 | 是 |
+| `mouse_click` | 单击 / 双击 / 右键，可选先移动或按 `target_id` | 是 |
 | `mouse_drag` | 从一点拖到另一点 | 是 |
+| `mouse_scroll` | 滚轮，正数向上 | 是 |
 | `keyboard_type` | 向当前焦点输入文本 | 是 |
 | `keyboard_press` | 按下单个键或组合键 | 是 |
+| `ocr` | 整图文字识别 | 否 |
+| `ocr_locate` | 文字行框 + 编号中心点 | 否 |
 
 截图必须作为多模态 `image_url` 回到模型，不能只回一个文件路径字符串。否则 2B VL 模型看不见屏幕，后续点哪里只能猜。
 
@@ -23,7 +26,7 @@
 
 ## 现状
 
-已有工具全是工作区沙箱：`read_file` / `write_file` / `list_dir` / `search_files` / `run_python` / `prepare_image`。第一版 OpenSpec 明确不做完整 OS 自动化。
+调研当时工作区工具是：`read_file` / `write_file` / `list_dir` / `search_files` / `run_python` / `prepare_image`。第一版 OpenSpec 明确不做完整 OS 自动化。`run_python` 已在 `2026-08-14-remove-run-python-tool` 删除，默认注册表不再暴露代码执行。
 
 做成 GUI Agent 缺三块：
 
@@ -41,7 +44,7 @@
 - 坐标系是**逻辑像素**。Retina 上截图像素可能是逻辑分辨率的 2 倍。模型若按截图像素点坐标，再拿去 `moveTo`，会点偏。工具层必须统一成逻辑坐标，并在 `screenshot` / `screen_info` 的返回里写明 `scale`。
 - `locateOnScreen` 依赖 OpenCV，定位也不稳，第一批不要做「按图找按钮」。让 VL 模型看图给坐标。
 - 调用是同步阻塞。`invoke` 里用 `asyncio.to_thread`，避免卡住 Textual 事件循环。
-- 不要让模型通过 `run_python` 直接 `import pyautogui`。GUI 工具落地后，`run_python` 应继续只做工作区脚本，或显式禁止导入桌面控制库。
+- 不要让模型通过任意代码执行直接 `import pyautogui`。`run_python` 后来已整工具删除，桌面操作只走桌面工具。
 
 备选（本阶段不采用）：`pynput` 无截图；`mss` 截图更快但键鼠还得另接；macOS 原生 Quartz / AppleScript 能力更强，但会拆成两套 API。第一批保持一个库。
 
@@ -192,10 +195,11 @@ think → screenshot → 最终文本回答
 
 - 按窗口标题切换、枚举控件树、无障碍 API 点按钮
 - 浏览器专用 CDP / Playwright（那是另一类 Agent）
-- 屏幕录像、OCR 工具（VL 模型自己看图）
+- 屏幕录像
+- 表格 / 公式 / 图表 / 印章任务与真控件检测（整图 `ocr` 与文字行 `ocr_locate` 已落地，见 `openspec/specs/ocr-tool/`）
 - Windows / Linux 一等支持
 - 把 vLLM 或 TUI 嵌进被控 GUI 进程
 
 ## 落地状态
 
-上述内容已由 OpenSpec change `desktop-pyautogui-tools` 实现并归档。本文件保留为调研记录，行为以 `openspec/specs/` 为准。
+上述桌面工具已由 OpenSpec change `desktop-pyautogui-tools` 实现并归档。整图 `ocr` 由 `add-ocr-tool` 落地。滚轮、文字定位与视图像素换算由 `add-scroll-locate-and-view-coords` 落地。本文件保留为调研记录，行为以 `openspec/specs/` 为准。

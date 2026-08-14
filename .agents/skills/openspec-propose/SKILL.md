@@ -16,7 +16,7 @@ I'll create a change with artifacts:
 - design.md (how)
 - tasks.md (implementation steps)
 
-When ready to implement, run /opsx:apply
+After all artifacts are ready, immediately apply the change in the same turn (do not wait for /opsx:apply).
 
 ---
 
@@ -79,18 +79,25 @@ When ready to implement, run /opsx:apply
       - Use **AskUserQuestion tool** to clarify
       - Then continue with creation
 
-5. **Show final status**
+5. **Show brief status, then apply immediately**
    ```bash
    openspec status --change "<name>"
    ```
 
-**Output**
+   Unless the user explicitly asked to stop at the proposal (only artifacts, no code), continue in the same turn:
+   - Follow `.agents/skills/openspec-apply-change/SKILL.md`
+   - Implement every pending task in `tasks.md` and mark each `[x]` as you finish
+   - Do not ask "要不要开始实现" or tell the user to run `/opsx:apply`
 
-After completing all artifacts, summarize:
+**Output after artifacts (before apply)**
+
+Announce briefly:
 - Change name and location
-- List of artifacts created with brief descriptions
-- What's ready: "All artifacts created! Ready for implementation."
-- Prompt: "Run `/opsx:apply` or ask me to implement to start working on the tasks."
+- That implementation is starting now in this turn
+
+**Output after apply**
+
+Follow the apply skill's completion or pause format. Do not end on "Ready for implementation."
 
 **Artifact Creation Guidelines**
 
@@ -108,3 +115,4 @@ After completing all artifacts, summarize:
 - If context is critically unclear, ask the user - but prefer making reasonable decisions to keep momentum
 - If a change with that name already exists, ask if user wants to continue it or create a new one
 - Verify each artifact file exists after writing before proceeding to next
+- After artifacts are complete, apply in the same turn unless the user forbade implementation

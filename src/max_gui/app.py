@@ -1,3 +1,5 @@
+"""Textual REPL：会话历史、流式输出、斜杠命令与桌面/工作区确认。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,6 +16,7 @@ from max_gui.agent.graph import AgentRunner
 from max_gui.config import Settings, UnknownModelError, load_settings, resolve_model_alias
 from max_gui.inference.client import ConnectionFailedError, InferenceClient
 from max_gui.inference.images import SUPPORTED_SUFFIXES, ImagePrepError
+from max_gui.inference.ocr import shutdown_owned_ocr
 from max_gui.session.store import Session, SessionStore
 from max_gui.tools.protocol import ConfirmationGate, ConfirmationScope
 from max_gui.tools.registry import ToolRegistry, build_default_registry
@@ -21,12 +24,16 @@ from max_gui.widgets.prompt import PromptInput, PromptSubmitted
 
 
 class ConfirmScreen(ModalScreen[bool]):
+    """模态确认：允许或拒绝即将执行的工具。"""
+
     def __init__(self, tool_name: str, arguments: dict[str, Any]) -> None:
+        """参数：`tool_name` 与最多预览前四个参数。"""
         super().__init__()
         self.tool_name = tool_name
         self.arguments = arguments
 
     def compose(self) -> ComposeResult:
+        """渲染工具名、参数摘要与允许/拒绝按钮。"""
         preview = ", ".join(f"{key}={value!r}" for key, value in list(self.arguments.items())[:4])
         yield Vertical(
             Label(f"允许执行 {self.tool_name}？"),
@@ -39,11 +46,15 @@ class ConfirmScreen(ModalScreen[bool]):
         )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        """「允许」关闭为 `True`，否则 `False`。"""
         self.dismiss(event.button.id == "yes")
 
 
 class TuiConfirmationGate:
+    """按会话开关自动批准，否则弹出 `ConfirmScreen`。"""
+
     def __init__(self, app: MaxGuiApp) -> None:
+        """参数：`app` 用于读会话开关并 `push_screen_wait`。"""
         self.app = app
 
     async def confirm(
@@ -52,6 +63,7 @@ class TuiConfirmationGate:
         arguments: dict[str, Any],
         scope: ConfirmationScope = "workspace",
     ) -> bool:
+        """桌面看 `auto_approve_desktop`，工作区看 `auto_approve`。"""
         session = self.app.session
         if session is not None:
             if scope == "desktop" and session.auto_approve_desktop:
@@ -62,6 +74,8 @@ class TuiConfirmationGate:
 
 
 class MaxGuiApp(App[None]):
+    """主界面：历史日志、流式助手区、待发送附件与多行输入。"""
+
     TITLE = "max-gui"
     CSS = """
     #transcript { height: 1fr; border: solid $accent; }
@@ -76,6 +90,7 @@ class MaxGuiApp(App[None]):
     ]
 
     def __init__(self, settings: Settings, *, force_new: bool = False) -> None:
+        """参数：`force_new` 为真时不恢复最近会话。"""
         super().__init__()
         self.settings = settings
         self.force_new = force_new
@@ -87,6 +102,7 @@ class MaxGuiApp(App[None]):
         self._stream_text = ""
 
     def compose(self) -> ComposeResult:
+        """自上而下：标题、历史、实时流、待附件、输入、状态、页脚。"""
         yield Header()
         yield RichLog(id="transcript", highlight=True, markup=True, wrap=True)
         yield Static("", id="live", markup=False)
@@ -96,6 +112,7 @@ class MaxGuiApp(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        """打开或创建会话、重建 Runner，并渲染历史。"""
         self.session = self.store.open_or_create(
             model=self.settings.canonical_model, force_new=self.force_new
         )
@@ -106,18 +123,22 @@ class MaxGuiApp(App[None]):
         self._set_status(f"会话 {self.session.id} · 模型 {self.settings.canonical_model}")
 
     def _rebuild_runner(self) -> None:
+        """按当前设置重建工具表、推理客户端与 `AgentRunner`。"""
         gate: ConfirmationGate = TuiConfirmationGate(self)
         registry: ToolRegistry = build_default_registry(self.settings, gate=gate)
         client = InferenceClient(self.settings)
         self.runner = AgentRunner(self.settings, client, registry, self.store)
 
     def _log(self) -> RichLog:
+        """历史记录控件。"""
         return self.query_one("#transcript", RichLog)
 
     def _set_status(self, text: str) -> None:
+        """更新底部状态栏。"""
         self.query_one("#status", Static).update(text)
 
     def _refresh_pending(self) -> None:
+        """刷新待发送附件文件名列表。"""
         if not self.pending_images:
             self.query_one("#pending", Static).update("")
             return
@@ -125,6 +146,7 @@ class MaxGuiApp(App[None]):
         self.query_one("#pending", Static).update(f"待发送附件：{names}")
 
     def _render_session(self) -> None:
+        """清空并重绘当前会话全部消息。"""
         log = self._log()
         log.clear()
         self._clear_live_stream()
@@ -136,6 +158,7 @@ class MaxGuiApp(App[None]):
             self._write_message(message.role, message.content)
 
     def _write_message(self, role: str, content: dict[str, Any] | str) -> None:
+        """按角色写入一条历史。图像缺失时标「缺失附件」。"""
         payload = content if isinstance(content, dict) else {"text": str(content)}
         text = str(payload.get("text") or "")
         images = payload.get("images") or []
@@ -154,12 +177,14 @@ class MaxGuiApp(App[None]):
             self._log().write(f"[bold green]助手[/bold green] {text}{suffix}")
 
     def on_prompt_submitted(self, event: PromptSubmitted) -> None:
+        """清空输入框并在后台处理提交文本。"""
         text = event.text
         prompt = self.query_one(PromptInput)
         prompt.clear()
         self.run_worker(self._handle_submit(text), exclusive=False, group="turn")
 
     async def _handle_submit(self, raw: str) -> None:
+        """斜杠走命令；空行忽略；回合进行中拒绝新输入。"""
         text = raw.strip()
         if text.startswith("/"):
             await self._handle_command(text)
@@ -172,6 +197,7 @@ class MaxGuiApp(App[None]):
         await self._run_turn(text)
 
     async def _handle_command(self, raw: str) -> None:
+        """分发 `/quit` `/new` `/sessions` `/attach` `/model` `/interrupt`。"""
         parts = raw.split(maxsplit=1)
         name = parts[0].lower()
         arg = parts[1].strip() if len(parts) > 1 else ""
@@ -205,6 +231,7 @@ class MaxGuiApp(App[None]):
         self._log().write(f"[red]未知命令：{name}[/red]")
 
     async def _cmd_sessions(self, arg: str) -> None:
+        """无参数列出会话；有参数则切换到该编号。"""
         if arg:
             session = self.store.get(arg)
             if session is None:
@@ -227,6 +254,7 @@ class MaxGuiApp(App[None]):
         self._log().write("\n".join(lines))
 
     def _cmd_attach(self, arg: str) -> None:
+        """把本地图像加入下一回合附件队列。"""
         if not arg:
             self._log().write("[red]用法：/attach <路径>[/red]")
             return
@@ -242,6 +270,7 @@ class MaxGuiApp(App[None]):
         self._log().write(f"[dim]已附加 {path.name}[/dim]")
 
     def _cmd_model(self, arg: str) -> None:
+        """无参数显示当前模型；有参数则切换并重建 Runner。"""
         if not arg:
             self._log().write(f"当前模型：{self.settings.canonical_model}")
             return
@@ -258,6 +287,7 @@ class MaxGuiApp(App[None]):
         self._log().write(f"[dim]后续请求将使用 {canonical}[/dim]")
 
     async def _run_turn(self, text: str) -> None:
+        """跑一轮 Agent，流式更新 `#live`，结束后写入历史并刷新会话。"""
         assert self.session is not None
         assert self.runner is not None
         images = [str(path) for path in self.pending_images]
@@ -312,15 +342,18 @@ class MaxGuiApp(App[None]):
             self.session = self.store.get(self.session.id) or self.session
 
     def _live(self) -> Static:
+        """流式助手文本控件。"""
         return self.query_one("#live", Static)
 
     def _clear_live_stream(self) -> None:
+        """清空并隐藏流式区域。"""
         self._stream_text = ""
         live = self._live()
         live.update("")
         live.display = False
 
     def _refresh_live_stream(self) -> None:
+        """把累计 token 画到 `#live`。"""
         live = self._live()
         if not self._stream_text:
             live.update("")
@@ -330,25 +363,33 @@ class MaxGuiApp(App[None]):
         live.display = True
 
     def _flush_live_stream(self) -> None:
+        """把流式文本落成一条历史消息并清空 `#live`。"""
         text = self._stream_text
         if text:
             self._write_message("assistant", {"text": text})
         self._clear_live_stream()
 
     def _append_token(self, token: str, started: bool) -> None:
+        """在 UI 线程追加一个 token。`started` 为假表示本回合第一条。"""
         if not started:
             self._stream_text = token
         else:
             self._stream_text += token
         self._refresh_live_stream()
 
+    def on_unmount(self) -> None:
+        """退出时尽量停掉本进程拉起的 OCR 子进程。"""
+        shutdown_owned_ocr()
+
     def action_interrupt_or_quit(self) -> None:
+        """Ctrl+C：回合中中断，否则退出。"""
         if self._turn_active and self.runner:
             self.runner.interrupt()
             return
         self.exit()
 
     def on_paste(self, event) -> None:
+        """粘贴内容若是支持的图像路径，则加入附件而不写入输入框。"""
         text = getattr(event, "text", "") or ""
         path = Path(text.strip())
         if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES:
@@ -358,5 +399,6 @@ class MaxGuiApp(App[None]):
 
 
 def run_app(settings: Settings | None = None, *, force_new: bool = False) -> None:
+    """阻塞启动 Textual 应用。`settings` 缺省则 `load_settings()`。"""
     app = MaxGuiApp(settings or load_settings(), force_new=force_new)
     app.run()

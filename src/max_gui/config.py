@@ -1,10 +1,12 @@
+"""运行时配置：模型别名、路径探测、环境变量与权重校验。"""
+
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-DEFAULT_MODEL_ALIAS = "qwen3.5-2b"
+DEFAULT_MODEL_ALIAS = "qwen3.5-4b"
 
 # 产品别名 -> 规范目录名（位于 model/ 下）
 MODEL_ALIASES: dict[str, str] = {
@@ -27,21 +29,29 @@ MODELSCOPE_IDS: dict[str, str] = {
 
 
 class UnknownModelError(ValueError):
-    pass
+    """用户给出的模型别名不在 `MODEL_ALIASES` 中。"""
 
 
 class MissingWeightsError(FileNotFoundError):
+    """本地权重目录不完整，提示先执行下载命令。"""
+
     def __init__(self, alias: str, download_cmd: str) -> None:
+        """参数：`alias` 规范模型名；`download_cmd` 建议用户执行的命令。"""
         self.alias = alias
         self.download_cmd = download_cmd
         super().__init__(f"模型权重缺失：{alias}。请先运行：{download_cmd}")
 
 
 DEFAULT_VLLM_BIN = Path.home() / ".venv-vllm-metal" / "bin" / "vllm"
+DEFAULT_OCR_MODEL = "paddleocr-vl-1.5"
+DEFAULT_OCR_BASE_URL = "http://127.0.0.1:8001/v1"
 
 
 class MissingVllmError(FileNotFoundError):
+    """找不到独立 vLLM 可执行文件。"""
+
     def __init__(self) -> None:
+        """文案提示激活 `~/.venv-vllm-metal` 或设置 `MAX_GUI_VLLM`。"""
         super().__init__(
             "找不到 vLLM 可执行文件。请先 `source ~/.venv-vllm-metal/bin/activate`，"
             "或设置 MAX_GUI_VLLM 指向 vllm 二进制"
@@ -50,6 +60,14 @@ class MissingVllmError(FileNotFoundError):
 
 
 def detect_project_root() -> Path:
+    """推断仓库根目录。
+
+    优先 `MAX_GUI_ROOT`；否则在当前目录与本文件祖先中找同时含 `model/`
+    与 `pyproject.toml` 的路径，再退化为仅含 `model/`，最后用 cwd。
+
+    返回：
+        解析后的根路径。
+    """
     env = os.environ.get("MAX_GUI_ROOT")
     if env:
         return Path(env).expanduser().resolve()
@@ -66,6 +84,17 @@ def detect_project_root() -> Path:
 
 
 def resolve_model_alias(raw: str) -> str:
+    """把产品别名规范成 `model/` 下的目录名。
+
+    参数：
+        raw: 如 `2b`、`qwen2b`、`qwen3.5-2b`。
+
+    返回：
+        规范目录名。
+
+    异常：
+        UnknownModelError: 别名未知。
+    """
     key = raw.strip().lower()
     if key not in MODEL_ALIASES:
         known = ", ".join(sorted(set(MODEL_ALIASES.values())))
@@ -74,12 +103,18 @@ def resolve_model_alias(raw: str) -> str:
 
 
 def download_command(alias: str) -> str:
+    """生成下载该别名的 CLI 提示，例如 `max-gui download qwen3.5-2b`。"""
     canonical = resolve_model_alias(alias)
     return f"max-gui download {canonical}"
 
 
 @dataclass(slots=True)
 class Settings:
+    """一次运行所需的路径、推理端点与限制。
+
+    字段由 `load_settings` 从环境变量填充；`with_model` 只替换模型别名。
+    """
+
     base_url: str = "http://127.0.0.1:8000/v1"
     api_key: str = "EMPTY"
     model_alias: str = DEFAULT_MODEL_ALIAS
@@ -95,34 +130,29 @@ class Settings:
     max_model_len: int = 8192
     gpu_memory_utilization: float = 0.85
     dtype: str = "auto"
+    ocr_base_url: str = DEFAULT_OCR_BASE_URL
+    ocr_start_timeout: float = 180.0
+    ocr_timeout: float = 120.0
+    ocr_gpu_memory_utilization: float = 0.20
 
     @property
     def canonical_model(self) -> str:
+        """当前别名对应的规范模型目录名。"""
         return resolve_model_alias(self.model_alias)
 
     @property
     def model_path(self) -> Path:
+        """本地权重目录：`model_root / canonical_model`。"""
         return self.model_root / self.canonical_model
 
+    @property
+    def ocr_model_path(self) -> Path:
+        """PaddleOCR-VL 权重目录：`model_root / paddleocr-vl-1.5`。"""
+        return self.model_root / DEFAULT_OCR_MODEL
+
     def with_model(self, alias: str) -> Settings:
-        canonical = resolve_model_alias(alias)
-        return Settings(
-            base_url=self.base_url,
-            api_key=self.api_key,
-            model_alias=canonical,
-            project_root=self.project_root,
-            workspace=self.workspace,
-            sessions_dir=self.sessions_dir,
-            screenshots_dir=self.screenshots_dir,
-            model_root=self.model_root,
-            max_iterations=self.max_iterations,
-            max_image_edge=self.max_image_edge,
-            max_image_bytes=self.max_image_bytes,
-            tool_timeout=self.tool_timeout,
-            max_model_len=self.max_model_len,
-            gpu_memory_utilization=self.gpu_memory_utilization,
-            dtype=self.dtype,
-        )
+        """返回只替换模型别名为规范名的新配置。"""
+        return replace(self, model_alias=resolve_model_alias(alias))
 
 
 def load_settings(
@@ -132,6 +162,23 @@ def load_settings(
     sessions_dir: Path | None = None,
     base_url: str | None = None,
 ) -> Settings:
+    """从参数与环境变量组装 `Settings`。
+
+    环境变量：`MAX_GUI_MODEL`、`MAX_GUI_BASE_URL`、`MAX_GUI_API_KEY`、
+    `MAX_GUI_WORKSPACE`、`MAX_GUI_MAX_ITERATIONS`、`MAX_GUI_MAX_IMAGE_*`、
+    `MAX_GUI_TOOL_TIMEOUT`、`MAX_GUI_MAX_MODEL_LEN`、`MAX_GUI_GPU_MEM`、
+    `MAX_GUI_DTYPE`、`MAX_GUI_OCR_BASE_URL`、`MAX_GUI_OCR_START_TIMEOUT`、
+    `MAX_GUI_OCR_TIMEOUT`、`MAX_GUI_OCR_GPU_MEM`。
+
+    参数：
+        workspace: 工具读写根；缺省 `MAX_GUI_WORKSPACE` 或 cwd。
+        model: 模型别名；缺省环境变量或 `DEFAULT_MODEL_ALIAS`。
+        sessions_dir: 会话 JSON 目录；缺省 `<root>/artifacts/sessions`。
+        base_url: OpenAI 兼容端点；缺省本机 8000。
+
+    返回：
+        解析后的配置。
+    """
     root = detect_project_root()
     alias = resolve_model_alias(model or os.environ.get("MAX_GUI_MODEL") or DEFAULT_MODEL_ALIAS)
     settings = Settings(
@@ -150,11 +197,16 @@ def load_settings(
         max_model_len=int(os.environ.get("MAX_GUI_MAX_MODEL_LEN") or 8192),
         gpu_memory_utilization=float(os.environ.get("MAX_GUI_GPU_MEM") or 0.85),
         dtype=os.environ.get("MAX_GUI_DTYPE") or "auto",
+        ocr_base_url=os.environ.get("MAX_GUI_OCR_BASE_URL") or DEFAULT_OCR_BASE_URL,
+        ocr_start_timeout=float(os.environ.get("MAX_GUI_OCR_START_TIMEOUT") or 180),
+        ocr_timeout=float(os.environ.get("MAX_GUI_OCR_TIMEOUT") or 120),
+        ocr_gpu_memory_utilization=float(os.environ.get("MAX_GUI_OCR_GPU_MEM") or 0.20),
     )
     return settings
 
 
 def weights_ready(path: Path) -> bool:
+    """目录是否含完整权重（存在 `.safetensors` 或 `.bin`，且无 `.incomplete`）。"""
     if not path.is_dir():
         return False
     weights = list(path.glob("*.safetensors")) + list(path.glob("*.bin"))
@@ -166,6 +218,14 @@ def weights_ready(path: Path) -> bool:
 
 
 def require_weights(settings: Settings) -> Path:
+    """确认当前模型权重可用。
+
+    返回：
+        权重目录。
+
+    异常：
+        MissingWeightsError: 目录缺失或不完整。
+    """
     path = settings.model_path
     if not weights_ready(path):
         raise MissingWeightsError(

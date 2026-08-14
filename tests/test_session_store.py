@@ -1,3 +1,5 @@
+"""会话存储：创建/恢复/切换、桌面自动批准默认值、缺失图像标记。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,6 +9,7 @@ from max_gui.session.store import SessionMessage, SessionStore
 
 
 def test_create_resume_and_switch(settings: Settings) -> None:
+    """默认打开最近会话；`force_new` 另建；`get` 可切回旧会话。"""
     store = SessionStore(settings.sessions_dir)
     first = store.open_or_create(model="qwen3.5-2b")
     assert first.id
@@ -32,6 +35,7 @@ def test_create_resume_and_switch(settings: Settings) -> None:
 
 
 def test_auto_approve_desktop_default_and_legacy(settings: Settings, tmp_path: Path) -> None:
+    """新建与缺字段的旧 JSON 都将 `auto_approve_desktop` 视为关。"""
     store = SessionStore(settings.sessions_dir)
     created = store.create(model="qwen3.5-2b")
     assert created.auto_approve_desktop is False
@@ -49,9 +53,34 @@ def test_auto_approve_desktop_default_and_legacy(settings: Settings, tmp_path: P
     old = store.get("legacy")
     assert old is not None
     assert old.auto_approve_desktop is False
+    assert old.view_frame is None
+    assert old.locate_hits == {}
+
+
+def test_view_frame_and_locate_hits_roundtrip(settings: Settings) -> None:
+    """视图坐标系与定位表写入后再读回。"""
+    store = SessionStore(settings.sessions_dir)
+    session = store.create(model="qwen3.5-2b")
+    session.view_frame = {
+        "origin_x": 0,
+        "origin_y": 0,
+        "logical_width": 1920,
+        "logical_height": 1080,
+        "view_width": 1536,
+        "view_height": 864,
+        "image_path": "/tmp/shot.png",
+    }
+    session.locate_hits = {"1": [220, 80]}
+    store.save(session)
+    loaded = store.get(session.id)
+    assert loaded is not None
+    assert loaded.view_frame is not None
+    assert loaded.view_frame["view_width"] == 1536
+    assert loaded.locate_hits == {"1": [220, 80]}
 
 
 def test_missing_image_placeholder(settings: Settings, tmp_path: Path) -> None:
+    """附件路径不存在时加载后标 `missing`。"""
     store = SessionStore(settings.sessions_dir)
     session = store.create(model="qwen3.5-2b")
     missing = tmp_path / "gone.png"

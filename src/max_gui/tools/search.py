@@ -1,3 +1,5 @@
+"""工作区文本搜索：按子串匹配行，跳过权重、图片与常见缓存目录。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,7 +12,14 @@ _SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".safetensors", ".bi
 
 
 def search_tool(workspace: Path) -> Tool:
+    """构造 `search_files` 工具。
+
+    参数：
+        workspace: 搜索根；结果路径相对该根。
+    """
+
     async def search_files(args: dict) -> str:
+        """在工作区内搜索文件内容。参数：`query` 必填，`path` 限定子目录。"""
         query = str(args.get("query") or "")
         if not query:
             return "查询为空"
