@@ -1,0 +1,36 @@
+[project]
+name = "max-gui"
+version = "0.1.0"
+description = "本地多模态 ReAct GUI Agent CLI"
+readme = "README.md"
+authors = [
+    { name = "haotiantzz", email = "haotiantzz@163.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.0",
+    "langchain>=0.3.0",
+    "langgraph>=0.3.0",
+    "modelscope>=1.39.1",
+    "pillow>=11.0.0",
+    "pydantic>=2.10.0",
+    "textual>=2.0.0",
+]
+
+[project.scripts]
+max-gui = "max_gui:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.25.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"
