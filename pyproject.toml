@@ -13,7 +13,9 @@ dependencies = [
     "langgraph>=0.3.0",
     "modelscope>=1.39.1",
     "pillow>=11.0.0",
+    "pyautogui>=0.9.54",
     "pydantic>=2.10.0",
+    "pyperclip>=1.11.0",
     "textual>=2.0.0",
 ]
 
@@ -24,12 +26,32 @@ max-gui = "max_gui:main"
 dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.25.0",
+    "ruff>=0.12.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+exclude = [
+    ".venv",
+    "artifacts",
+    "model",
+]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "RUF"]
+ignore = ["E501", "RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
 
 [build-system]
 requires = ["uv_build>=0.12.3,<0.13.0"]

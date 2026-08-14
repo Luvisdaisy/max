@@ -11,6 +11,7 @@ wheels/
 
 # Local session transcripts and screenshots
 artifacts/
+artifacts/screenshots/
 
 # Local model weights
 model/
