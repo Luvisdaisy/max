@@ -2,12 +2,11 @@ schema: spec-driven
 
 # Project context (optional)
 # This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  Python 3.12+，用 uv 管理依赖。Ruff 是唯一格式化与 lint 工具（pyproject.toml [tool.ruff]）。
+  行宽 100，双引号。用户可见文案用中文全角标点。
+  Git 使用 Conventional Commits，message 用英文。
+
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.

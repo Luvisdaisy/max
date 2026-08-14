@@ -2,12 +2,15 @@
 
 本地多模态 ReAct GUI Agent CLI。开发测试默认使用已下载的 Qwen3.5-2B（`model/qwen3.5-2b`）。
 
-当前能力：Textual REPL、LangGraph ReAct（Think / Act / Observe）、对接独立 vLLM 进程、工作区文件与沙箱 Python 工具。会话写在 `artifacts/sessions/`。操作系统级截图/键鼠尚未接入，调研见 [docs/gui-tools.md](docs/gui-tools.md)。
+当前能力：Textual REPL、LangGraph ReAct（Think / Act / Observe）、对接独立 vLLM 进程、工作区文件与沙箱 Python 工具、PyAutoGUI 桌面工具（`screenshot` 图像回注、`screen_info`、`mouse_move` / `mouse_click` / `mouse_drag`、`keyboard_type` / `keyboard_press`）。会话写在 `artifacts/sessions/`，截图写在 `artifacts/screenshots/`。桌面点击、输入、按键会单独确认，不受普通自动批准影响。macOS 需开启屏幕录制与辅助功能。
 
 ## 命令
 
 ```bash
 uv sync --group dev
+uv run ruff format src tests   # 格式化
+uv run ruff check src tests    # 静态检查
+uv run pytest                  # 测试
 max-gui              # 启动 Textual REPL（默认）
 max-gui tui --new    # 强制新会话
 max-gui serve        # 启动 vLLM（默认加载 model/qwen3.5-2b）

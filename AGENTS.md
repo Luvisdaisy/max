@@ -4,13 +4,14 @@
 
 ## 项目是什么
 
-`max-gui` 是基于本地模型的多模态 ReAct GUI Agent CLI。第一版已落地：Textual REPL、LangGraph ReAct、OpenAI 兼容 vLLM 客户端（开发默认 `model/qwen3.5-2b`）、工作区文件/搜索/沙箱 Python 工具、以及 `artifacts/sessions/` 下按时间戳命名的 JSON 会话。操作系统级键鼠与截图尚未实现，调研见 `docs/gui-tools.md`。
+`max-gui` 是基于本地模型的多模态 ReAct GUI Agent CLI。已落地：Textual REPL、LangGraph ReAct、OpenAI 兼容 vLLM 客户端（开发默认 `model/qwen3.5-2b`）、工作区文件/搜索/沙箱 Python 工具、PyAutoGUI 桌面工具（截图回注、移鼠、点按、拖拽、`keyboard_type` / `keyboard_press`），以及 `artifacts/sessions/` 下按时间戳命名的 JSON 会话。桌面调研记录见 `docs/gui-tools.md`。
 
 ## 语言
 
 - 与用户的全部对话使用中文。
 - 仓库内所有文档使用中文：`README.md`、`openspec/` 下的 proposal / design / specs / tasks、注释性设计说明、变更记录。
 - 代码标识符（模块名、函数名、变量名、commit type）使用英文。
+- Git 与 GitHub 操作一律使用英文：commit message、PR 标题与正文、branch 名、tag、release note。
 - 用户可见文案（TUI、错误提示、帮助）使用中文，除非用户另有要求。
 
 ## 必须使用 OpenSpec
@@ -22,7 +23,7 @@
 1. **探索**（可选）：需求不清时用 `openspec-explore`，先对齐再写变更。
 2. **提案**：用 `openspec-propose` 生成 change，至少包含 `proposal.md`、`design.md`、`specs/`、`tasks.md`。
 3. **实现**：用 `openspec-apply-change` 按 `tasks.md` 逐项实现，完成后立刻把对应任务标为 `[x]`。
-4. **归档**：实现完成后用 `openspec-archive-change` 归档到 `openspec/changes/archive/`。禁止删除变更记录。归档后立刻同步更新项目级说明文件。
+4. **归档**：实现完成后用 `openspec-archive-change` 归档到 `openspec/changes/archive/`。禁止删除变更记录。归档后立刻同步更新项目级说明文件，但不额外需要记录具体的归档信息。
 
 约束：
 
@@ -30,7 +31,6 @@
 - 实现过程中发现设计不对：先改 OpenSpec 产物，再改代码，不要只改代码。
 - 纯笔误、格式化、依赖锁文件等无行为变化的修补，可不开 change；除此之外不要绕过 OpenSpec。
 - 开发记录必须留在仓库里：`openspec/changes/`（进行中）与 `openspec/changes/archive/`（已完成）。不要用聊天记录代替归档。
-- 已归档的第一版变更：`openspec/changes/archive/2026-08-14-multimodal-react-agent-cli/`。主规格在 `openspec/specs/`。
 - 每次 OpenSpec 归档完成后，必须同步更新项目级说明文件（至少 `AGENTS.md`、`README.md`，以及本次变更实际影响的其他说明），使其与已落地的能力、流程和约束一致。不要只归档 change、不改对外说明。
 
 相关技能：`.agents/skills/openspec-propose/`、`openspec-apply-change/`、`openspec-archive-change/`、`openspec-explore/`。
@@ -68,19 +68,36 @@
 
 - `type`：`feat` / `fix` / `docs` / `refactor` / `test` / `chore` / `perf` / `ci`
 - `scope` 可选，用短英文模块名，例如 `tui`、`agent`、`tools`、`inference`、`session`、`openspec`
-- `description` 用中文或英文均可，一句话说明「做了什么」，不用句号结尾
-- 破坏性变更加 `!`（如 `feat(agent)!: ...`），并在正文写清 `BREAKING CHANGE:`
+- `description` 必须用英文，一句话说明做了什么，不用句号结尾
+- 破坏性变更加 `!`（如 `feat(agent)!: ...`），并在正文用英文写清 `BREAKING CHANGE:`
+- PR 标题与正文必须用英文；标题可沿用 Conventional Commits，或 `[type] Description`
 - 一个提交只做一件事；不要把无关文件塞进同一次提交
 - 未经用户明确要求，不要提交、不要 `git push`
 
 示例：
 
 ```
-feat(tui): 增加流式输出与会话历史滚动
-fix(session): 修复中断后无法恢复检查点的问题
-docs(openspec): 补充 agent-tools 的失败重试规范
-chore: 添加 ruff 与 pytest 配置
+feat(tui): add streaming output and session history scrolling
+fix(session): restore checkpoints after interrupt
+docs(openspec): document agent-tools retry on failure
+chore: add ruff and pytest config
 ```
+
+## 编码规范
+
+Ruff 是唯一的格式化与 lint 工具，配置在 `pyproject.toml` 的 `[tool.ruff]`。不要引入 Black、独立 isort 或 flake8。
+
+- 行宽 100，双引号，4 空格缩进，换行用 LF。
+- 代码标识符用英文；用户可见文案与文档用中文，中文标点保持全角。
+- 公开函数与模块级 API 使用类型标注；测试夹具与一次性回调不必为过关而堆注解。
+- 完成实现后必须运行：
+
+```
+uv run ruff format src tests
+uv run ruff check src tests
+```
+
+- 只在规则误报或有意违反时写 `# noqa`，并写明规则码。不要为未启用的规则留 noqa。
 
 ## 实现时
 

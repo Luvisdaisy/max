@@ -1,11 +1,11 @@
 # GUI Agent 基础工具调研
 
 日期：2026-08-14  
-范围：在现有 ReAct 工具协议上，用 PyAutoGUI 做最薄的桌面操作层（截图、移鼠、点按、键盘）。本文是调研，不是实现说明。落地须另开 OpenSpec change。
+范围：在现有 ReAct 工具协议上，用 PyAutoGUI 做最薄的桌面操作层（截图、移鼠、点按、键盘）。本文是调研记录。实现已归档为 `openspec/changes/archive/2026-08-14-desktop-pyautogui-tools/`，主规格见 `openspec/specs/desktop-gui-tools/`。
 
 ## 结论
 
-可以做成 GUI Agent，而且不必换框架。现有 `Tool` 协议（名称 + JSON schema + 异步 `invoke` + 确认门）够用。第一批只加 6 个桌面工具，全部走 PyAutoGUI：
+可以做成 GUI Agent，而且不必换框架。现有 `Tool` 协议（名称 + JSON schema + 异步 `invoke` + 确认门）够用。第一批只加 7 个桌面工具，全部走 PyAutoGUI：
 
 | 工具 | 作用 | 默认是否确认 |
 | --- | --- | --- |
@@ -14,7 +14,8 @@
 | `mouse_move` | 移动指针到 `(x, y)` | 否 |
 | `mouse_click` | 单击 / 双击 / 右键，可选先移动 | 是 |
 | `mouse_drag` | 从一点拖到另一点 | 是 |
-| `keyboard_type` | 输入文本，或按下单个键 / 组合键 | 是 |
+| `keyboard_type` | 向当前焦点输入文本 | 是 |
+| `keyboard_press` | 按下单个键或组合键 | 是 |
 
 截图必须作为多模态 `image_url` 回到模型，不能只回一个文件路径字符串。否则 2B VL 模型看不见屏幕，后续点哪里只能猜。
 
@@ -104,13 +105,22 @@
 ### 6. `keyboard_type`
 
 ```text
-参数（二选一）：
-  text?: string                          // pyautogui.write
-  keys?: string | string[]               // press 或 hotkey，如 "enter" / ["command","space"]
+参数：
+  text: string                           // pyautogui.write
   interval?: number
 ```
 
-`write` 模拟按键，不是剪贴板粘贴，对非 ASCII 可能丢字。中文输入第一批可以先走剪贴板粘贴（`pyperclip` + `command+v`），并在 schema 里写清楚。`keys` 必须做白名单（字母数字、方向键、`enter`/`tab`/`esc`/`backspace`、常见修饰键），禁止任意字符串当键名。
+只负责写文本，对应 `pyautogui.write`。`write` 模拟按键，不是剪贴板粘贴，对非 ASCII 可能丢字。中文输入第一批可以先走剪贴板粘贴（`pyperclip` + `command+v`），并在 schema 里写清楚。不要在这个工具里接收 `keys`；回车、Tab、热键一律走 `keyboard_press`。
+
+### 7. `keyboard_press`
+
+```text
+参数：
+  keys: string | string[]                // press 或 hotkey，如 "enter" / ["command","space"]
+  interval?: number
+```
+
+只负责按键：单个键用 `press`，组合键用 `hotkey`。`keys` 必须做白名单（字母数字、方向键、`enter`/`tab`/`esc`/`backspace`、常见修饰键），禁止任意字符串当键名。不要在这个工具里接收自由文本。
 
 滚轮（`scroll`）可作第二批，不是「能看见就能点」的最小闭环。
 
@@ -135,7 +145,7 @@ think → mouse_click(图标)
 observe
 think → screenshot
 ...
-think → keyboard_type("1+1") → keyboard_type(keys="enter")
+think → keyboard_type("1+1") → keyboard_press("enter")
 think → screenshot → 最终文本回答
 ```
 
@@ -150,7 +160,7 @@ think → screenshot → 最终文本回答
 3. **授权检测**：启动或第一次调用时探测；失败给出可照做的中文步骤，不要只抛英文异常。
 4. **Retina**：始终用逻辑坐标；`scale = 截图像素宽 / size()[0]`。
 5. **多显示器**：第一批只支持主屏。`screenshot` 默认主屏；多屏坐标以后再做。
-6. **TUI 抢焦点**：Agent 在终端里跑，`keyboard_type` 可能打回终端本身。结果里应提示用户先把目标窗口置于前台；第一批可加可选的短暂延迟（`delay_ms`），不要做完整的「按标题找窗」。
+6. **TUI 抢焦点**：Agent 在终端里跑，`keyboard_type` / `keyboard_press` 可能打回终端本身。结果里应提示用户先把目标窗口置于前台；第一批可加可选的短暂延迟（`delay_ms`），不要做完整的「按标题找窗」。
 
 ## 安全
 
@@ -158,7 +168,7 @@ think → screenshot → 最终文本回答
 
 建议沿用现有确认门，并加严：
 
-- **必须确认**：`mouse_click`、`mouse_drag`、`keyboard_type`（含热键）。
+- **必须确认**：`mouse_click`、`mouse_drag`、`keyboard_type`、`keyboard_press`。
 - **可以不确认**：`screenshot`、`screen_info`、`mouse_move`（只移动）。
 - 会话 `auto_approve` 对桌面工具默认不生效，或单独设 `auto_approve_desktop`。避免「批准写文件」连带批准 Command-Q。
 - 打开 `pyautogui.FAILSAFE = True`：指针打到屏幕左上角立即中止后续桌面动作。
@@ -172,7 +182,7 @@ think → screenshot → 最终文本回答
 1. 图像回注：tool 消息可以带图进入 `think`。没有这一步，后面都是盲点。
 2. `screen_info` + `screenshot`（含权限错误与缩放）。
 3. `mouse_move` + `mouse_click`（确认门 + 逻辑坐标）。
-4. `keyboard_type`（文本 + 白名单按键）。
+4. `keyboard_type`（写文本）+ `keyboard_press`（白名单按键 / 热键）。
 5. `mouse_drag`。
 6. 手工场景：截屏 → 点开计算器 → 输入 → 再截屏读结果。
 
@@ -186,14 +196,6 @@ think → screenshot → 最终文本回答
 - Windows / Linux 一等支持
 - 把 vLLM 或 TUI 嵌进被控 GUI 进程
 
-## 下一步
+## 落地状态
 
-实现前开一条 OpenSpec change（例如 `desktop-pyautogui-tools`），至少写清：
-
-- 六个工具的 schema 与确认策略
-- 截图作为多模态 tool 结果的编码规则
-- macOS 权限失败时的用户可见文案
-- 逻辑坐标与 Retina `scale`
-- 禁止经 `run_python` 绕过桌面 API
-
-本文件只作调研记录，不代替该 change。
+上述内容已由 OpenSpec change `desktop-pyautogui-tools` 实现并归档。本文件保留为调研记录，行为以 `openspec/specs/` 为准。
