@@ -12,7 +12,9 @@ def image_tool(workspace: Path, settings: Settings) -> Tool:
     async def prepare(args: dict) -> str:
         path = resolve_workspace_path(workspace, str(args.get("path") or ""))
         try:
-            part = prepare_image(path, max_edge=settings.max_image_edge, max_bytes=settings.max_image_bytes)
+            part = prepare_image(
+                path, max_edge=settings.max_image_edge, max_bytes=settings.max_image_bytes
+            )
         except ImagePrepError as exc:
             raise ToolError(str(exc)) from exc
         url = part["image_url"]["url"]

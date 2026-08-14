@@ -50,7 +50,9 @@ def prepare_image(
     if len(raw) > max_bytes:
         # 再缩小一档边长
         width, height = converted.size
-        converted = converted.resize((max(1, width // 2), max(1, height // 2)), Image.Resampling.LANCZOS)
+        converted = converted.resize(
+            (max(1, width // 2), max(1, height // 2)), Image.Resampling.LANCZOS
+        )
         raw = _encode(converted, quality=70)
 
     b64 = base64.b64encode(raw).decode("ascii")

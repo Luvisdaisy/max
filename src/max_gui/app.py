@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -13,9 +13,9 @@ from textual.widgets import Button, Footer, Header, Label, RichLog, Static
 from max_gui.agent.graph import AgentRunner
 from max_gui.config import Settings, UnknownModelError, load_settings, resolve_model_alias
 from max_gui.inference.client import ConnectionFailedError, InferenceClient
-from max_gui.inference.images import ImagePrepError, SUPPORTED_SUFFIXES
+from max_gui.inference.images import SUPPORTED_SUFFIXES, ImagePrepError
 from max_gui.session.store import Session, SessionStore
-from max_gui.tools.protocol import ConfirmationGate
+from max_gui.tools.protocol import ConfirmationGate, ConfirmationScope
 from max_gui.tools.registry import ToolRegistry, build_default_registry
 from max_gui.widgets.prompt import PromptInput, PromptSubmitted
 
@@ -46,9 +46,18 @@ class TuiConfirmationGate:
     def __init__(self, app: MaxGuiApp) -> None:
         self.app = app
 
-    async def confirm(self, tool_name: str, arguments: dict[str, Any]) -> bool:
-        if self.app.session and self.app.session.auto_approve:
-            return True
+    async def confirm(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        scope: ConfirmationScope = "workspace",
+    ) -> bool:
+        session = self.app.session
+        if session is not None:
+            if scope == "desktop" and session.auto_approve_desktop:
+                return True
+            if scope == "workspace" and session.auto_approve:
+                return True
         return bool(await self.app.push_screen_wait(ConfirmScreen(tool_name, dict(arguments))))
 
 
@@ -56,12 +65,13 @@ class MaxGuiApp(App[None]):
     TITLE = "max-gui"
     CSS = """
     #transcript { height: 1fr; border: solid $accent; }
+    #live { height: auto; max-height: 16; overflow-y: auto; display: none; padding: 0 1; }
     #prompt { height: 8; border: solid $primary; }
     #status { height: 3; color: $text-muted; }
     #pending { color: $warning; }
     #confirm-dialog { padding: 1 2; }
     """
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding]] = [
         Binding("ctrl+c", "interrupt_or_quit", "中断/退出", show=False),
     ]
 
@@ -74,17 +84,21 @@ class MaxGuiApp(App[None]):
         self.pending_images: list[Path] = []
         self.runner: AgentRunner | None = None
         self._turn_active = False
+        self._stream_text = ""
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield RichLog(id="transcript", highlight=True, markup=True, wrap=True)
+        yield Static("", id="live", markup=False)
         yield Static("", id="pending")
         yield PromptInput(id="prompt")
         yield Static("就绪", id="status")
         yield Footer()
 
     def on_mount(self) -> None:
-        self.session = self.store.open_or_create(model=self.settings.canonical_model, force_new=self.force_new)
+        self.session = self.store.open_or_create(
+            model=self.settings.canonical_model, force_new=self.force_new
+        )
         self.settings = self.settings.with_model(self.session.model)
         self._rebuild_runner()
         self.query_one(PromptInput).focus()
@@ -113,6 +127,7 @@ class MaxGuiApp(App[None]):
     def _render_session(self) -> None:
         log = self._log()
         log.clear()
+        self._clear_live_stream()
         assert self.session is not None
         if not self.session.messages:
             log.write("[dim]新会话。输入文本发送，或使用 /attach /sessions /model。[/dim]")
@@ -272,7 +287,9 @@ class MaxGuiApp(App[None]):
                 messages = state.get("messages") or []
                 if messages:
                     last = messages[-1]
-                    self._write_message(str(last.get("role") or "assistant"), last.get("content") or {})
+                    self._write_message(
+                        str(last.get("role") or "assistant"), last.get("content") or {}
+                    )
             status = str(state.get("status") or "done")
             if status == "error":
                 self._set_status(str(state.get("error") or "错误"))
@@ -286,18 +303,44 @@ class MaxGuiApp(App[None]):
         except ImagePrepError as exc:
             self._log().write(f"[red]{exc}[/red]")
             self._set_status("附件无效")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self._log().write(f"[red]运行失败：{exc}[/red]")
             self._set_status("错误")
         finally:
+            self._flush_live_stream()
             self._turn_active = False
             self.session = self.store.get(self.session.id) or self.session
 
+    def _live(self) -> Static:
+        return self.query_one("#live", Static)
+
+    def _clear_live_stream(self) -> None:
+        self._stream_text = ""
+        live = self._live()
+        live.update("")
+        live.display = False
+
+    def _refresh_live_stream(self) -> None:
+        live = self._live()
+        if not self._stream_text:
+            live.update("")
+            live.display = False
+            return
+        live.update(Text.assemble(("助手 ", "bold green"), self._stream_text))
+        live.display = True
+
+    def _flush_live_stream(self) -> None:
+        text = self._stream_text
+        if text:
+            self._write_message("assistant", {"text": text})
+        self._clear_live_stream()
+
     def _append_token(self, token: str, started: bool) -> None:
         if not started:
-            self._log().write(f"[bold green]助手[/bold green] {token}")
+            self._stream_text = token
         else:
-            self._log().write(token)
+            self._stream_text += token
+        self._refresh_live_stream()
 
     def action_interrupt_or_quit(self) -> None:
         if self._turn_active and self.runner:
@@ -305,7 +348,7 @@ class MaxGuiApp(App[None]):
             return
         self.exit()
 
-    def on_paste(self, event) -> None:  # noqa: ANN001
+    def on_paste(self, event) -> None:
         text = getattr(event, "text", "") or ""
         path = Path(text.strip())
         if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES:

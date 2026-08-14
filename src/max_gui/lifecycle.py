@@ -56,7 +56,9 @@ def serve_model(settings: Settings) -> int:
     return int(process.returncode)
 
 
-def _serve_command(settings: Settings, model_path: Path, *, vllm_bin: Path | None = None) -> list[str]:
+def _serve_command(
+    settings: Settings, model_path: Path, *, vllm_bin: Path | None = None
+) -> list[str]:
     binary = vllm_bin or resolve_vllm_bin()
     return [
         str(binary),

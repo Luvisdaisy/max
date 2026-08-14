@@ -86,6 +86,7 @@ class Settings:
     project_root: Path = Path(".")
     workspace: Path = Path(".")
     sessions_dir: Path = Path("artifacts/sessions")
+    screenshots_dir: Path = Path("artifacts/screenshots")
     model_root: Path = Path("model")
     max_iterations: int = 8
     max_image_edge: int = 1536
@@ -112,6 +113,7 @@ class Settings:
             project_root=self.project_root,
             workspace=self.workspace,
             sessions_dir=self.sessions_dir,
+            screenshots_dir=self.screenshots_dir,
             model_root=self.model_root,
             max_iterations=self.max_iterations,
             max_image_edge=self.max_image_edge,
@@ -139,6 +141,7 @@ def load_settings(
         project_root=root,
         workspace=(workspace or Path(os.environ.get("MAX_GUI_WORKSPACE") or Path.cwd())).resolve(),
         sessions_dir=(sessions_dir or root / "artifacts" / "sessions").resolve(),
+        screenshots_dir=(root / "artifacts" / "screenshots").resolve(),
         model_root=(root / "model").resolve(),
         max_iterations=int(os.environ.get("MAX_GUI_MAX_ITERATIONS") or 8),
         max_image_edge=int(os.environ.get("MAX_GUI_MAX_IMAGE_EDGE") or 1536),
@@ -157,11 +160,15 @@ def weights_ready(path: Path) -> bool:
     weights = list(path.glob("*.safetensors")) + list(path.glob("*.bin"))
     if not weights:
         return False
-    return not any(p.suffix == ".incomplete" or p.name.endswith(".incomplete") for p in path.iterdir())
+    return not any(
+        p.suffix == ".incomplete" or p.name.endswith(".incomplete") for p in path.iterdir()
+    )
 
 
 def require_weights(settings: Settings) -> Path:
     path = settings.model_path
     if not weights_ready(path):
-        raise MissingWeightsError(settings.canonical_model, download_command(settings.canonical_model))
+        raise MissingWeightsError(
+            settings.canonical_model, download_command(settings.canonical_model)
+        )
     return path

@@ -42,6 +42,7 @@ class Session:
     messages: list[SessionMessage] = field(default_factory=list)
     status: str = "done"
     auto_approve: bool = False
+    auto_approve_desktop: bool = False
     checkpoint: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -60,6 +61,7 @@ class Session:
             messages=messages,
             status=str(data.get("status") or "done"),
             auto_approve=bool(data.get("auto_approve") or False),
+            auto_approve_desktop=bool(data.get("auto_approve_desktop") or False),
             checkpoint=data.get("checkpoint"),
         )
 
@@ -127,7 +129,9 @@ class SessionStore:
                 return existing
         return self.create(model=model)
 
-    def update(self, session: Session, *, title: str | None = None, model: str | None = None) -> Session:
+    def update(
+        self, session: Session, *, title: str | None = None, model: str | None = None
+    ) -> Session:
         if title is not None:
             session.title = title
         if model is not None:

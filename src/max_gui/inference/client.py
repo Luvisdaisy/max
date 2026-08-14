@@ -15,9 +15,7 @@ from max_gui.inference.images import prepare_image
 class ConnectionFailedError(RuntimeError):
     def __init__(self, base_url: str) -> None:
         self.base_url = base_url
-        super().__init__(
-            f"无法连接推理服务（{base_url}）。请先运行：max-gui serve"
-        )
+        super().__init__(f"无法连接推理服务（{base_url}）。请先运行：max-gui serve")
 
 
 @dataclass(slots=True)
@@ -83,7 +81,11 @@ class InferenceClient:
                             index = int(call.get("index") or 0)
                             slot = tool_acc.setdefault(
                                 index,
-                                {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+                                {
+                                    "id": "",
+                                    "type": "function",
+                                    "function": {"name": "", "arguments": ""},
+                                },
                             )
                             if call.get("id"):
                                 slot["id"] = call["id"]
@@ -124,20 +126,52 @@ def encode_user_content(
     return parts or [{"type": "text", "text": ""}]
 
 
-def to_chat_messages(raw_messages: list[dict[str, Any]], *, settings: Settings) -> list[dict[str, Any]]:
+def _collect_image_paths(content: dict[str, Any]) -> list[Path]:
+    images: list[Path] = []
+    for ref in content.get("images") or []:
+        path = Path(str(ref.get("path"))) if isinstance(ref, dict) else Path(str(ref))
+        if path.is_file():
+            images.append(path)
+    return images
+
+
+def _encode_content(content: Any, *, settings: Settings) -> Any:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return content
+    if isinstance(content, dict):
+        images = _collect_image_paths(content)
+        text = str(content.get("text") or "")
+        if images:
+            return encode_user_content(text, images, settings=settings)
+        return text
+    return str(content or "")
+
+
+def to_chat_messages(
+    raw_messages: list[dict[str, Any]], *, settings: Settings
+) -> list[dict[str, Any]]:
     encoded: list[dict[str, Any]] = []
     for message in raw_messages:
         role = message.get("role") or "user"
         item: dict[str, Any] = {"role": role}
         content = message.get("content")
         if role == "tool":
-            item["content"] = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+            if isinstance(content, dict):
+                item["content"] = _encode_content(content, settings=settings)
+            elif isinstance(content, str):
+                item["content"] = content
+            else:
+                item["content"] = json.dumps(content, ensure_ascii=False)
             if message.get("tool_call_id"):
                 item["tool_call_id"] = message["tool_call_id"]
             encoded.append(item)
             continue
         if role == "assistant":
-            if isinstance(content, str):
+            if isinstance(content, dict) and content.get("images"):
+                item["content"] = _encode_content(content, settings=settings)
+            elif isinstance(content, str):
                 item["content"] = content
             elif isinstance(content, dict):
                 item["content"] = content.get("text") or ""
@@ -153,12 +187,11 @@ def to_chat_messages(raw_messages: list[dict[str, Any]], *, settings: Settings) 
         elif isinstance(content, list):
             item["content"] = content
         elif isinstance(content, dict):
-            images = []
-            for ref in content.get("images") or []:
-                path = Path(str(ref.get("path"))) if isinstance(ref, dict) else Path(str(ref))
-                if path.is_file():
-                    images.append(path)
-            item["content"] = encode_user_content(str(content.get("text") or ""), images, settings=settings)
+            item["content"] = encode_user_content(
+                str(content.get("text") or ""),
+                _collect_image_paths(content),
+                settings=settings,
+            )
         else:
             item["content"] = str(content or "")
         encoded.append(item)

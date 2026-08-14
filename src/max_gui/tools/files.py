@@ -51,7 +51,7 @@ def file_tools(workspace: Path) -> list[Tool]:
                 "required": ["path", "content"],
             },
             invoke=write_file,
-            requires_confirmation=True,
+            confirmation_scope="workspace",
         ),
         Tool(
             name="list_dir",

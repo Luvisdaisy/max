@@ -10,6 +10,8 @@ from max_gui.agent.state import AgentState
 from max_gui.config import Settings
 from max_gui.inference.client import ChatDelta, InferenceClient, to_chat_messages
 from max_gui.session.store import Session, SessionMessage, SessionStore
+from max_gui.tools.desktop import current_session_id
+from max_gui.tools.protocol import ToolResult
 from max_gui.tools.registry import ToolRegistry
 
 ITERATION_LIMIT_MESSAGE = "已达到最大迭代次数，本回合停止。"
@@ -49,35 +51,39 @@ class AgentRunner:
     ) -> AgentState:
         self.clear_interrupt()
         self._on_token = on_token
-        if resume and session.checkpoint:
-            state: AgentState = dict(session.checkpoint)  # type: ignore[assignment]
-            state["session_id"] = session.id
-        else:
-            messages = [_message_to_state(item) for item in session.messages]
-            if user_text is not None:
-                images = [{"path": path} for path in (image_paths or [])]
-                user_msg = {"role": "user", "content": {"text": user_text, "images": images}}
-                messages.append(user_msg)
-                self.store.append_messages(
-                    session,
-                    [SessionMessage(role="user", content=user_msg["content"])],
-                )
-            state = {
-                "session_id": session.id,
-                "messages": messages,
-                "images": list(image_paths or []),
-                "pending_tool_calls": [],
-                "iteration": 0,
-                "status": "thinking",
-                "error": None,
-            }
+        token = current_session_id.set(session.id)
+        try:
+            if resume and session.checkpoint:
+                state: AgentState = dict(session.checkpoint)  # type: ignore[assignment]
+                state["session_id"] = session.id
+            else:
+                messages = [_message_to_state(item) for item in session.messages]
+                if user_text is not None:
+                    images = [{"path": path} for path in (image_paths or [])]
+                    user_msg = {"role": "user", "content": {"text": user_text, "images": images}}
+                    messages.append(user_msg)
+                    self.store.append_messages(
+                        session,
+                        [SessionMessage(role="user", content=user_msg["content"])],
+                    )
+                state = {
+                    "session_id": session.id,
+                    "messages": messages,
+                    "images": list(image_paths or []),
+                    "pending_tool_calls": [],
+                    "iteration": 0,
+                    "status": "thinking",
+                    "error": None,
+                }
 
-        if on_status:
-            on_status(str(state.get("status") or "thinking"))
+            if on_status:
+                on_status(str(state.get("status") or "thinking"))
 
-        result = await self._graph.ainvoke(state)
-        self._persist(session, result)
-        return result
+            result = await self._graph.ainvoke(state)
+            self._persist(session, result)
+            return result
+        finally:
+            current_session_id.reset(token)
 
     async def think(self, state: AgentState) -> AgentState:
         if self._interrupt.is_set():
@@ -130,10 +136,17 @@ class AgentRunner:
             fn = call.get("function") or {}
             name = str(fn.get("name") or "")
             output = await self.registry.invoke(name, fn.get("arguments"))
+            if isinstance(output, ToolResult):
+                content: Any = {
+                    "text": output.text,
+                    "images": [{"path": str(path)} for path in output.images],
+                }
+            else:
+                content = output
             results.append(
                 {
                     "role": "tool",
-                    "content": output,
+                    "content": content,
                     "tool_call_id": call.get("id") or name,
                     "name": name,
                 }
@@ -162,7 +175,9 @@ class AgentRunner:
         known = len(session.messages)
         extras = list(state.get("messages") or [])[known:]
         if extras:
-            self.store.append_messages(session, [_state_to_session_message(item) for item in extras])
+            self.store.append_messages(
+                session, [_state_to_session_message(item) for item in extras]
+            )
         else:
             self.store.save(session)
 
