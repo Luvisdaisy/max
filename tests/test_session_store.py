@@ -31,6 +31,26 @@ def test_create_resume_and_switch(settings: Settings) -> None:
     assert switched.messages[0].content["text"] == "你好"
 
 
+def test_auto_approve_desktop_default_and_legacy(settings: Settings, tmp_path: Path) -> None:
+    store = SessionStore(settings.sessions_dir)
+    created = store.create(model="qwen3.5-2b")
+    assert created.auto_approve_desktop is False
+    loaded = store.get(created.id)
+    assert loaded is not None
+    assert loaded.auto_approve_desktop is False
+
+    legacy = settings.sessions_dir / "legacy.json"
+    legacy.write_text(
+        '{"id": "legacy", "title": "旧", "model": "qwen3.5-2b", '
+        '"created_at": "2026-08-14T00:00:00", "updated_at": "2026-08-14T00:00:00", '
+        '"messages": []}',
+        encoding="utf-8",
+    )
+    old = store.get("legacy")
+    assert old is not None
+    assert old.auto_approve_desktop is False
+
+
 def test_missing_image_placeholder(settings: Settings, tmp_path: Path) -> None:
     store = SessionStore(settings.sessions_dir)
     session = store.create(model="qwen3.5-2b")

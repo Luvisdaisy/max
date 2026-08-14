@@ -7,7 +7,12 @@ import httpx
 from PIL import Image
 
 from max_gui.config import Settings, UnknownModelError, resolve_model_alias
-from max_gui.inference.client import ConnectionFailedError, InferenceClient, encode_user_content, to_chat_messages
+from max_gui.inference.client import (
+    ConnectionFailedError,
+    InferenceClient,
+    encode_user_content,
+    to_chat_messages,
+)
 from max_gui.inference.images import ImagePrepError, prepare_image
 
 
@@ -52,6 +57,47 @@ def test_text_only_payload_has_no_image(settings: Settings) -> None:
     assert all(part.get("type") != "image_url" for part in content)
 
 
+def test_tool_result_text_only(settings: Settings) -> None:
+    messages = to_chat_messages(
+        [{"role": "tool", "tool_call_id": "c1", "content": "file body"}],
+        settings=settings,
+    )
+    assert messages[0]["content"] == "file body"
+    assert messages[0]["tool_call_id"] == "c1"
+    assert isinstance(messages[0]["content"], str)
+
+
+def test_tool_result_with_image(tmp_path: Path, settings: Settings) -> None:
+    path = tmp_path / "shot.png"
+    Image.new("RGB", (16, 16), color="green").save(path)
+    messages = to_chat_messages(
+        [
+            {
+                "role": "tool",
+                "tool_call_id": "c2",
+                "content": {"text": "截图完成", "images": [{"path": str(path)}]},
+            }
+        ],
+        settings=settings,
+    )
+    types = [part["type"] for part in messages[0]["content"]]
+    assert "text" in types and "image_url" in types
+
+
+def test_tool_result_missing_image_keeps_text(settings: Settings, tmp_path: Path) -> None:
+    missing = tmp_path / "gone.png"
+    messages = to_chat_messages(
+        [
+            {
+                "role": "tool",
+                "content": {"text": "路径丢失", "images": [{"path": str(missing)}]},
+            }
+        ],
+        settings=settings,
+    )
+    assert messages[0]["content"] == "路径丢失"
+
+
 def test_text_plus_image_payload(tmp_path: Path, settings: Settings) -> None:
     path = tmp_path / "shot.png"
     Image.new("RGB", (16, 16), color="blue").save(path)
@@ -65,7 +111,7 @@ def test_text_plus_image_payload(tmp_path: Path, settings: Settings) -> None:
 
 def _sse(chunks: list[str]) -> str:
     lines = []
-    for index, chunk in enumerate(chunks):
+    for chunk in chunks:
         payload = {"choices": [{"delta": {"content": chunk}, "finish_reason": None}]}
         lines.append(f"data: {json.dumps(payload)}")
     lines.append("data: [DONE]")
@@ -79,7 +125,9 @@ async def test_stream_tokens(settings: Settings) -> None:
         payload = json.loads(request.content)
         assert payload["model"] == "qwen3.5-2b"
         assert payload["stream"] is True
-        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=body.encode()
+        )
 
     client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=False)
     tokens: list[str] = []

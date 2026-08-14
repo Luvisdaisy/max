@@ -21,6 +21,7 @@ def settings(tmp_path: Path) -> Settings:
         project_root=tmp_path,
         workspace=workspace,
         sessions_dir=sessions,
+        screenshots_dir=tmp_path / "artifacts" / "screenshots",
         model_root=model_root,
         max_iterations=3,
         max_image_edge=64,

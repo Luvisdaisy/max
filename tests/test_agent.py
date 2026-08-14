@@ -4,6 +4,7 @@ import asyncio
 
 from max_gui.agent.graph import ITERATION_LIMIT_MESSAGE, AgentRunner
 from max_gui.config import Settings
+from max_gui.desktop.fake import FakeDesktopBackend
 from max_gui.inference.client import ChatDelta
 from max_gui.session.store import SessionStore
 from max_gui.tools.registry import AutoApproveGate, build_default_registry
@@ -14,7 +15,7 @@ class ScriptedClient:
         self.deltas = list(deltas)
         self.requests: list[list[dict]] = []
 
-    async def stream(self, messages, *, tools=None, on_token=None, should_stop=None):  # noqa: ANN001
+    async def stream(self, messages, *, tools=None, on_token=None, should_stop=None):
         self.requests.append(messages)
         delta = self.deltas.pop(0)
         if delta.text and on_token:
@@ -26,7 +27,7 @@ class SlowClient:
     def __init__(self) -> None:
         self.started = asyncio.Event()
 
-    async def stream(self, messages, *, tools=None, on_token=None, should_stop=None):  # noqa: ANN001
+    async def stream(self, messages, *, tools=None, on_token=None, should_stop=None):
         self.started.set()
         for _ in range(50):
             if should_stop and should_stop():
@@ -35,9 +36,11 @@ class SlowClient:
         return ChatDelta(text="too late")
 
 
-def _runner(settings: Settings, client) -> tuple[AgentRunner, SessionStore]:  # noqa: ANN001
+def _runner(settings: Settings, client) -> tuple[AgentRunner, SessionStore]:
     store = SessionStore(settings.sessions_dir)
-    registry = build_default_registry(settings, gate=AutoApproveGate())
+    registry = build_default_registry(
+        settings, gate=AutoApproveGate(), desktop=FakeDesktopBackend()
+    )
     return AgentRunner(settings, client, registry, store), store
 
 
@@ -142,3 +145,30 @@ async def test_resume_from_json_checkpoint(settings: Settings) -> None:
     state = await runner.run(session, resume=True)
     assert state["status"] == "done"
     assert state["messages"][-1]["content"]["text"] == "继续"
+
+
+async def test_screenshot_tool_image_reaches_think(settings: Settings) -> None:
+    client = ScriptedClient(
+        [
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "shot1",
+                        "type": "function",
+                        "function": {"name": "screenshot", "arguments": "{}"},
+                    }
+                ]
+            ),
+            ChatDelta(text="看到屏幕了"),
+        ]
+    )
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text="截一张图")
+    assert state["status"] == "done"
+    tool_msgs = [msg for msg in state["messages"] if msg.get("role") == "tool"]
+    assert tool_msgs and isinstance(tool_msgs[0]["content"], dict)
+    assert tool_msgs[0]["content"]["images"]
+    tool_encoded = next(item for item in client.requests[1] if item.get("role") == "tool")
+    types = [part["type"] for part in tool_encoded["content"]]
+    assert "text" in types and "image_url" in types

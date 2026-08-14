@@ -30,7 +30,9 @@ def _start_stub() -> tuple[ThreadingHTTPServer, str]:
                 {"choices": [{"delta": {"content": "通了"}, "finish_reason": None}]},
                 {"choices": [{"delta": {}, "finish_reason": "stop"}]},
             ]
-            payload = "".join(f"data: {json.dumps(item)}\n\n" for item in chunks) + "data: [DONE]\n\n"
+            payload = (
+                "".join(f"data: {json.dumps(item)}\n\n" for item in chunks) + "data: [DONE]\n\n"
+            )
             raw = payload.encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -38,7 +40,7 @@ def _start_stub() -> tuple[ThreadingHTTPServer, str]:
             self.end_headers()
             self.wfile.write(raw)
 
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+        def log_message(self, format: str, *args: object) -> None:
             return
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
