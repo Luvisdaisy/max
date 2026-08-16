@@ -8,9 +8,10 @@
 
 ```bash
 uv sync --group dev
-uv run ruff format src tests   # 格式化
-uv run ruff check src tests    # 静态检查
+uv run ruff format src tests scripts   # 格式化
+uv run ruff check src tests scripts    # 静态检查
 uv run pytest                  # 测试
+uv run python scripts/demo_week2_tools.py  # 第二周：打开计算器演示截图/键鼠/画框/OCR
 max-gui              # 启动 Textual REPL（默认）
 max-gui tui --new    # 强制新会话
 max-gui serve        # 启动 vLLM（默认加载 model/qwen3.5-4b）

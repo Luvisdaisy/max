@@ -50,7 +50,11 @@ def ocr_host_port(settings: Settings) -> tuple[str, int]:
 
 
 def ocr_serve_command(settings: Settings, *, vllm_bin: Path | None = None) -> list[str]:
-    """构造 OCR 专用 `vllm serve`，不含 Qwen tool parser。"""
+    """构造 OCR 专用 `vllm serve`，不含 Qwen tool parser。
+
+    必须带 ``--max-model-len``：PaddleOCR-VL 配置里是 131072，Metal 上
+    按该长度要 2GiB 以上 KV，和默认 ``ocr_gpu_memory_utilization=0.2`` 冲突。
+    """
     binary = vllm_bin or resolve_vllm_bin()
     host, port = ocr_host_port(settings)
     return [
@@ -62,8 +66,10 @@ def ocr_serve_command(settings: Settings, *, vllm_bin: Path | None = None) -> li
         "--port",
         str(port),
         "--trust-remote-code",
+        "--max-model-len",
+        str(settings.max_model_len),
         "--max-num-batched-tokens",
-        "16384",
+        str(max(2048, settings.max_model_len)),
         "--no-enable-prefix-caching",
         "--mm-processor-cache-gb",
         "0",

@@ -221,6 +221,8 @@ def test_main_serve_does_not_start_ocr(settings: Settings, tmp_path: Path) -> No
     assert str(settings.ocr_model_path) in ocr_cmd
     assert "--trust-remote-code" in ocr_cmd
     assert "--no-enable-prefix-caching" in ocr_cmd
+    assert "--max-model-len" in ocr_cmd
+    assert str(settings.max_model_len) in ocr_cmd
     assert "--tool-call-parser" not in ocr_cmd
     assert "8001" in ocr_cmd
 
