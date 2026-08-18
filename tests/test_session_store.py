@@ -79,6 +79,38 @@ def test_view_frame_and_locate_hits_roundtrip(settings: Settings) -> None:
     assert loaded.locate_hits == {"1": [220, 80]}
 
 
+def test_assistant_reasoning_roundtrip(settings: Settings) -> None:
+    """助手 `reasoning` 落盘后能读回；缺字段的旧消息仍可加载。"""
+    store = SessionStore(settings.sessions_dir)
+    session = store.create(model="qwen3.5-2b")
+    store.append_messages(
+        session,
+        [
+            SessionMessage(
+                role="assistant",
+                content={"text": "已完成", "reasoning": "先截图"},
+            )
+        ],
+    )
+    loaded = store.get(session.id)
+    assert loaded is not None
+    assert loaded.messages[0].content["reasoning"] == "先截图"
+    assert loaded.messages[0].content["text"] == "已完成"
+
+    legacy = settings.sessions_dir / "no-reason.json"
+    legacy.write_text(
+        '{"id": "no-reason", "title": "旧", "model": "qwen3.5-2b", '
+        '"created_at": "2026-08-14T00:00:00", "updated_at": "2026-08-14T00:00:00", '
+        '"messages": [{"role": "assistant", "content": {"text": "你好"}, '
+        '"created_at": "2026-08-14T00:00:01"}]}',
+        encoding="utf-8",
+    )
+    old = store.get("no-reason")
+    assert old is not None
+    assert "reasoning" not in old.messages[0].content
+    assert old.messages[0].content["text"] == "你好"
+
+
 def test_missing_image_placeholder(settings: Settings, tmp_path: Path) -> None:
     """附件路径不存在时加载后标 `missing`。"""
     store = SessionStore(settings.sessions_dir)
