@@ -1,12 +1,8 @@
 ---
-name: openspec-propose
-description: Propose a new change with all artifacts generated in one step. Use when the user wants to quickly describe what they want to build and get a complete proposal with design, specs, and tasks ready for implementation.
-license: MIT
-compatibility: Requires openspec CLI.
-metadata:
-  author: openspec
-  version: "1.0"
-  generatedBy: "1.3.1"
+name: "OPSX: Propose"
+description: Propose a new change - create it and generate all artifacts in one step
+category: Workflow
+tags: [workflow, artifacts, experimental]
 ---
 
 Propose a new change - create the change and generate all artifacts in one step.
@@ -16,15 +12,15 @@ I'll create a change with artifacts:
 - design.md (how)
 - tasks.md (implementation steps)
 
-After all artifacts are ready, stop. Do not implement or archive unless the user explicitly asked in this turn.
+When ready to implement, run /opsx:apply
 
 ---
 
-**Input**: The user's request should include a change name (kebab-case) OR a description of what they want to build.
+**Input**: The argument after `/opsx:propose` is the change name (kebab-case), OR a description of what the user wants to build.
 
 **Steps**
 
-1. **If no clear input provided, ask what they want to build**
+1. **If no input provided, ask what they want to build**
 
    Use the **AskUserQuestion tool** (open-ended, no preset options) to ask:
    > "What change do you want to work on? Describe what you want to build or fix."
@@ -79,21 +75,18 @@ After all artifacts are ready, stop. Do not implement or archive unless the user
       - Use **AskUserQuestion tool** to clarify
       - Then continue with creation
 
-5. **Show status and stop**
+5. **Show final status**
    ```bash
    openspec status --change "<name>"
    ```
 
-   Default: stop after artifacts. Do not follow `openspec-apply-change` and do not archive.
+**Output**
 
-   Only continue to implementation in the same turn if the user explicitly asked to implement (e.g. 「开始实现」, `/opsx:apply`).
-
-**Output after artifacts**
-
-Announce:
+After completing all artifacts, summarize:
 - Change name and location
-- That artifacts are ready
-- That implementation and archive wait for an explicit user request
+- List of artifacts created with brief descriptions
+- What's ready: "All artifacts created! Ready for implementation."
+- Prompt: "Run `/opsx:apply` to start implementing."
 
 **Artifact Creation Guidelines**
 
@@ -111,4 +104,3 @@ Announce:
 - If context is critically unclear, ask the user - but prefer making reasonable decisions to keep momentum
 - If a change with that name already exists, ask if user wants to continue it or create a new one
 - Verify each artifact file exists after writing before proceeding to next
-- After artifacts are complete, stop unless the user explicitly asked to implement in this turn
