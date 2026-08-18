@@ -4,7 +4,7 @@
 
 ## 项目是什么
 
-`max-gui` 是基于本地模型的多模态 ReAct GUI Agent CLI。已落地：Textual REPL、LangGraph ReAct、OpenAI 兼容 vLLM 客户端（开发默认 `model/qwen3.5-4b`，可切 `2b` / `9b`）、工作区文件/搜索工具、PyAutoGUI 桌面工具（截图回注、移鼠、点按、拖拽、滚轮、`keyboard_type` / `keyboard_press`；鼠标坐标按模型看见的视图像素换算，坐标系写入会话以免跨回合丢失）、整图 `ocr` 与文字定位 `ocr_locate`（首次调用再拉起独立 PaddleOCR-VL-1.5，失败回退 transformers，再失败则跳过），以及 `artifacts/sessions/` 下按时间戳命名的 JSON 会话。桌面调研记录见 `docs/gui-tools.md`。
+`max-gui` 是基于本地模型的多模态 ReAct GUI Agent CLI。已落地：Textual REPL（思考与正文分开展示、工具结果在执行当时写入记录区，状态栏跟随思考/执行工具/观察）、LangGraph ReAct（`think` 注入中文 GUI `system`，不落盘；状态含轻量 `plan` / `current_subtask`；`max_iterations` 默认 20；节点进度回调；think/act 增量落盘）、OpenAI 兼容 vLLM 客户端（开发默认 `model/qwen3.5-4b`，可切 `2b` / `9b`；发给模型时只把最近两张仍存在的图编成 `image_url`；SSE 思考字段与正文分通道）、工作区文件/搜索工具、PyAutoGUI 桌面工具（截图回注、移鼠、点按、拖拽、滚轮、`keyboard_type` / `keyboard_press`；鼠标坐标按模型看见的视图像素换算，必须落在当前视图宽高内，出界拒绝而不是夹到屏幕边；动作摘要只报视图像素；坐标系写入会话以免跨回合丢失；点击/拖拽/滚轮/输入/按键成功后在同一条工具结果附新截图）、整图 `ocr` 与文字定位 `ocr_locate`（首次调用再拉起独立 PaddleOCR-VL-1.5，失败回退 transformers，再失败则跳过），以及 `artifacts/sessions/` 下按时间戳命名的 JSON 会话（助手消息可带 `reasoning`；tool 消息含 `name` 与嵌套 `exec`，TUI 记录区只展示工具文本）。桌面调研记录见 `docs/gui-tools.md`。
 
 ## 语言
 
@@ -21,13 +21,14 @@
 标准流程：
 
 1. **探索**（可选）：需求不清时用 `openspec-explore`，先对齐再写变更。
-2. **提案**：用 `openspec-propose` 生成 change，至少包含 `proposal.md`、`design.md`、`specs/`、`tasks.md`。
-3. **实现**：提案产物齐备后，同一轮立刻用 `openspec-apply-change` 按 `tasks.md` 逐项实现，完成后立刻把对应任务标为 `[x]`。不要停下来等人再发「开始实现」或 `/opsx:apply`。用户当轮明确说只要提案、先不要改代码时除外。
-4. **归档**：实现完成后用 `openspec-archive-change` 归档到 `openspec/changes/archive/`。禁止删除变更记录。归档后立刻同步更新项目级说明文件，但不额外需要记录具体的归档信息。
+2. **提案**：用 `openspec-propose` 生成 change，至少包含 `proposal.md`、`design.md`、`specs/`、`tasks.md`。写完产物后默认停止，不要接着改代码或归档。
+3. **实现**：默认不实现。只有用户明确要求实现（例如「开始实现」、`/opsx:apply`）时，才用 `openspec-apply-change` 按 `tasks.md` 逐项落地，完成后立刻把对应任务标为 `[x]`。
+4. **归档**：默认不归档。只有用户明确要求归档时，才用 `openspec-archive-change` 归档到 `openspec/changes/archive/`。禁止删除变更记录。归档后立刻同步更新项目级说明文件，但不额外需要记录具体的归档信息。
 
 约束：
 
 - 新功能、行为变更、破坏性改动、架构调整：必须先有 `openspec/changes/<change-name>/`。
+- 实现与归档默认等待用户明确提出后再执行；提案写完不要自行改代码，实现完成不要自行归档。
 - 实现过程中发现设计不对：先改 OpenSpec 产物，再改代码，不要只改代码。
 - 纯笔误、格式化、依赖锁文件等无行为变化的修补，可不开 change；除此之外不要绕过 OpenSpec。
 - 开发记录必须留在仓库里：`openspec/changes/`（进行中）与 `openspec/changes/archive/`（已完成）。不要用聊天记录代替归档。
