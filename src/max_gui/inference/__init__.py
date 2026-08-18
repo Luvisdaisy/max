@@ -2,7 +2,7 @@
 
 对外符号：
 - `InferenceClient`：调用本地 vLLM 的 OpenAI 兼容流式接口。
-- `ChatDelta`：一次流式增量（文本、工具调用、结束原因）。
+- `ChatDelta`：一次流式增量（正文、思考、工具调用、结束原因）。
 - `ConnectionFailedError`：服务不可达，提示先 `max-gui serve`。
 - `prepare_image` / `PreparedImage` / `ImagePrepError`：缩放编码图像并报告尺寸，或拒绝无效文件。
 - `OcrRuntime`：懒启动 OCR vLLM 与 transformers 回退。

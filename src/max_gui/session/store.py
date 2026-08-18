@@ -47,7 +47,8 @@ class SessionMessage:
 
     字段：
         role: `user` / `assistant` / `tool`。
-        content: 通常含 `text`、`images`，助手还可能带 `tool_calls`。
+        content: 通常含 `text`、`images`，助手还可能带 `tool_calls`
+            与可选 `reasoning`；工具消息还可能含 `name` 与嵌套 `exec`。
         created_at: ISO 时间。
     """
 
