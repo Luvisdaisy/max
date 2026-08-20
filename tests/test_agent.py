@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from max_gui.agent.graph import ITERATION_LIMIT_MESSAGE, AgentRunner
 from max_gui.config import Settings
@@ -21,10 +22,14 @@ class ScriptedClient:
         self.deltas = list(deltas)
         self.requests: list[list[dict]] = []
 
-    async def stream(self, messages, *, tools=None, on_token=None, should_stop=None):
+    async def stream(
+        self, messages, *, tools=None, on_token=None, on_reasoning=None, should_stop=None
+    ):
         """记录请求消息并弹出下一条脚本回复。"""
         self.requests.append(messages)
         delta = self.deltas.pop(0)
+        if delta.reasoning and on_reasoning:
+            on_reasoning(delta.reasoning)
         if delta.text and on_token:
             on_token(delta.text)
         return delta
@@ -37,7 +42,9 @@ class SlowClient:
         """`started` 在首次进入流式循环时置位。"""
         self.started = asyncio.Event()
 
-    async def stream(self, messages, *, tools=None, on_token=None, should_stop=None):
+    async def stream(
+        self, messages, *, tools=None, on_token=None, on_reasoning=None, should_stop=None
+    ):
         """轮询 `should_stop`，被中断则返回 `interrupted`。"""
         self.started.set()
         for _ in range(50):
@@ -92,7 +99,8 @@ async def test_one_tool_cycle(settings: Settings) -> None:
     state = await runner.run(session, user_text="读 notes")
     assert state["status"] == "done"
     tool_msgs = [msg for msg in state["messages"] if msg.get("role") == "tool"]
-    assert tool_msgs and "secret-note" in tool_msgs[0]["content"]
+    assert tool_msgs and isinstance(tool_msgs[0]["content"], dict)
+    assert "secret-note" in tool_msgs[0]["content"]["text"]
     assert any(
         msg.get("role") == "tool" and "secret-note" in str(msg.get("content"))
         for req in client.requests
@@ -248,6 +256,216 @@ async def test_next_turn_reuses_saved_view_frame(settings: Settings) -> None:
     )
     assert "视图像素" in text
     assert "尚无截图" not in text
+    assert "(16, 10)" in text
     expected_x = round(16 * frame["logical_width"] / frame["view_width"])
     expected_y = round(10 * frame["logical_height"] / frame["view_height"])
-    assert f"({expected_x}, {expected_y})" in text
+    assert f"逻辑坐标 ({expected_x}, {expected_y})" not in text
+
+
+async def test_think_injects_system_not_persisted(settings: Settings) -> None:
+    """think 请求带 GUI system，会话 JSON 不保存该角色。"""
+    client = ScriptedClient([ChatDelta(text="好")])
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    await runner.run(session, user_text="你好")
+    assert client.requests[0][0]["role"] == "system"
+    assert "screenshot" in client.requests[0][0]["content"]
+    assert "view_width" in client.requests[0][0]["content"]
+    assert "逻辑坐标" in client.requests[0][0]["content"]
+    loaded = store.get(session.id)
+    assert loaded is not None
+    assert all(msg.role != "system" for msg in loaded.messages)
+
+
+async def test_plan_stays_on_tool_error(settings: Settings) -> None:
+    """编号计划写入状态；工具失败不推进子任务。"""
+    client = ScriptedClient(
+        [
+            ChatDelta(
+                text="1. 打开计算器\n2. 输入 1+1\n子任务完成",
+                tool_calls=[
+                    {
+                        "id": "bad",
+                        "type": "function",
+                        "function": {"name": "no_such_tool", "arguments": "{}"},
+                    }
+                ],
+            ),
+            ChatDelta(text="停"),
+        ]
+    )
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text="算一下")
+    assert state["plan"] == ["打开计算器", "输入 1+1"]
+    assert state["current_subtask"] == "打开计算器"
+
+
+async def test_plan_advances_after_successful_tool(settings: Settings) -> None:
+    """成功工具且助手写了子任务完成后，推进到下一项。"""
+    (settings.workspace / "notes.md").write_text("x", encoding="utf-8")
+    client = ScriptedClient(
+        [
+            ChatDelta(
+                text="1. 读文件\n2. 汇报\n子任务完成",
+                tool_calls=[
+                    {
+                        "id": "r1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": '{"path": "notes.md"}',
+                        },
+                    }
+                ],
+            ),
+            ChatDelta(text="好了"),
+        ]
+    )
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text="读 notes")
+    assert state["current_subtask"] == "汇报"
+
+
+async def test_tool_message_stores_exec_not_run_file(settings: Settings) -> None:
+    """截图结果写入会话 `exec`，不创建 artifacts/runs。"""
+    client = ScriptedClient(
+        [
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "shot1",
+                        "type": "function",
+                        "function": {"name": "screenshot", "arguments": "{}"},
+                    }
+                ]
+            ),
+            ChatDelta(text="看到了"),
+        ]
+    )
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text="截图")
+    tool_msgs = [msg for msg in state["messages"] if msg.get("role") == "tool"]
+    assert tool_msgs
+    content = tool_msgs[0]["content"]
+    assert content["name"] == "screenshot"
+    assert content["exec"]["has_image"] is True
+    assert content["exec"]["error"] is None
+    assert content["exec"]["duration_ms"] >= 0
+    loaded = store.get(session.id)
+    assert loaded is not None
+    saved = next(msg for msg in loaded.messages if msg.role == "tool")
+    assert saved.content["exec"]["has_image"] is True
+    runs = settings.project_root / "artifacts" / "runs"
+    assert not runs.exists() or not any(runs.iterdir())
+    tool_encoded = next(item for item in client.requests[1] if item.get("role") == "tool")
+    assert "exec" not in tool_encoded
+    assert '"duration_ms"' not in json.dumps(tool_encoded, ensure_ascii=False)
+
+
+async def test_click_followup_image_reaches_think(settings: Settings) -> None:
+    """点击成功后的新截图会编进下一轮 think。"""
+    client = ScriptedClient(
+        [
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "clk",
+                        "type": "function",
+                        "function": {
+                            "name": "mouse_click",
+                            "arguments": '{"x": 8, "y": 8}',
+                        },
+                    }
+                ]
+            ),
+            ChatDelta(text="点完了"),
+        ]
+    )
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text="点一下")
+    tool_msgs = [msg for msg in state["messages"] if msg.get("role") == "tool"]
+    assert tool_msgs and isinstance(tool_msgs[0]["content"], dict)
+    assert tool_msgs[0]["content"]["images"]
+    tool_encoded = next(item for item in client.requests[1] if item.get("role") == "tool")
+    types = [part["type"] for part in tool_encoded["content"]]
+    assert "text" in types and "image_url" in types
+
+
+async def test_progress_and_incremental_persist(settings: Settings) -> None:
+    """状态随节点变化；双工具时第一条 tool 落盘后才跑第二条；结束不重复追加。"""
+    statuses: list[str] = []
+    committed: list[str] = []
+    first_tool_roles: list[str] = []
+    client = ScriptedClient(
+        [
+            ChatDelta(
+                reasoning="列两次",
+                text="开始",
+                tool_calls=[
+                    {
+                        "id": "a",
+                        "type": "function",
+                        "function": {"name": "list_dir", "arguments": '{"path": "."}'},
+                    },
+                    {
+                        "id": "b",
+                        "type": "function",
+                        "function": {"name": "list_dir", "arguments": '{"path": "."}'},
+                    },
+                ],
+            ),
+            ChatDelta(text="列完了"),
+        ]
+    )
+    runner, store = _runner(settings, client)
+    original = runner.registry.invoke
+    calls = 0
+    second_gate = asyncio.Event()
+
+    async def gated_invoke(name: str, arguments: dict | str | None = None):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            await second_gate.wait()
+        return await original(name, arguments)
+
+    runner.registry.invoke = gated_invoke  # type: ignore[method-assign]
+    session = store.create(model="qwen3.5-2b")
+
+    def on_message(role: str, _content: dict) -> None:
+        committed.append(role)
+        if role == "tool" and committed.count("tool") == 1:
+            loaded = store.get(session.id)
+            assert loaded is not None
+            first_tool_roles.extend(msg.role for msg in loaded.messages)
+            assert first_tool_roles.count("assistant") == 1
+            assert first_tool_roles.count("tool") == 1
+            assert calls == 1
+            second_gate.set()
+
+    state = await runner.run(
+        session,
+        user_text="列目录",
+        on_status=statuses.append,
+        on_message=on_message,
+    )
+    assert state["status"] == "done"
+    assert "thinking" in statuses
+    assert "acting" in statuses
+    assert "observing" in statuses
+    assert statuses.index("acting") > statuses.index("thinking")
+    loaded = store.get(session.id)
+    assert loaded is not None
+    roles = [msg.role for msg in loaded.messages]
+    assert roles.count("assistant") == 2
+    assert roles.count("tool") == 2
+    assistants = [msg for msg in loaded.messages if msg.role == "assistant"]
+    assert assistants[0].content.get("reasoning") == "列两次"
+    tools = [msg for msg in loaded.messages if msg.role == "tool"]
+    assert assistants[0].created_at <= tools[0].created_at
+    encoded = json.dumps(client.requests[1], ensure_ascii=False)
+    assert "列两次" not in encoded

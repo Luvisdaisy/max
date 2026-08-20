@@ -1,5 +1,6 @@
 """桌面工具：截图回注、屏幕信息、移鼠、点按、拖拽、滚轮与键盘输入。
 
+点击、拖拽、滚动与键盘成功后会在同一条结果里附新截图。
 视图坐标系与 `ocr_locate` 命中表经 `restore_desktop_context` /
 `snapshot_desktop_context` 与会话 JSON 同步，避免跨回合丢失。
 """
@@ -56,7 +57,7 @@ DANGEROUS_HOTKEYS = {
 FOREGROUND_HINT = (
     "输入会打到当前前台窗口，可能是终端本身。可先把目标窗口置于前台，或设置 delay_ms。"
 )
-VIEW_COORD_HINT = "坐标是你看到的最近一张截图上的像素，原点在图左上角。"
+VIEW_COORD_HINT = "坐标是你看到的最近一张截图上的像素，必须落在该图宽高内，原点在图左上角。"
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +229,23 @@ def clamp_point(x: int, y: int, width: int, height: int) -> tuple[int, int, bool
     return cx, cy, cx != int(x) or cy != int(y)
 
 
+def reject_if_outside_view(x: int, y: int, frame: ViewFrame | None) -> None:
+    """有视图帧时拒绝图外坐标。
+
+    异常：
+        ToolError: 点不在 `[0, view_width) × [0, view_height)` 内。
+    """
+    if frame is None or frame.view_width <= 0 or frame.view_height <= 0:
+        return
+    vx, vy = int(x), int(y)
+    if 0 <= vx < frame.view_width and 0 <= vy < frame.view_height:
+        return
+    raise ToolError(
+        f"坐标 ({vx}, {vy}) 超出最近截图视图 {frame.view_width}×{frame.view_height}，"
+        "请使用图上像素或 ocr_locate 的 target_id。"
+    )
+
+
 def view_to_logical(
     x: int,
     y: int,
@@ -284,8 +302,35 @@ def _coord_note(*, used_view: bool, used_id: bool, clamped: bool) -> str:
     else:
         parts.append("尚无截图，按逻辑像素")
     if clamped:
-        parts.append("已夹紧到屏幕内")
+        parts.append("换算后已夹紧到屏幕内" if used_view else "已夹紧到屏幕内")
     return "（" + "；".join(parts) + "）"
+
+
+def _format_action_point(
+    logical_x: int,
+    logical_y: int,
+    *,
+    used_view: bool,
+    used_id: bool,
+    clamped: bool,
+) -> str:
+    """拼摘要坐标：有视图帧时用实际落点的视图像素，避免写出逻辑数字。"""
+    frame = active_view_frame()
+    if frame is not None and (used_view or used_id):
+        vx, vy = logical_to_view(
+            logical_x,
+            logical_y,
+            origin_x=frame.origin_x,
+            origin_y=frame.origin_y,
+            logical_width=frame.logical_width,
+            logical_height=frame.logical_height,
+            view_width=frame.view_width,
+            view_height=frame.view_height,
+        )
+        label = f"视图像素 ({vx}, {vy})"
+    else:
+        label = f"逻辑坐标 ({logical_x}, {logical_y})"
+    return f"{label}{_coord_note(used_view=used_view, used_id=used_id, clamped=clamped)}"
 
 
 def _is_black_or_tiny(image: Image.Image) -> bool:
@@ -382,9 +427,12 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
             if require:
                 raise ToolError(f"需要 {x_key}/{y_key} 或 target_id")
             return None
+        vx = int(args.get(x_key) or 0)
+        vy = int(args.get(y_key) or 0)
+        reject_if_outside_view(vx, vy, active_view_frame())
         return view_to_logical(
-            int(args.get(x_key) or 0),
-            int(args.get(y_key) or 0),
+            vx,
+            vy,
             active_view_frame(),
             width,
             height,
@@ -481,6 +529,14 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
         )
         return ToolResult(text=summary, images=[path])
 
+    async def _attach_new_frame(action_text: str) -> ToolResult:
+        """动作成功后再截一帧，失败则只保留动作摘要与中文说明。"""
+        try:
+            shot = await screenshot({})
+        except ToolError as exc:
+            return ToolResult(text=f"{action_text}\n后置截图失败：{exc}")
+        return ToolResult(text=f"{action_text}\n{shot.text}", images=list(shot.images))
+
     async def mouse_move(args: dict) -> str:
         """移到视图像素对应的逻辑坐标，或按定位编号。"""
         width, height = await _call(backend.size)
@@ -490,10 +546,11 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
         used_id = args.get("target_id") is not None
         duration = float(args.get("duration") if args.get("duration") is not None else 0.2)
         await _call(backend.move_to, x, y, duration)
-        return f"指针已移到逻辑坐标 ({x}, {y}){_coord_note(used_view=used_view, used_id=used_id, clamped=clamped)}"
+        where = _format_action_point(x, y, used_view=used_view, used_id=used_id, clamped=clamped)
+        return f"指针已移到{where}"
 
-    async def mouse_click(args: dict) -> str:
-        """单击或双击；可先按视图像素或定位编号移动。"""
+    async def mouse_click(args: dict) -> ToolResult:
+        """单击或双击；成功后附新截图。"""
         width, height = await _call(backend.size)
         button = str(args.get("button") or "left")
         clicks = int(args.get("clicks") or 1)
@@ -508,16 +565,21 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
         await _call(
             backend.click, button=button, clicks=clicks, x=target_x, y=target_y, duration=duration
         )
-        where = f"({target_x}, {target_y})" if target_x is not None else "当前位置"
-        note = (
-            _coord_note(used_view=used_view, used_id=used_id, clamped=clamped)
-            if target_x is not None
-            else ""
-        )
-        return f"已{('双击' if clicks == 2 else '单击')}{button} {where}{note}"
+        if target_x is not None:
+            where = _format_action_point(
+                target_x,
+                target_y or 0,
+                used_view=used_view,
+                used_id=used_id,
+                clamped=clamped,
+            )
+        else:
+            where = "当前位置"
+        action = f"已{('双击' if clicks == 2 else '单击')}{button} {where}"
+        return await _attach_new_frame(action)
 
-    async def mouse_drag(args: dict) -> str:
-        """从视图像素 `(x1, y1)` 拖到 `(x2, y2)`。"""
+    async def mouse_drag(args: dict) -> ToolResult:
+        """从视图像素 `(x1, y1)` 拖到 `(x2, y2)`；成功后附新截图。"""
         width, height = await _call(backend.size)
         start = await _resolve_point(args, width, height, x_key="x1", y_key="y1", require=True)
         end = await _resolve_point(args, width, height, x_key="x2", y_key="y2", require=True)
@@ -527,11 +589,13 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
         duration = float(args.get("duration") if args.get("duration") is not None else 0.2)
         button = str(args.get("button") or "left")
         await _call(backend.drag_to, x1, y1, x2, y2, duration=duration, button=button)
-        note = _coord_note(used_view=v1 or v2, used_id=False, clamped=c1 or c2)
-        return f"已从 ({x1}, {y1}) 拖到 ({x2}, {y2}){note}"
+        start_at = _format_action_point(x1, y1, used_view=v1, used_id=False, clamped=c1)
+        end_at = _format_action_point(x2, y2, used_view=v2, used_id=False, clamped=c2)
+        action = f"已从{start_at} 拖到{end_at}"
+        return await _attach_new_frame(action)
 
-    async def mouse_scroll(args: dict) -> str:
-        """按视图像素可选先移动，再滚动。"""
+    async def mouse_scroll(args: dict) -> ToolResult:
+        """按视图像素可选先移动，再滚动；成功后附新截图。"""
         clicks = args.get("clicks")
         if clicks is None:
             raise ToolError("mouse_scroll 需要 clicks")
@@ -544,17 +608,22 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
         if resolved is not None:
             x, y, used_view, clamped = resolved
         await _call(backend.scroll, int(clicks), x, y)
-        where = f"在 ({x}, {y}) " if x is not None else ""
+        if x is not None:
+            where = (
+                "在"
+                + _format_action_point(
+                    x, y or 0, used_view=used_view, used_id=used_id, clamped=clamped
+                )
+                + " "
+            )
+        else:
+            where = ""
         direction = "向上" if int(clicks) > 0 else "向下" if int(clicks) < 0 else ""
-        note = (
-            _coord_note(used_view=used_view, used_id=used_id, clamped=clamped)
-            if x is not None
-            else ""
-        )
-        return f"已{where}{direction}滚动 {abs(int(clicks))} 格{note}"
+        action = f"已{where}{direction}滚动 {abs(int(clicks))} 格"
+        return await _attach_new_frame(action)
 
-    async def keyboard_type(args: dict) -> str:
-        """ASCII 走 `write`，非 ASCII 走剪贴板粘贴。"""
+    async def keyboard_type(args: dict) -> ToolResult:
+        """ASCII 走 `write`，非 ASCII 走剪贴板粘贴；成功后附新截图。"""
         text = str(args.get("text") or "")
         if not text:
             raise ToolError("keyboard_type 需要 text")
@@ -568,10 +637,11 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
         else:
             await _call(backend.write, text, interval)
             method = "write"
-        return f"已用{method}输入 {len(text)} 个字符。{FOREGROUND_HINT}"
+        action = f"已用{method}输入 {len(text)} 个字符。{FOREGROUND_HINT}"
+        return await _attach_new_frame(action)
 
-    async def keyboard_press(args: dict) -> str:
-        """按白名单单键或组合键。"""
+    async def keyboard_press(args: dict) -> ToolResult:
+        """按白名单单键或组合键；成功后附新截图。"""
         keys = _parse_keys(args.get("keys"))
         interval = float(args.get("interval") or 0)
         delay_ms = int(args.get("delay_ms") or 0)
@@ -583,7 +653,8 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
             await _call(backend.hotkey, *keys)
             if interval:
                 await asyncio.sleep(interval)
-        return f"已按下 {'+'.join(keys)}。{FOREGROUND_HINT}"
+        action = f"已按下 {'+'.join(keys)}。{FOREGROUND_HINT}"
+        return await _attach_new_frame(action)
 
     return [
         Tool(

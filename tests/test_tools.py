@@ -17,6 +17,11 @@ from max_gui.tools.protocol import ToolResult
 from max_gui.tools.registry import DenyGate, SessionScopedGate, build_default_registry
 
 
+def _text(result: str | ToolResult) -> str:
+    """工具返回值的文本部分，便于断言。"""
+    return result.text if isinstance(result, ToolResult) else str(result)
+
+
 async def test_read_file_and_reject_escape(settings: Settings) -> None:
     """能读工作区内文件，拒绝逃出工作区的路径。"""
     notes = settings.workspace / "notes.md"
@@ -82,7 +87,8 @@ async def test_desktop_auto_approve_skips_press(settings: Settings) -> None:
         gate=SessionScopedGate(auto_approve=False, auto_approve_desktop=True),
     )
     result = await registry.invoke("keyboard_press", {"keys": "enter"})
-    assert "已按下 enter" in result
+    assert "已按下 enter" in _text(result)
+    assert isinstance(result, ToolResult) and result.images
     assert ("press", {"key": "enter"}) in backend.calls
 
 
@@ -137,10 +143,10 @@ async def test_keyboard_type_ascii_and_paste(settings: Settings) -> None:
         gate=SessionScopedGate(auto_approve_desktop=True),
     )
     ascii_out = await registry.invoke("keyboard_type", {"text": "1+1"})
-    assert "write" in ascii_out
+    assert "write" in _text(ascii_out)
     assert any(call[0] == "write" and call[1]["text"] == "1+1" for call in backend.calls)
     zh = await registry.invoke("keyboard_type", {"text": "你好"})
-    assert "剪贴板" in zh
+    assert "剪贴板" in _text(zh)
     assert any(call[0] == "paste" and call[1]["text"] == "你好" for call in backend.calls)
 
 
@@ -151,12 +157,18 @@ async def test_desktop_closed_loop_fake_backend(settings: Settings) -> None:
         gate=SessionScopedGate(auto_approve_desktop=True),
     )
     shot1 = await registry.invoke("screenshot", {})
-    click = await registry.invoke("mouse_click", {"x": 100, "y": 80})
+    assert isinstance(shot1, ToolResult)
+    payload = json.loads(shot1.text)
+    click = await registry.invoke(
+        "mouse_click",
+        {"x": payload["view_width"] // 4, "y": payload["view_height"] // 4},
+    )
     typed = await registry.invoke("keyboard_type", {"text": "1+1"})
     pressed = await registry.invoke("keyboard_press", {"keys": "enter"})
     shot2 = await registry.invoke("screenshot", {})
     assert isinstance(shot1, ToolResult) and isinstance(shot2, ToolResult)
-    assert "单击" in click and "write" in typed and "enter" in pressed
+    assert "单击" in _text(click) and "write" in _text(typed) and "enter" in _text(pressed)
+    assert isinstance(click, ToolResult) and click.images
     names = [call[0] for call in backend.calls]
     assert names.count("screenshot") >= 2
     assert "click" in names and "write" in names and "press" in names
@@ -183,6 +195,8 @@ async def test_view_coords_convert_after_screenshot(settings: Settings) -> None:
     expected_y = round(view_y * payload["height"] / payload["view_height"])
     moved = await registry.invoke("mouse_move", {"x": view_x, "y": view_y})
     assert "视图像素" in moved
+    assert f"({view_x}, {view_y})" in moved
+    assert f"逻辑坐标 ({expected_x}, {expected_y})" not in moved
     assert backend.mouse == (expected_x, expected_y)
 
 
@@ -201,7 +215,8 @@ async def test_region_view_coords_include_origin(settings: Settings) -> None:
     expected_x = 200 + round(view_x * payload["width"] / payload["view_width"])
     expected_y = 100 + round(view_y * payload["height"] / payload["view_height"])
     clicked = await registry.invoke("mouse_click", {"x": view_x, "y": view_y})
-    assert "视图像素" in clicked
+    assert "视图像素" in _text(clicked)
+    assert isinstance(clicked, ToolResult) and clicked.images
     click = next(call for call in backend.calls if call[0] == "click")
     assert click[1]["x"] == expected_x
     assert click[1]["y"] == expected_y
@@ -245,7 +260,56 @@ async def test_mouse_move_without_screenshot_is_logical(settings: Settings) -> N
     registry, backend = _desktop_registry(settings)
     result = await registry.invoke("mouse_move", {"x": 80, "y": 40})
     assert "尚无截图" in result
+    assert "逻辑坐标 (80, 40)" in result
     assert backend.mouse == (80, 40)
+
+
+async def test_view_out_of_bounds_rejected(settings: Settings) -> None:
+    """有截图时视图外坐标拒绝执行，不夹到屏幕边。"""
+    registry, backend = _desktop_registry(
+        settings, gate=SessionScopedGate(auto_approve_desktop=True)
+    )
+    shot = await registry.invoke("screenshot", {})
+    assert isinstance(shot, ToolResult)
+    payload = json.loads(shot.text)
+    before = list(backend.calls)
+    moved = await registry.invoke("mouse_move", {"x": 0, "y": payload["view_height"]})
+    assert "超出最近截图视图" in moved
+    assert str(payload["view_height"]) in moved
+    assert str(payload["view_width"]) in moved
+    assert backend.calls == before
+    dragged = await registry.invoke(
+        "mouse_drag",
+        {
+            "x1": 1,
+            "y1": 1,
+            "x2": 2,
+            "y2": payload["view_height"] + 8,
+        },
+    )
+    assert "超出最近截图视图" in dragged
+    assert all(call[0] != "drag_to" for call in backend.calls)
+    clicked = await registry.invoke("mouse_click", {"x": payload["view_width"], "y": 0})
+    assert "超出最近截图视图" in clicked
+    assert all(call[0] != "click" for call in backend.calls)
+
+
+async def test_target_id_ignores_view_bounds(settings: Settings) -> None:
+    """定位编号不走视图出界拒绝，摘要在有截图时仍报视图像素。"""
+    registry, backend = _desktop_registry(
+        settings, gate=SessionScopedGate(auto_approve_desktop=True)
+    )
+    shot = await registry.invoke("screenshot", {})
+    assert isinstance(shot, ToolResult)
+    store_locate_hits({1: (220, 80)})
+    result = await registry.invoke("mouse_click", {"target_id": 1})
+    text = _text(result)
+    assert "定位编号" in text
+    assert "视图像素" in text
+    assert "逻辑坐标 (220, 80)" not in text
+    click = next(call for call in backend.calls if call[0] == "click")
+    assert click[1]["x"] == 220
+    assert click[1]["y"] == 80
 
 
 async def test_mouse_scroll_requires_desktop_confirm(settings: Settings) -> None:
@@ -261,7 +325,8 @@ async def test_mouse_scroll_requires_desktop_confirm(settings: Settings) -> None
     )
     await registry.invoke("screenshot", {})
     result = await registry.invoke("mouse_scroll", {"clicks": 3, "x": 10, "y": 10})
-    assert "滚动" in result
+    assert "滚动" in _text(result)
+    assert isinstance(result, ToolResult) and result.images
     assert any(call[0] == "scroll" and call[1]["clicks"] == 3 for call in backend.calls)
 
 
@@ -275,7 +340,7 @@ async def test_locate_hits_survive_context_reset(settings: Settings) -> None:
     clear_desktop_context()
     restore_desktop_context(frame, hits)
     result = await registry.invoke("mouse_click", {"target_id": 1})
-    assert "定位编号" in result
+    assert "定位编号" in _text(result)
     click = next(call for call in backend.calls if call[0] == "click")
     assert click[1]["x"] == 220
     assert click[1]["y"] == 80
@@ -288,9 +353,34 @@ async def test_target_id_clicks_locate_center(settings: Settings) -> None:
     )
     current_locate_hits.set({1: (220, 80)})
     result = await registry.invoke("mouse_click", {"target_id": 1, "x": 1, "y": 1})
-    assert "定位编号" in result
+    assert "定位编号" in _text(result)
     click = next(call for call in backend.calls if call[0] == "click")
     assert click[1]["x"] == 220
     assert click[1]["y"] == 80
     missing = await registry.invoke("mouse_click", {"target_id": 9})
     assert "没有 id=9" in missing
+
+
+async def test_mouse_move_does_not_attach_screenshot(settings: Settings) -> None:
+    """移动指针成功也不附新截图。"""
+    registry, backend = _desktop_registry(settings)
+    result = await registry.invoke("mouse_move", {"x": 12, "y": 8})
+    assert not isinstance(result, ToolResult)
+    assert all(call[0] != "screenshot" for call in backend.calls)
+
+
+async def test_click_followup_black_screenshot_keeps_action(settings: Settings) -> None:
+    """后置截图全黑时保留点击摘要，不把空图回注。"""
+    backend = FakeDesktopBackend(fail_screenshot=True)
+    registry, backend = _desktop_registry(
+        settings,
+        gate=SessionScopedGate(auto_approve_desktop=True),
+        backend=backend,
+    )
+    result = await registry.invoke("mouse_click", {"x": 10, "y": 10})
+    text = _text(result)
+    assert "单击" in text
+    assert "屏幕录制" in text
+    assert isinstance(result, ToolResult)
+    assert not result.images
+    assert any(call[0] == "click" for call in backend.calls)

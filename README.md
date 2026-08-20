@@ -2,7 +2,7 @@
 
 本地多模态 ReAct GUI Agent CLI。开发测试默认使用已下载的 Qwen3.5-4B（`model/qwen3.5-4b`）。仓库内 Python 代码需按 `AGENTS.md`「中文代码文档」在模块与函数签名处写中文说明。
 
-当前能力：Textual REPL、LangGraph ReAct（Think / Act / Observe）、对接独立 vLLM 进程、工作区文件工具、PyAutoGUI 桌面工具（`screenshot` 图像回注、`screen_info`、`mouse_move` / `mouse_click` / `mouse_drag` / `mouse_scroll`、`keyboard_type` / `keyboard_press`；坐标按模型看见的视图像素换算，并写入会话）、整图 `ocr` 与文字定位 `ocr_locate`（看不清字或需要可点框时调用，首次使用再启动独立 PaddleOCR-VL-1.5）。会话写在 `artifacts/sessions/`，截图写在 `artifacts/screenshots/`。桌面点击、拖拽、滚动、输入、按键会单独确认，不受普通自动批准影响。macOS 需开启屏幕录制与辅助功能。改默认模型后需重新执行 `max-gui serve`。
+当前能力：Textual REPL（思考与正文分区流式展示，工具结果在执行当时写入记录区，状态栏显示思考中 / 执行工具 / 观察中）、LangGraph ReAct（Think / Act / Observe；每次 think 注入中文 GUI 系统契约，不写入会话；轻量计划字段；单回合默认最多 20 轮；think/act 增量写入会话）、对接独立 vLLM 进程（请求只编码最近两张仍存在的图；思考字段与正文分通道）、工作区文件工具、PyAutoGUI 桌面工具（`screenshot` 图像回注、`screen_info`、`mouse_move` / `mouse_click` / `mouse_drag` / `mouse_scroll`、`keyboard_type` / `keyboard_press`；坐标按模型看见的视图像素换算，必须落在当前视图内，出界拒绝；成功摘要只报视图像素；坐标系写入会话；点击/拖拽/滚轮/输入/按键成功后附新截图）、整图 `ocr` 与文字定位 `ocr_locate`（看不清字或需要可点框时调用，首次使用再启动独立 PaddleOCR-VL-1.5）。会话写在 `artifacts/sessions/`，截图写在 `artifacts/screenshots/`。助手消息可带思考原文 `reasoning`（回放用，不发给模型）。tool 消息会记下 `exec` 元数据，TUI 记录区只显示工具摘要文本。桌面点击、拖拽、滚动、输入、按键会单独确认，不受普通自动批准影响。macOS 需开启屏幕录制与辅助功能。改默认模型后需重新执行 `max-gui serve`。
 
 ## 命令
 

@@ -46,7 +46,7 @@ Implement tasks from an OpenSpec change.
 
    **Handle states:**
    - If `state: "blocked"` (missing artifacts): show message, suggest using openspec-continue-change
-   - If `state: "all_done"`: congratulate, suggest archive
+   - If `state: "all_done"`: congratulate and stop. Do not archive unless the user explicitly asked.
    - Otherwise: proceed to implementation
 
 4. **Read context files**
@@ -84,7 +84,7 @@ Implement tasks from an OpenSpec change.
    Display:
    - Tasks completed this session
    - Overall progress: "N/M tasks complete"
-   - If all done: suggest archive
+   - If all done: say implementation is complete and that archive waits for an explicit user request. Do not archive in this turn unless the user already asked.
    - If paused: explain why and wait for guidance
 
 **Output During Implementation**
@@ -115,7 +115,7 @@ Working on task 4/7: <task description>
 - [x] Task 2
 ...
 
-All tasks complete! Ready to archive this change.
+All tasks complete. Archive waits for an explicit user request.
 ```
 
 **Output On Pause (Issue Encountered)**

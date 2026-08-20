@@ -22,6 +22,15 @@ from max_gui.tools.protocol import ConfirmationGate, ConfirmationScope
 from max_gui.tools.registry import ToolRegistry, build_default_registry
 from max_gui.widgets.prompt import PromptInput, PromptSubmitted
 
+_STATUS_LABELS = {
+    "thinking": "思考中…",
+    "acting": "执行工具…",
+    "observing": "观察中…",
+    "done": "就绪",
+    "interrupted": "已中断",
+    "error": "错误",
+}
+
 
 class ConfirmScreen(ModalScreen[bool]):
     """模态确认：允许或拒绝即将执行的工具。"""
@@ -78,7 +87,8 @@ class MaxGuiApp(App[None]):
 
     TITLE = "max-gui"
     CSS = """
-    #transcript { height: 1fr; border: solid $accent; }
+    #record { height: 1fr; border: solid $accent; }
+    #transcript { height: 1fr; border: none; }
     #live { height: auto; max-height: 16; overflow-y: auto; display: none; padding: 0 1; }
     #prompt { height: 8; border: solid $primary; }
     #status { height: 3; color: $text-muted; }
@@ -100,12 +110,14 @@ class MaxGuiApp(App[None]):
         self.runner: AgentRunner | None = None
         self._turn_active = False
         self._stream_text = ""
+        self._stream_reasoning = ""
 
     def compose(self) -> ComposeResult:
-        """自上而下：标题、历史、实时流、待附件、输入、状态、页脚。"""
+        """自上而下：标题、记录框（历史+实时流）、待附件、输入、状态、页脚。"""
         yield Header()
-        yield RichLog(id="transcript", highlight=True, markup=True, wrap=True)
-        yield Static("", id="live", markup=False)
+        with Vertical(id="record"):
+            yield RichLog(id="transcript", highlight=True, markup=True, wrap=True)
+            yield Static("", id="live", markup=False)
         yield Static("", id="pending")
         yield PromptInput(id="prompt")
         yield Static("就绪", id="status")
@@ -174,7 +186,11 @@ class MaxGuiApp(App[None]):
         elif role == "tool":
             self._log().write(f"[magenta]工具[/magenta] {text[:400]}")
         else:
-            self._log().write(f"[bold green]助手[/bold green] {text}{suffix}")
+            reasoning = str(payload.get("reasoning") or "")
+            if reasoning:
+                self._log().write(f"[dim]思考[/dim] {reasoning}")
+            if text or suffix or not reasoning:
+                self._log().write(f"[bold green]助手[/bold green] {text}{suffix}")
 
     def on_prompt_submitted(self, event: PromptSubmitted) -> None:
         """清空输入框并在后台处理提交文本。"""
@@ -287,7 +303,7 @@ class MaxGuiApp(App[None]):
         self._log().write(f"[dim]后续请求将使用 {canonical}[/dim]")
 
     async def _run_turn(self, text: str) -> None:
-        """跑一轮 Agent，流式更新 `#live`，结束后写入历史并刷新会话。"""
+        """跑一轮 Agent，在记录框内流式更新，结束后写入历史并刷新会话。"""
         assert self.session is not None
         assert self.runner is not None
         images = [str(path) for path in self.pending_images]
@@ -295,14 +311,24 @@ class MaxGuiApp(App[None]):
         self._refresh_pending()
         self._write_message("user", {"text": text, "images": [{"path": path} for path in images]})
         self._turn_active = True
-        self._set_status("思考中…")
-        assistant_started = False
+        self._set_status(_STATUS_LABELS["thinking"])
+        saw_message = False
 
         def on_token(token: str) -> None:
-            nonlocal assistant_started
-            started = assistant_started
-            assistant_started = True
-            self.call_later(self._append_token, token, started)
+            self.call_later(self._append_token, token)
+
+        def on_reasoning(token: str) -> None:
+            self.call_later(self._append_reasoning, token)
+
+        def on_status(status: str) -> None:
+            label = _STATUS_LABELS.get(status)
+            if label:
+                self.call_later(self._set_status, label)
+
+        def on_message(role: str, content: dict[str, Any]) -> None:
+            nonlocal saw_message
+            saw_message = True
+            self.call_later(self._commit_stream_message, role, content)
 
         try:
             resume = self.session.status == "interrupted" and not text
@@ -312,8 +338,11 @@ class MaxGuiApp(App[None]):
                 image_paths=images,
                 resume=resume,
                 on_token=on_token,
+                on_reasoning=on_reasoning,
+                on_status=on_status,
+                on_message=on_message,
             )
-            if not assistant_started:
+            if not saw_message:
                 messages = state.get("messages") or []
                 if messages:
                     last = messages[-1]
@@ -324,9 +353,9 @@ class MaxGuiApp(App[None]):
             if status == "error":
                 self._set_status(str(state.get("error") or "错误"))
             elif status == "interrupted":
-                self._set_status("已中断")
+                self._set_status(_STATUS_LABELS["interrupted"])
             else:
-                self._set_status("就绪")
+                self._set_status(_STATUS_LABELS["done"])
         except ConnectionFailedError as exc:
             self._log().write(f"[red]{exc}[/red]")
             self._set_status("推理服务不可达")
@@ -337,7 +366,8 @@ class MaxGuiApp(App[None]):
             self._log().write(f"[red]运行失败：{exc}[/red]")
             self._set_status("错误")
         finally:
-            self._flush_live_stream()
+            if not saw_message:
+                self._flush_live_stream()
             self._turn_active = False
             self.session = self.store.get(self.session.id) or self.session
 
@@ -348,34 +378,65 @@ class MaxGuiApp(App[None]):
     def _clear_live_stream(self) -> None:
         """清空并隐藏流式区域。"""
         self._stream_text = ""
+        self._stream_reasoning = ""
         live = self._live()
         live.update("")
         live.display = False
 
     def _refresh_live_stream(self) -> None:
-        """把累计 token 画到 `#live`。"""
+        """把累计思考与正文画到 `#live`。"""
         live = self._live()
-        if not self._stream_text:
+        if not self._stream_text and not self._stream_reasoning:
             live.update("")
             live.display = False
             return
-        live.update(Text.assemble(("助手 ", "bold green"), self._stream_text))
+        parts: list[tuple[str, str]] = []
+        if self._stream_reasoning:
+            parts.append(("思考 ", "dim italic"))
+            parts.append((self._stream_reasoning, "dim"))
+            if self._stream_text:
+                parts.append(("\n", ""))
+        if self._stream_text:
+            parts.append(("助手 ", "bold green"))
+            parts.append((self._stream_text, ""))
+        live.update(Text.assemble(*parts))
         live.display = True
 
     def _flush_live_stream(self) -> None:
-        """把流式文本落成一条历史消息并清空 `#live`。"""
+        """把当前 think 的流式内容落成一条历史并清空 `#live`。"""
         text = self._stream_text
-        if text:
-            self._write_message("assistant", {"text": text})
+        reasoning = self._stream_reasoning
+        if text or reasoning:
+            payload: dict[str, Any] = {"text": text}
+            if reasoning:
+                payload["reasoning"] = reasoning
+            self._write_message("assistant", payload)
         self._clear_live_stream()
 
-    def _append_token(self, token: str, started: bool) -> None:
-        """在 UI 线程追加一个 token。`started` 为假表示本回合第一条。"""
-        if not started:
-            self._stream_text = token
-        else:
-            self._stream_text += token
+    def _append_token(self, token: str, started: bool | None = None) -> None:
+        """在 UI 线程追加一个正文 token。`started` 保留给旧测试调用，无效果。"""
+        _ = started
+        self._stream_text += token
         self._refresh_live_stream()
+
+    def _append_reasoning(self, token: str) -> None:
+        """在 UI 线程追加一段思考增量。"""
+        self._stream_reasoning += token
+        self._refresh_live_stream()
+
+    def _commit_stream_message(self, role: str, content: dict[str, Any]) -> None:
+        """一次 think/act 提交后写入记录区。助手先 flush `#live`。"""
+        payload = content if isinstance(content, dict) else {"text": str(content)}
+        if role == "assistant":
+            if self._stream_text or self._stream_reasoning:
+                self._flush_live_stream()
+            else:
+                self._write_message("assistant", payload)
+            self._clear_live_stream()
+            return
+        if self._stream_text or self._stream_reasoning:
+            self._flush_live_stream()
+        self._write_message(role, payload)
 
     def on_unmount(self) -> None:
         """退出时尽量停掉本进程拉起的 OCR 子进程。"""

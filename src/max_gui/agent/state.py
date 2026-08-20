@@ -1,4 +1,4 @@
-"""LangGraph ReAct 状态：会话消息、待执行工具调用与回合状态。"""
+"""LangGraph ReAct 状态：会话消息、待执行工具调用、计划与回合状态。"""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ class AgentState(TypedDict, total=False):
         iteration: 已完成的 Think-Act-Observe 圈数。
         status: 当前节点或终态。
         error: 失败时的人类可读说明。
+        plan: 编号子任务列表；旧检查点可缺省。
+        current_subtask: 当前子任务文案；无计划时为空。
     """
 
     session_id: str
@@ -27,3 +29,5 @@ class AgentState(TypedDict, total=False):
     iteration: int
     status: AgentStatus
     error: str | None
+    plan: list[str]
+    current_subtask: str | None

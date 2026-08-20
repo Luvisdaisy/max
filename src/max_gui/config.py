@@ -123,7 +123,7 @@ class Settings:
     sessions_dir: Path = Path("artifacts/sessions")
     screenshots_dir: Path = Path("artifacts/screenshots")
     model_root: Path = Path("model")
-    max_iterations: int = 8
+    max_iterations: int = 20
     max_image_edge: int = 1536
     max_image_bytes: int = 2_000_000
     tool_timeout: float = 30.0
@@ -190,7 +190,7 @@ def load_settings(
         sessions_dir=(sessions_dir or root / "artifacts" / "sessions").resolve(),
         screenshots_dir=(root / "artifacts" / "screenshots").resolve(),
         model_root=(root / "model").resolve(),
-        max_iterations=int(os.environ.get("MAX_GUI_MAX_ITERATIONS") or 8),
+        max_iterations=int(os.environ.get("MAX_GUI_MAX_ITERATIONS") or 20),
         max_image_edge=int(os.environ.get("MAX_GUI_MAX_IMAGE_EDGE") or 1536),
         max_image_bytes=int(os.environ.get("MAX_GUI_MAX_IMAGE_BYTES") or 2_000_000),
         tool_timeout=float(os.environ.get("MAX_GUI_TOOL_TIMEOUT") or 30),

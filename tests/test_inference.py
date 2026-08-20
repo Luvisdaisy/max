@@ -41,6 +41,16 @@ def test_load_settings_defaults_to_4b(monkeypatch: pytest.MonkeyPatch, tmp_path:
     assert settings.canonical_model == "qwen3.5-4b"
 
 
+def test_load_settings_default_max_iterations(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """未设置环境变量时迭代上限为 20。"""
+    monkeypatch.delenv("MAX_GUI_MAX_ITERATIONS", raising=False)
+    monkeypatch.setenv("MAX_GUI_ROOT", str(tmp_path))
+    settings = load_settings(workspace=tmp_path)
+    assert settings.max_iterations == 20
+
+
 def test_prepare_oversized_image(tmp_path: Path, settings: Settings) -> None:
     """超大图被压成 JPEG data URL。"""
     path = tmp_path / "big.png"
@@ -83,7 +93,10 @@ def test_text_only_payload_has_no_image(settings: Settings) -> None:
         settings=settings,
     )
     content = messages[0]["content"]
-    assert all(part.get("type") != "image_url" for part in content)
+    if isinstance(content, list):
+        assert all(part.get("type") != "image_url" for part in content)
+    else:
+        assert content == "hello"
 
 
 def test_tool_result_text_only(settings: Settings) -> None:
@@ -113,6 +126,61 @@ def test_tool_result_with_image(tmp_path: Path, settings: Settings) -> None:
     )
     types = [part["type"] for part in messages[0]["content"]]
     assert "text" in types and "image_url" in types
+
+
+def test_inject_system_unless_already_present(settings: Settings) -> None:
+    """调用方提供 system 时插到最前；原始已有则不重复。"""
+    with_system = to_chat_messages(
+        [{"role": "user", "content": {"text": "hi", "images": []}}],
+        settings=settings,
+        system="先截图",
+    )
+    assert with_system[0] == {"role": "system", "content": "先截图"}
+    assert with_system[1]["role"] == "user"
+    already = to_chat_messages(
+        [{"role": "system", "content": "已有"}, {"role": "user", "content": "hi"}],
+        settings=settings,
+        system="先截图",
+    )
+    assert [item["role"] for item in already if item["role"] == "system"] == ["system"]
+    assert already[0]["content"] == "已有"
+
+
+def test_only_last_two_images_get_image_url(tmp_path: Path, settings: Settings) -> None:
+    """第三张更早的截图只留路径摘要。"""
+    paths = []
+    for index in range(3):
+        path = tmp_path / f"shot{index}.png"
+        Image.new("RGB", (16, 16), color=(index * 40, 20, 20)).save(path)
+        paths.append(path)
+    encoded = to_chat_messages(
+        [
+            {
+                "role": "tool",
+                "tool_call_id": f"c{index}",
+                "content": {
+                    "text": json.dumps(
+                        {"path": str(path), "view_width": 10 + index, "view_height": 8}
+                    ),
+                    "images": [{"path": str(path)}],
+                },
+            }
+            for index, path in enumerate(paths)
+        ],
+        settings=settings,
+    )
+
+    def image_parts(message: dict) -> int:
+        content = message["content"]
+        if not isinstance(content, list):
+            return 0
+        return sum(1 for part in content if part.get("type") == "image_url")
+
+    assert image_parts(encoded[0]) == 0
+    assert "历史截图已省略" in encoded[0]["content"]
+    assert str(paths[0]) in encoded[0]["content"]
+    assert image_parts(encoded[1]) == 1
+    assert image_parts(encoded[2]) == 1
 
 
 def test_tool_result_missing_image_keeps_text(settings: Settings, tmp_path: Path) -> None:
@@ -168,7 +236,62 @@ async def test_stream_tokens(settings: Settings) -> None:
     tokens: list[str] = []
     result = await client.stream([{"role": "user", "content": "hi"}], on_token=tokens.append)
     assert result.text == "你好"
+    assert result.reasoning == ""
     assert tokens == ["你", "好"]
+
+
+def _sse_mixed() -> str:
+    """思考走 `reasoning_content`，正文走 `content`。"""
+    chunks = [
+        {"choices": [{"delta": {"reasoning_content": "先看"}, "finish_reason": None}]},
+        {"choices": [{"delta": {"reasoning": "图"}, "finish_reason": None}]},
+        {"choices": [{"delta": {"content": "好"}, "finish_reason": None}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+    ]
+    lines = [f"data: {json.dumps(item)}" for item in chunks]
+    lines.append("data: [DONE]")
+    return "\n".join(lines) + "\n"
+
+
+async def test_stream_reasoning_separate_from_content(settings: Settings) -> None:
+    """思考回调与正文回调分开，思考不进入 `text`。"""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_sse_mixed().encode(),
+        )
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=False)
+    tokens: list[str] = []
+    thoughts: list[str] = []
+    result = await client.stream(
+        [{"role": "user", "content": "hi"}],
+        on_token=tokens.append,
+        on_reasoning=thoughts.append,
+    )
+    assert result.reasoning == "先看图"
+    assert result.text == "好"
+    assert thoughts == ["先看", "图"]
+    assert tokens == ["好"]
+    assert "先看" not in "".join(tokens)
+
+
+def test_assistant_reasoning_not_encoded(settings: Settings) -> None:
+    """编码发给模型时丢掉助手 `reasoning`，只保留正文。"""
+    messages = to_chat_messages(
+        [
+            {
+                "role": "assistant",
+                "content": {"text": "已完成", "reasoning": "先截图再点微信"},
+            }
+        ],
+        settings=settings,
+    )
+    assert messages[0]["content"] == "已完成"
+    encoded = json.dumps(messages, ensure_ascii=False)
+    assert "先截图再点微信" not in encoded
 
 
 async def test_stream_http_error_includes_status(settings: Settings) -> None:

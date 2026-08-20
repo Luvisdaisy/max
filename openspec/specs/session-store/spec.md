@@ -98,3 +98,45 @@
 
 - **WHEN** 会话保存时已有 `id=1` 的定位中心
 - **THEN** 重新加载后 `mouse_click` 的 `target_id=1` 仍指向同一逻辑中心
+
+### Requirement: 工具消息持久化执行元数据
+
+`role` 为 `tool` 的会话消息 MUST 在 `content` 中保存工具名 `name` 与嵌套对象 `exec`。`exec` MUST 至少包含：`iteration`、`subtask`（无计划时为 `null`）、`arguments`（可 JSON 序列化的短对象；过长 MUST 截断）、`duration_ms`、`error`（无错误为 `null`）、`has_image`。MUST NOT 把图像字节或 base64 写入 `exec`。MUST NOT 另写 `artifacts/runs/` 执行日志。缺少 `exec` 的旧会话 MUST 仍能加载。发给模型时 MUST NOT 把 `exec` 编进请求正文。
+
+#### Scenario: 截图写入 exec
+
+- **WHEN** Agent 成功执行一次 `screenshot` 并保存会话
+- **THEN** 对应 tool 消息 `content.name` 为 `screenshot`，`content.exec.has_image` 为真，`content.exec.error` 为 `null`，且项目下不因此创建 `artifacts/runs/` 文件
+
+#### Scenario: 工具错误仍写入 exec
+
+- **WHEN** 工具返回错误文本或业务失败
+- **THEN** 该 tool 消息 `content.exec.error` 为非空字符串，且会话仍保存该条消息
+
+#### Scenario: 旧会话缺 exec
+
+- **WHEN** 已存 tool 消息没有 `exec` 字段
+- **THEN** store 成功加载该会话
+
+### Requirement: 助手消息可带思考原文
+
+会话 JSON 中 `role=assistant` 的 `content` MUST 允许可选字符串字段 `reasoning`。缺少该字段的旧消息 MUST 仍能加载。重新打开会话时，若存在 `reasoning`，记录区 MUST 能展示这段思考（与正文分区）。编码发给模型时 MUST NOT 把 `reasoning` 作为助手 `content` 正文。
+
+#### Scenario: 带思考字段恢复
+
+- **WHEN** 已存助手消息含非空 `reasoning` 与 `text`
+- **THEN** 重新加载后记录区可见该思考文本，且后续 think 请求的该条助手消息正文不含 `reasoning` 字符串
+
+#### Scenario: 旧消息缺字段
+
+- **WHEN** 已存助手消息没有 `reasoning`
+- **THEN** 会话仍能加载，记录区只展示原有正文
+
+### Requirement: 消息按节点增量写入
+
+在同一用户回合内，助手消息与 tool 消息 MUST 在对应节点完成时写入会话文件，各自 `created_at` MUST 为该次写入时刻。MUST NOT 把同一回合全部消息拖到图结束再用同一个时间戳一次性写入。
+
+#### Scenario: 工具循环中途时间戳已不同
+
+- **WHEN** 助手先请求工具、随后 tool 结果写入
+- **THEN** 会话 JSON 中该 tool 消息的 `created_at` 不早于对应助手消息的 `created_at`
