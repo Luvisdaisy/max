@@ -1,10 +1,4 @@
-# desktop-gui-tools Specification
-
-## Purpose
-
-基于 PyAutoGUI 的桌面感知与执行（截图、屏幕信息、移鼠、点按、拖拽、滚轮、输入文本、按键），含视图像素换算、权限错误与安全约束。
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: 截取主屏并返回逻辑元数据
 
@@ -30,15 +24,6 @@
 - **WHEN** 主屏逻辑尺寸为 1920×1080，模型调用 `screenshot` 且 `region` 为 `(0, 0, 2560, 1440)`
 - **THEN** 视图帧逻辑宽高为 1920×1080，MUST NOT 把 2560 或 1440 写入坐标系
 
-### Requirement: 查询屏幕与指针
-
-`screen_info` MUST 返回主屏逻辑分辨率、`scale` 与当前鼠标逻辑坐标。MUST NOT 要求确认。
-
-#### Scenario: 读取屏幕信息
-
-- **WHEN** 模型调用 `screen_info`
-- **THEN** 结果包含 `screen_width`、`screen_height`、`scale`、`mouse_x`、`mouse_y`
-
 ### Requirement: 逻辑坐标移动指针
 
 `mouse_move` MUST 将输入的视图像素换算为逻辑像素后移动指针。有视图帧时，输入 MUST 先满足当前视图边界；换算后若逻辑坐标超出主屏，MUST 夹紧到主屏内并在结果中说明。MUST NOT 要求确认。可选 `target_id` 命中最近一次 `ocr_locate` 结果时，MUST 改用该项逻辑中心。移动成功后 MUST 再截取当前画面（含光标标注），按 `screenshot` 规则落盘、更新视图坐标系，并把该 PNG 作为同一条工具结果回注。
@@ -55,21 +40,16 @@
 
 ### Requirement: 点击与拖拽需确认
 
-`mouse_click` MUST 支持左/右/中键与单击/双击，MUST 只点击当前指针，MUST NOT 要求确认。`mouse_drag` MUST 从当前指针拖到视图像素 `(x2, y2)`，MUST NOT 要求确认。二者 MUST 要求本会话在上次点击/拖拽之后已经成功 `mouse_move` 放过光标，且最近一次光标截图来自 `mouse_move` 或其后的 `screenshot`。从未 `mouse_move`、或点击之后尚未再次 `mouse_move` 时 MUST 拒绝，并要求先移鼠看图。
+`mouse_click` MUST 支持左/右/中键与单击/双击，MUST 只点击当前指针，MUST NOT 要求确认。`mouse_drag` MUST 从当前指针拖到视图像素 `(x2, y2)`，MUST NOT 要求确认。二者在最近一次成功截图不是由 `mouse_move` 产生时 MUST 拒绝执行，并要求先 `mouse_move`。
 
 #### Scenario: 当前位置单击
 
 - **WHEN** 最近一次成功工具为 `mouse_move`，模型调用无坐标的 `mouse_click`
 - **THEN** 在当前指针位置单击左键，不弹出确认
 
-#### Scenario: move 后再截图仍可点击
-
-- **WHEN** 模型先成功 `mouse_move`，再成功 `screenshot`，然后调用无坐标的 `mouse_click`
-- **THEN** 在当前指针位置单击，MUST NOT 因最近一帧是 `screenshot` 而拒绝
-
 #### Scenario: 未先移鼠则拒绝拖拽
 
-- **WHEN** 本会话尚未成功 `mouse_move`，模型调用 `mouse_drag`
+- **WHEN** 本会话尚无 `mouse_move` 产生的光标截图，模型调用 `mouse_drag`
 - **THEN** 不移动指针、不按下鼠标，工具结果为错误，文案要求先 `mouse_move`
 
 ### Requirement: 滚轮滚动
@@ -115,15 +95,6 @@
 - **WHEN** 先前 `screenshot` 误用大于主屏的 region 写入了错误逻辑尺寸，随后一次无 region 的成功截图使用主屏尺寸
 - **THEN** 之后的 `mouse_move` MUST 按主屏逻辑尺寸换算，MUST NOT 继续使用超界宽高
 
-### Requirement: 定位编号跨回合保留
-
-成功的 `ocr_locate` MUST 把编号到逻辑中心的映射写入当前会话。后续用户回合在同一会话中按 `target_id` 移动时 MUST 仍能命中，直到下一次成功定位覆盖。会话 JSON 缺少该字段时 MUST 视为没有定位结果。
-
-#### Scenario: 下一回合按编号移动
-
-- **WHEN** 上一回合 `ocr_locate` 记下 `id=1` 的逻辑中心，新回合调用 `mouse_move` 且 `target_id` 为 `1`
-- **THEN** 指针移到该逻辑中心，且 MUST NOT 报没有该编号
-
 ### Requirement: 输入文本与按键分离
 
 `keyboard_type` MUST 只接受文本并写入当前前台窗口；MUST NOT 接受按键名。含非 ASCII 的文本 MUST 通过剪贴板粘贴，不得静默丢字。`keyboard_press` MUST 只接受白名单键名或组合键；MUST NOT 接受自由文本。白名单外的键名 MUST 拒绝。关机或退出登录相关组合 MUST 拒绝。二者 MUST NOT 要求确认。本会话尚无成功的 `screenshot` 或 `mouse_move` 截图时，二者 MUST 拒绝执行并要求先截图或移鼠。
@@ -152,33 +123,6 @@
 
 - **WHEN** 本会话尚无成功截图，模型调用 `keyboard_type`
 - **THEN** 不输入，工具结果为错误，文案要求先 `screenshot` 或 `mouse_move`
-
-### Requirement: macOS 拒绝 windows 键
-
-当运行平台为 macOS 时，`keyboard_press` 的 `keys` 若含 `windows` 或 `win`，MUST 返回中文错误，说明本机是 macOS、应使用 `command`，MUST NOT 发送按键。其他平台 MUST NOT 仅因键名为 `windows` 而套用本条。
-
-#### Scenario: macOS 上拒绝 Win+R
-
-- **WHEN** 运行在 macOS，已有截图，模型调用 `keyboard_press`，`keys` 为 `["windows", "r"]`
-- **THEN** 不按键，工具结果含「macOS」与「command」
-
-### Requirement: 桌面调用不阻塞界面
-
-桌面后端的同步调用 MUST 在工作线程中执行。生产实现 MUST 开启 failsafe，并在连续动作之间加入短暂暂停。测试 MUST 注入假后端，MUST NOT 在 CI 中驱动真实鼠标、键盘或屏幕。
-
-#### Scenario: 假后端记录点击
-
-- **WHEN** 测试用假后端调用 `mouse_click`
-- **THEN** 后端记录调用参数，真实指针位置不变
-
-### Requirement: 权限失败对用户可读
-
-屏幕录制或辅助功能缺失时，工具 MUST 返回可照做的中文步骤（系统设置中的屏幕录制 / 辅助功能，勾选运行本程序的终端）。MUST NOT 只抛出未翻译的英文异常。
-
-#### Scenario: 辅助功能未授权
-
-- **WHEN** 键鼠 API 因辅助功能权限失败
-- **THEN** 工具结果包含中文授权步骤，图继续进入 `think`
 
 ### Requirement: 变异动作成功后附新截图
 

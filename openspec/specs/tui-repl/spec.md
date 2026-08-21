@@ -50,7 +50,7 @@ TUI SHALL 在 token 到达时渲染进行中的助手条目。思考增量与正
 
 ### Requirement: 斜杠命令
 
-TUI SHALL 至少支持 `/new`、`/sessions`、`/attach`、`/model`、`/interrupt`、`/quit`。未知命令 MUST 在记录区显示错误，且 MUST NOT 启动 Agent 运行。
+TUI SHALL 至少支持 `/new`、`/sessions`、`/attach`、`/interrupt`、`/quit`。未知命令 MUST 在记录区显示错误，且 MUST NOT 启动 Agent 运行。TUI MUST NOT 将 `/model` 列为受支持命令。
 
 #### Scenario: 开始新会话
 
@@ -81,19 +81,14 @@ TUI SHALL 允许用户通过 `/attach <path>` 附加一张或多张图像（终�
 - **WHEN** 用户执行 `/attach ./missing.png` 且文件不存在
 - **THEN** TUI 显示错误，且不添加附件
 
-### Requirement: 桌面工具确认不受普通自动批准影响
+### Requirement: 工具执行不弹确认
 
-TUI 确认门 MUST 按工具类别区分：工作区破坏性工具可读会话 `auto_approve`；桌面破坏性工具只读 `auto_approve_desktop`。未开启对应开关时，MUST 弹出中文确认对话框。
+TUI MUST NOT 因 Agent 调用 `write_file`、`mouse_click`、`mouse_drag`、`mouse_scroll`、`keyboard_type` 或 `keyboard_press` 而弹出确认对话框。工具结果仍写入记录区。
 
-#### Scenario: 批准写文件后仍确认点击
+#### Scenario: 点击不弹框
 
-- **WHEN** 当前会话已开启普通自动批准，Agent 请求 `mouse_click`
-- **THEN** TUI 弹出是否允许执行 `mouse_click` 的确认框
-
-#### Scenario: 用户拒绝桌面动作
-
-- **WHEN** TUI 展示桌面工具确认且用户选择拒绝
-- **THEN** 该动作不执行，记录区可见已取消结果
+- **WHEN** Agent 请求 `mouse_click`
+- **THEN** 界面不出现「允许执行」对话框，记录区随后可见工具结果
 
 ### Requirement: 展示桌面权限错误
 
@@ -112,6 +107,15 @@ TUI 展示 `role=tool` 的消息时 MUST 使用 `content.text`（可截断），
 
 - **WHEN** 一条 tool 消息含截图 JSON 摘要与 `exec.duration_ms`
 - **THEN** 记录区可见该摘要文本，且 MUST NOT 把 `duration_ms` 作为独立日志行写出
+
+### Requirement: 模型由配置决定而非斜杠命令
+
+TUI MUST NOT 提供 `/model` 命令。当前推理模型 MUST 来自已加载的 `MODEL_NAME`。用户提交 `/model` 或 `/model <名>` 时 MUST 按未知命令处理。
+
+#### Scenario: /model 视为未知
+
+- **WHEN** 用户提交 `/model` 或 `/model qwen3.5-2b`
+- **THEN** TUI 在记录区显示命令未找到，且不改变当前推理模型，且不调用模型补全
 
 #### Scenario: 回合开始不指向 runs 文件
 

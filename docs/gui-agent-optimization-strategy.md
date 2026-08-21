@@ -18,7 +18,7 @@
 | 1 | 调研 + 环境 | [gui-tools.md](gui-tools.md)、vLLM/Metal 已就绪 | 可补一篇对照 Ui-TARS / Computer Use 的短调研，不挡开发 |
 | 2 | 截图 / OCR / 键鼠 / 画框 | 桌面工具 + `ocr` / `ocr_locate` + 视图像素换算已归档 | 已完成；无障碍控件树、多屏、找窗仍刻意不做 |
 | 3 | 公开数据预处理 + Agent 框架 + 任务拆解 | 框架有；状态含轻量 `plan` / `current_subtask`；数据脚本没有 | **半完成**。见 [gui-datasets-week3.md](gui-datasets-week3.md) |
-| 4 | 感知+控制+Agent 闭环 + 5 个基础任务报告 | REPL 闭环有；GUI system、动作后回注、最近两张图已落地；`test_e2e_chain` 只测 stub 文本 | **无 5 任务验收** |
+| 4 | 感知+控制+Agent 闭环 + 5 个基础任务报告 | REPL 闭环有；GUI system、动作后回注、最近一张图已落地；`test_e2e_chain` 只测 stub 文本 | **无 5 任务验收** |
 | 5 | ScreenAgent 等 LoRA + 提示词对比 | 未开始 | 缺训练集 JSONL 与对比基线 |
 | 6 | 拆解、重试、感知加速、执行日志 | `max_iterations` 默认 20；tool 消息含 `exec`（不另写 `artifacts/runs/`） | 无同屏熔断 / 工具自动重试 |
 | 7–8 | 20 任务评估、技术报告、演示 | 未开始 | 依赖前面的评测夹具 |
@@ -35,7 +35,7 @@
     │
     ├─ 协议要求先截图、坐标用最近一帧；模型仍可能不遵守
     ├─ 变异动作成功后运行时附新图；仍无同屏空转熔断
-    ├─ 请求只编码最近两张图；max_model_len 仍为 8192
+    ├─ 请求只编码最近一张图；max_model_len 仍为 8192
     └─ 默认 20 轮硬停；无工具自动重试
             │
             ▼
@@ -45,7 +45,7 @@
 对照代码（第 1 期 `gui-react-control-policy` 已归档）：
 
 - `think` 注入中文 GUI `system`（不落盘）；状态含 `plan` / `current_subtask`，图拓扑仍是 `think ⇄ act → observe`。
-- `to_chat_messages` 只把最近两张仍存在的图编成 `image_url`。
+- `to_chat_messages` 只把最近一张仍存在的图编成 `image_url`。
 - `max_iterations` 默认 20；`max_model_len` 仍为 8192。
 - 点击/拖拽/滚轮/输入/按键成功后在同一条工具结果附新截图。
 - 会话 tool 消息含 `name` 与嵌套 `exec`；没有独立 `artifacts/runs/` JSONL。
