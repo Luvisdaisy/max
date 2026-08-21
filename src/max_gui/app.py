@@ -13,7 +13,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Label, RichLog, Static
 
 from max_gui.agent.graph import AgentRunner
-from max_gui.config import Settings, UnknownModelError, load_settings, resolve_model_alias
+from max_gui.config import MissingProviderKeyError, Settings, load_settings
 from max_gui.inference.client import ConnectionFailedError, InferenceClient
 from max_gui.inference.images import SUPPORTED_SUFFIXES, ImagePrepError
 from max_gui.inference.ocr import shutdown_owned_ocr
@@ -60,10 +60,10 @@ class ConfirmScreen(ModalScreen[bool]):
 
 
 class TuiConfirmationGate:
-    """按会话开关自动批准，否则弹出 `ConfirmScreen`。"""
+    """工具不再弹确认，一律放行。"""
 
     def __init__(self, app: MaxGuiApp) -> None:
-        """参数：`app` 用于读会话开关并 `push_screen_wait`。"""
+        """参数：`app` 保留与原先装配方式兼容。"""
         self.app = app
 
     async def confirm(
@@ -72,14 +72,8 @@ class TuiConfirmationGate:
         arguments: dict[str, Any],
         scope: ConfirmationScope = "workspace",
     ) -> bool:
-        """桌面看 `auto_approve_desktop`，工作区看 `auto_approve`。"""
-        session = self.app.session
-        if session is not None:
-            if scope == "desktop" and session.auto_approve_desktop:
-                return True
-            if scope == "workspace" and session.auto_approve:
-                return True
-        return bool(await self.app.push_screen_wait(ConfirmScreen(tool_name, dict(arguments))))
+        """忽略工具名、参数与范围，始终返回 `True`。"""
+        return True
 
 
 class MaxGuiApp(App[None]):
@@ -126,13 +120,12 @@ class MaxGuiApp(App[None]):
     def on_mount(self) -> None:
         """打开或创建会话、重建 Runner，并渲染历史。"""
         self.session = self.store.open_or_create(
-            model=self.settings.canonical_model, force_new=self.force_new
+            model=self.settings.model_name, force_new=self.force_new
         )
-        self.settings = self.settings.with_model(self.session.model)
         self._rebuild_runner()
         self.query_one(PromptInput).focus()
         self._render_session()
-        self._set_status(f"会话 {self.session.id} · 模型 {self.settings.canonical_model}")
+        self._set_status(f"会话 {self.session.id} · 模型 {self.settings.model_name}")
 
     def _rebuild_runner(self) -> None:
         """按当前设置重建工具表、推理客户端与 `AgentRunner`。"""
@@ -164,7 +157,7 @@ class MaxGuiApp(App[None]):
         self._clear_live_stream()
         assert self.session is not None
         if not self.session.messages:
-            log.write("[dim]新会话。输入文本发送，或使用 /attach /sessions /model。[/dim]")
+            log.write("[dim]新会话。输入文本发送，或使用 /attach /sessions。[/dim]")
             return
         for message in self.session.messages:
             self._write_message(message.role, message.content)
@@ -213,7 +206,7 @@ class MaxGuiApp(App[None]):
         await self._run_turn(text)
 
     async def _handle_command(self, raw: str) -> None:
-        """分发 `/quit` `/new` `/sessions` `/attach` `/model` `/interrupt`。"""
+        """分发 `/quit` `/new` `/sessions` `/attach` `/interrupt`。"""
         parts = raw.split(maxsplit=1)
         name = parts[0].lower()
         arg = parts[1].strip() if len(parts) > 1 else ""
@@ -222,7 +215,7 @@ class MaxGuiApp(App[None]):
             return
         if name == "/new":
             assert self.session is not None
-            self.session = self.store.create(model=self.settings.canonical_model)
+            self.session = self.store.create(model=self.settings.model_name)
             self.pending_images.clear()
             self._refresh_pending()
             self._render_session()
@@ -233,9 +226,6 @@ class MaxGuiApp(App[None]):
             return
         if name == "/attach":
             self._cmd_attach(arg)
-            return
-        if name == "/model":
-            self._cmd_model(arg)
             return
         if name == "/interrupt":
             if self.runner and self._turn_active:
@@ -254,8 +244,6 @@ class MaxGuiApp(App[None]):
                 self._log().write(f"[red]找不到会话 {arg}[/red]")
                 return
             self.session = session
-            self.settings = self.settings.with_model(session.model)
-            self._rebuild_runner()
             self._render_session()
             self._set_status(f"已切换到 {session.id}")
             return
@@ -284,23 +272,6 @@ class MaxGuiApp(App[None]):
         self.pending_images.append(path.resolve())
         self._refresh_pending()
         self._log().write(f"[dim]已附加 {path.name}[/dim]")
-
-    def _cmd_model(self, arg: str) -> None:
-        """无参数显示当前模型；有参数则切换并重建 Runner。"""
-        if not arg:
-            self._log().write(f"当前模型：{self.settings.canonical_model}")
-            return
-        try:
-            canonical = resolve_model_alias(arg)
-        except UnknownModelError as exc:
-            self._log().write(f"[red]{exc}[/red]")
-            return
-        self.settings = self.settings.with_model(canonical)
-        if self.session:
-            self.store.update(self.session, model=canonical)
-        self._rebuild_runner()
-        self._set_status(f"模型切换为 {canonical}")
-        self._log().write(f"[dim]后续请求将使用 {canonical}[/dim]")
 
     async def _run_turn(self, text: str) -> None:
         """跑一轮 Agent，在记录框内流式更新，结束后写入历史并刷新会话。"""
@@ -356,6 +327,9 @@ class MaxGuiApp(App[None]):
                 self._set_status(_STATUS_LABELS["interrupted"])
             else:
                 self._set_status(_STATUS_LABELS["done"])
+        except MissingProviderKeyError as exc:
+            self._log().write(f"[red]{exc}[/red]")
+            self._set_status("缺少推理密钥")
         except ConnectionFailedError as exc:
             self._log().write(f"[red]{exc}[/red]")
             self._set_status("推理服务不可达")

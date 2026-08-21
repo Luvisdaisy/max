@@ -1,6 +1,6 @@
 """OpenAI 兼容流式客户端：组装多模态消息并解析 SSE。
 
-编码时最多回注最近两张仍存在的本地图；更早截图改成路径摘要。
+编码时最多回注最近一张仍存在的本地图；更早截图改成路径摘要。
 可选把 GUI `system` 插到请求最前。
 """
 
@@ -15,17 +15,17 @@ from typing import Any
 import httpx
 from PIL import Image
 
-from max_gui.config import Settings, require_weights
+from max_gui.config import Settings, require_provider_key, require_weights
 from max_gui.inference.images import prepare_image
 
 
 class ConnectionFailedError(RuntimeError):
-    """连不上 `base_url`，提示先 `max-gui serve`。"""
+    """连不上 `base_url`。本地提示 `serve`，云端提示检查网络与密钥。"""
 
-    def __init__(self, base_url: str) -> None:
-        """参数：`base_url` 为尝试连接的推理端点。"""
+    def __init__(self, base_url: str, *, hint: str | None = None) -> None:
+        """参数：`base_url` 为尝试连接的端点；`hint` 覆盖默认文案。"""
         self.base_url = base_url
-        super().__init__(f"无法连接推理服务（{base_url}）。请先运行：max-gui serve")
+        super().__init__(hint or f"无法连接推理服务（{base_url}）。请先运行：max-gui serve")
 
 
 @dataclass(slots=True)
@@ -82,11 +82,13 @@ class InferenceClient:
             ConnectionFailedError: 网络层失败。
             RuntimeError: HTTP 非 2xx。
         """
-        if self.check_weights:
+        if self.settings.provider == "modelscope":
+            require_provider_key(self.settings)
+        elif self.check_weights:
             require_weights(self.settings)
 
         payload: dict[str, Any] = {
-            "model": self.settings.canonical_model,
+            "model": self.settings.model_name,
             "messages": messages,
             "stream": True,
         }
@@ -141,6 +143,14 @@ class InferenceClient:
             detail = await _http_error_detail(exc)
             raise RuntimeError(f"推理服务返回 {exc.response.status_code}：{detail}") from exc
         except httpx.HTTPError as exc:
+            if self.settings.provider == "modelscope":
+                raise ConnectionFailedError(
+                    self.settings.base_url,
+                    hint=(
+                        f"无法连接推理服务（{self.settings.base_url}）。"
+                        "请检查网络与 MAX_PROVIDER_KEY。"
+                    ),
+                ) from exc
             raise ConnectionFailedError(self.settings.base_url) from exc
 
         assembled.tool_calls = [tool_acc[key] for key in sorted(tool_acc)]
@@ -180,7 +190,7 @@ def encode_user_content(
     return parts or [{"type": "text", "text": ""}]
 
 
-MAX_INLINE_IMAGES = 2
+MAX_INLINE_IMAGES = 1
 
 
 def _collect_image_paths(content: dict[str, Any]) -> list[Path]:
@@ -258,7 +268,7 @@ def to_chat_messages(
     settings: Settings,
     system: str | None = None,
 ) -> list[dict[str, Any]]:
-    """把会话状态消息转成 OpenAI chat 请求体，并回注最近两张图像。
+    """把会话状态消息转成 OpenAI chat 请求体，并回注最近一张图像。
 
     参数：
         raw_messages: 图状态中的消息。

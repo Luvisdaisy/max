@@ -1,4 +1,4 @@
-"""模型生命周期：从 ModelScope 下载权重，以及启动独立 vLLM 进程。"""
+"""模型生命周期：启动独立 vLLM 进程。"""
 
 from __future__ import annotations
 
@@ -9,32 +9,11 @@ from pathlib import Path
 
 from max_gui.config import (
     DEFAULT_VLLM_BIN,
-    MODELSCOPE_IDS,
     MissingVllmError,
+    ServeNotAllowedError,
     Settings,
     require_weights,
-    resolve_model_alias,
 )
-
-
-def download_model(settings: Settings, alias: str | None = None) -> Path:
-    """把指定别名的模型快照下载到 `settings.model_root / 规范名`。
-
-    参数：
-        settings: 提供 `model_root` 与默认别名。
-        alias: 产品别名；缺省用 `settings.model_alias`。
-
-    返回：
-        本地下载目录。
-    """
-    canonical = resolve_model_alias(alias or settings.model_alias)
-    dest = settings.model_root / canonical
-    dest.mkdir(parents=True, exist_ok=True)
-    model_id = MODELSCOPE_IDS[canonical]
-    from modelscope.hub.snapshot_download import snapshot_download
-
-    snapshot_download(model_id, local_dir=str(dest))
-    return dest
 
 
 def resolve_vllm_bin(*, default: Path | None = None) -> Path:
@@ -71,6 +50,8 @@ def resolve_vllm_bin(*, default: Path | None = None) -> Path:
 def serve_model(settings: Settings) -> int:
     """阻塞启动 `vllm serve`，直到子进程退出。
 
+    仅 `MAX_PROVIDER=local` 时允许。
+
     参数：
         settings: 必须已能解析到完整权重；并提供上下文长度、显存与 dtype。
 
@@ -78,9 +59,12 @@ def serve_model(settings: Settings) -> int:
         vLLM 进程退出码。
 
     异常：
+        ServeNotAllowedError: 当前不是 local 后端。
         MissingWeightsError: 权重目录不完整。
         MissingVllmError: 找不到 vLLM 二进制。
     """
+    if settings.provider != "local":
+        raise ServeNotAllowedError()
     model_path = require_weights(settings)
     command = _serve_command(settings, model_path)
     env = os.environ.copy()
@@ -120,7 +104,7 @@ def _serve_command(
         "--dtype",
         settings.dtype,
         "--served-model-name",
-        settings.canonical_model,
+        settings.model_name,
         "--enable-auto-tool-choice",
         "--tool-call-parser",
         "qwen3_coder",

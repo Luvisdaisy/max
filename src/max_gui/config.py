@@ -1,50 +1,61 @@
-"""运行时配置：模型别名、路径探测、环境变量与权重校验。"""
+"""运行时配置：`.env` 载入、推理后端、路径探测与权重校验。"""
 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_MODEL_ALIAS = "qwen3.5-4b"
+from dotenv import load_dotenv
 
-# 产品别名 -> 规范目录名（位于 model/ 下）
-MODEL_ALIASES: dict[str, str] = {
-    "qwen3.5-2b": "qwen3.5-2b",
-    "qwen2b": "qwen3.5-2b",
-    "2b": "qwen3.5-2b",
-    "qwen3.5-4b": "qwen3.5-4b",
-    "qwen4b": "qwen3.5-4b",
-    "4b": "qwen3.5-4b",
-    "qwen3.5-9b": "qwen3.5-9b",
-    "qwen9b": "qwen3.5-9b",
-    "9b": "qwen3.5-9b",
-}
-
-MODELSCOPE_IDS: dict[str, str] = {
-    "qwen3.5-2b": "Qwen/Qwen3.5-2B",
-    "qwen3.5-4b": "Qwen/Qwen3.5-4B",
-    "qwen3.5-9b": "Qwen/Qwen3.5-9B",
-}
-
-
-class UnknownModelError(ValueError):
-    """用户给出的模型别名不在 `MODEL_ALIASES` 中。"""
-
-
-class MissingWeightsError(FileNotFoundError):
-    """本地权重目录不完整，提示先执行下载命令。"""
-
-    def __init__(self, alias: str, download_cmd: str) -> None:
-        """参数：`alias` 规范模型名；`download_cmd` 建议用户执行的命令。"""
-        self.alias = alias
-        self.download_cmd = download_cmd
-        super().__init__(f"模型权重缺失：{alias}。请先运行：{download_cmd}")
-
+DEFAULT_PROVIDER = "local"
+PROVIDERS = frozenset({"local", "modelscope"})
+DEFAULT_LOCAL_MODEL = "qwen3.5-4b"
+DEFAULT_MODELSCOPE_MODEL = "Qwen/Qwen3.8-27B"
+MODELSCOPE_BASE_URL = "https://api-inference.modelscope.cn/v1"
+DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:8000/v1"
 
 DEFAULT_VLLM_BIN = Path.home() / ".venv-vllm-metal" / "bin" / "vllm"
 DEFAULT_OCR_MODEL = "paddleocr-vl-1.5"
 DEFAULT_OCR_BASE_URL = "http://127.0.0.1:8001/v1"
+
+
+class UnknownProviderError(ValueError):
+    """`MAX_PROVIDER` 不是 `local` 或 `modelscope`。"""
+
+    def __init__(self, raw: str) -> None:
+        """参数：`raw` 为用户给出的非法值。"""
+        super().__init__(f"未知推理后端：{raw}。可用：local, modelscope")
+
+
+class MissingProviderKeyError(ValueError):
+    """`modelscope` 后端缺少 `MAX_PROVIDER_KEY`。"""
+
+    def __init__(self) -> None:
+        """提示在 `.env` 填写魔搭 Access Token。"""
+        super().__init__(
+            "未设置 MAX_PROVIDER_KEY。使用 modelscope 时请在 .env 中填写魔搭 Access Token。"
+        )
+
+
+class ServeNotAllowedError(RuntimeError):
+    """非 `local` 后端不允许启动 `max-gui serve`。"""
+
+    def __init__(self) -> None:
+        """提示把 `MAX_PROVIDER` 改回 `local`。"""
+        super().__init__(
+            "当前 MAX_PROVIDER 不是 local。请在 .env 中改为 local 后再运行 max-gui serve。"
+        )
+
+
+class MissingWeightsError(FileNotFoundError):
+    """本地权重目录不完整。"""
+
+    def __init__(self, model_name: str, path: Path) -> None:
+        """参数：`model_name` 为 `MODEL_NAME`；`path` 为缺失的权重目录。"""
+        self.model_name = model_name
+        self.path = path
+        super().__init__(f"模型权重缺失：{path}")
 
 
 class MissingVllmError(FileNotFoundError):
@@ -83,41 +94,52 @@ def detect_project_root() -> Path:
     return cwd
 
 
-def resolve_model_alias(raw: str) -> str:
-    """把产品别名规范成 `model/` 下的目录名。
+def load_env_file(root: Path) -> None:
+    """若 `root/.env` 存在则载入；已有进程环境变量不被覆盖。
 
     参数：
-        raw: 如 `2b`、`qwen2b`、`qwen3.5-2b`。
+        root: 仓库根目录。
+    """
+    path = root / ".env"
+    if path.is_file():
+        load_dotenv(path, override=False)
+
+
+def parse_provider(raw: str | None) -> str:
+    """把 `MAX_PROVIDER` 规范成 `local` 或 `modelscope`。
+
+    参数：
+        raw: 环境变量原文；空则视为 `local`。
 
     返回：
-        规范目录名。
+        后端名。
 
     异常：
-        UnknownModelError: 别名未知。
+        UnknownProviderError: 值不在允许集合中。
     """
-    key = raw.strip().lower()
-    if key not in MODEL_ALIASES:
-        known = ", ".join(sorted(set(MODEL_ALIASES.values())))
-        raise UnknownModelError(f"未知模型别名：{raw}。可用：{known}")
-    return MODEL_ALIASES[key]
+    value = (raw or DEFAULT_PROVIDER).strip().lower()
+    if value not in PROVIDERS:
+        raise UnknownProviderError(raw if raw is not None else "")
+    return value
 
 
-def download_command(alias: str) -> str:
-    """生成下载该别名的 CLI 提示，例如 `max-gui download qwen3.5-2b`。"""
-    canonical = resolve_model_alias(alias)
-    return f"max-gui download {canonical}"
+def has_provider_key(api_key: str) -> bool:
+    """`api_key` 是否可作为魔搭 Token（非空且不是占位 `EMPTY`）。"""
+    key = api_key.strip()
+    return bool(key) and key != "EMPTY"
 
 
 @dataclass(slots=True)
 class Settings:
     """一次运行所需的路径、推理端点与限制。
 
-    字段由 `load_settings` 从环境变量填充；`with_model` 只替换模型别名。
+    字段由 `load_settings` 从 `.env` 与环境变量填充。
     """
 
-    base_url: str = "http://127.0.0.1:8000/v1"
+    provider: str = DEFAULT_PROVIDER
+    base_url: str = DEFAULT_LOCAL_BASE_URL
     api_key: str = "EMPTY"
-    model_alias: str = DEFAULT_MODEL_ALIAS
+    model_name: str = DEFAULT_LOCAL_MODEL
     project_root: Path = Path(".")
     workspace: Path = Path(".")
     sessions_dir: Path = Path("artifacts/sessions")
@@ -136,55 +158,60 @@ class Settings:
     ocr_gpu_memory_utilization: float = 0.20
 
     @property
-    def canonical_model(self) -> str:
-        """当前别名对应的规范模型目录名。"""
-        return resolve_model_alias(self.model_alias)
-
-    @property
     def model_path(self) -> Path:
-        """本地权重目录：`model_root / canonical_model`。"""
-        return self.model_root / self.canonical_model
+        """本地权重目录：`model_root / model_name`。仅 `local` 后端使用。"""
+        return self.model_root / self.model_name
 
     @property
     def ocr_model_path(self) -> Path:
         """PaddleOCR-VL 权重目录：`model_root / paddleocr-vl-1.5`。"""
         return self.model_root / DEFAULT_OCR_MODEL
 
-    def with_model(self, alias: str) -> Settings:
-        """返回只替换模型别名为规范名的新配置。"""
-        return replace(self, model_alias=resolve_model_alias(alias))
-
 
 def load_settings(
     *,
     workspace: Path | None = None,
-    model: str | None = None,
     sessions_dir: Path | None = None,
-    base_url: str | None = None,
 ) -> Settings:
-    """从参数与环境变量组装 `Settings`。
+    """从 `.env` 与环境变量组装 `Settings`。
 
-    环境变量：`MAX_GUI_MODEL`、`MAX_GUI_BASE_URL`、`MAX_GUI_API_KEY`、
-    `MAX_GUI_WORKSPACE`、`MAX_GUI_MAX_ITERATIONS`、`MAX_GUI_MAX_IMAGE_*`、
-    `MAX_GUI_TOOL_TIMEOUT`、`MAX_GUI_MAX_MODEL_LEN`、`MAX_GUI_GPU_MEM`、
-    `MAX_GUI_DTYPE`、`MAX_GUI_OCR_BASE_URL`、`MAX_GUI_OCR_START_TIMEOUT`、
-    `MAX_GUI_OCR_TIMEOUT`、`MAX_GUI_OCR_GPU_MEM`。
+    先按 `detect_project_root` 定位根目录并载入 `.env`（不覆盖已有环境变量）。
+    环境变量：`MAX_PROVIDER`、`MAX_PROVIDER_KEY`、`MODEL_NAME`、
+    `MAX_GUI_BASE_URL`、`MAX_GUI_WORKSPACE`、`MAX_GUI_MAX_ITERATIONS`、
+    `MAX_GUI_MAX_IMAGE_*`、`MAX_GUI_TOOL_TIMEOUT`、`MAX_GUI_MAX_MODEL_LEN`、
+    `MAX_GUI_GPU_MEM`、`MAX_GUI_DTYPE`、`MAX_GUI_OCR_*`。
+    不读取 `MODELSCOPE_SDK_TOKEN`。
 
     参数：
         workspace: 工具读写根；缺省 `MAX_GUI_WORKSPACE` 或 cwd。
-        model: 模型别名；缺省环境变量或 `DEFAULT_MODEL_ALIAS`。
         sessions_dir: 会话 JSON 目录；缺省 `<root>/artifacts/sessions`。
-        base_url: OpenAI 兼容端点；缺省本机 8000。
 
     返回：
         解析后的配置。
+
+    异常：
+        UnknownProviderError: `MAX_PROVIDER` 非法。
     """
     root = detect_project_root()
-    alias = resolve_model_alias(model or os.environ.get("MAX_GUI_MODEL") or DEFAULT_MODEL_ALIAS)
+    load_env_file(root)
+    provider = parse_provider(os.environ.get("MAX_PROVIDER"))
+    if provider == "modelscope":
+        model_name = (os.environ.get("MODEL_NAME") or DEFAULT_MODELSCOPE_MODEL).strip()
+        if not model_name:
+            model_name = DEFAULT_MODELSCOPE_MODEL
+        base_url = MODELSCOPE_BASE_URL
+        api_key = (os.environ.get("MAX_PROVIDER_KEY") or "").strip()
+    else:
+        model_name = (os.environ.get("MODEL_NAME") or DEFAULT_LOCAL_MODEL).strip()
+        if not model_name:
+            model_name = DEFAULT_LOCAL_MODEL
+        base_url = os.environ.get("MAX_GUI_BASE_URL") or DEFAULT_LOCAL_BASE_URL
+        api_key = "EMPTY"
     settings = Settings(
-        base_url=base_url or os.environ.get("MAX_GUI_BASE_URL") or "http://127.0.0.1:8000/v1",
-        api_key=os.environ.get("MAX_GUI_API_KEY") or "EMPTY",
-        model_alias=alias,
+        provider=provider,
+        base_url=base_url,
+        api_key=api_key,
+        model_name=model_name,
         project_root=root,
         workspace=(workspace or Path(os.environ.get("MAX_GUI_WORKSPACE") or Path.cwd())).resolve(),
         sessions_dir=(sessions_dir or root / "artifacts" / "sessions").resolve(),
@@ -205,6 +232,16 @@ def load_settings(
     return settings
 
 
+def require_provider_key(settings: Settings) -> None:
+    """`modelscope` 时必须已有 `MAX_PROVIDER_KEY`。
+
+    异常：
+        MissingProviderKeyError: 密钥为空。
+    """
+    if settings.provider == "modelscope" and not has_provider_key(settings.api_key):
+        raise MissingProviderKeyError()
+
+
 def weights_ready(path: Path) -> bool:
     """目录是否含完整权重（存在 `.safetensors` 或 `.bin`，且无 `.incomplete`）。"""
     if not path.is_dir():
@@ -218,7 +255,7 @@ def weights_ready(path: Path) -> bool:
 
 
 def require_weights(settings: Settings) -> Path:
-    """确认当前模型权重可用。
+    """确认当前本地模型权重可用。
 
     返回：
         权重目录。
@@ -228,7 +265,5 @@ def require_weights(settings: Settings) -> Path:
     """
     path = settings.model_path
     if not weights_ready(path):
-        raise MissingWeightsError(
-            settings.canonical_model, download_command(settings.canonical_model)
-        )
+        raise MissingWeightsError(settings.model_name, path)
     return path

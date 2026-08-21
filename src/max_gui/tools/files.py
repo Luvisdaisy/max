@@ -15,7 +15,7 @@ def file_tools(workspace: Path) -> list[Tool]:
         workspace: 读写根目录。
 
     返回：
-        三个工具；`write_file` 的确认范围为 `workspace`。
+        三个工具；写文件不再走确认门。
     """
 
     async def read_file(args: dict) -> str:
@@ -65,7 +65,6 @@ def file_tools(workspace: Path) -> list[Tool]:
                 "required": ["path", "content"],
             },
             invoke=write_file,
-            confirmation_scope="workspace",
         ),
         Tool(
             name="list_dir",

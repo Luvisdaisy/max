@@ -11,12 +11,13 @@ from typing import Any, Literal
 from langgraph.graph import END, START, StateGraph
 
 from max_gui.agent.plan import advance_subtask_after_tools, ingest_assistant_plan
-from max_gui.agent.prompts import GUI_SYSTEM_PROMPT
+from max_gui.agent.prompts import compose_gui_system_prompt
 from max_gui.agent.state import AgentState
 from max_gui.config import Settings
 from max_gui.inference.client import ChatDelta, InferenceClient, to_chat_messages
 from max_gui.session.store import Session, SessionMessage, SessionStore
 from max_gui.tools.desktop import (
+    active_view_frame,
     current_session_id,
     restore_desktop_context,
     snapshot_desktop_context,
@@ -134,9 +135,9 @@ class AgentRunner:
             current_session_id.reset(token)
 
     async def think(self, state: AgentState) -> AgentState:
-        """调用模型。有工具调用则进入 `acting`，否则 `done`；超迭代为 `error`。
+        """调用模型。有工具调用则进入 `acting`，否则 `done`；超迭代或推理失败为 `error`。
 
-        拼装完成后立即写入会话并回调 `on_message`。
+        拼装完成后立即写入会话并回调 `on_message`。推理异常不抛出图外。
         """
         if self._interrupt.is_set():
             return {**state, "status": "interrupted"}
@@ -154,18 +155,26 @@ class AgentRunner:
                 "pending_tool_calls": [],
             }
 
-        encoded = to_chat_messages(
-            list(state.get("messages") or []),
-            settings=self.settings,
-            system=GUI_SYSTEM_PROMPT,
-        )
-        delta: ChatDelta = await self.client.stream(
-            encoded,
-            tools=self.registry.schemas(),
-            on_token=self._on_token,
-            on_reasoning=self._on_reasoning,
-            should_stop=self._interrupt.is_set,
-        )
+        try:
+            encoded = to_chat_messages(
+                list(state.get("messages") or []),
+                settings=self.settings,
+                system=compose_gui_system_prompt(frame=active_view_frame()),
+            )
+            delta: ChatDelta = await self.client.stream(
+                encoded,
+                tools=self.registry.schemas(),
+                on_token=self._on_token,
+                on_reasoning=self._on_reasoning,
+                should_stop=self._interrupt.is_set,
+            )
+        except Exception as exc:
+            return {
+                **state,
+                "status": "error",
+                "error": str(exc),
+                "pending_tool_calls": [],
+            }
         if self._interrupt.is_set() or delta.finish_reason == "interrupted":
             messages = list(state.get("messages") or [])
             if delta.text or delta.reasoning:
