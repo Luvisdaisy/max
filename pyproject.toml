@@ -11,11 +11,11 @@ dependencies = [
     "httpx>=0.28.0",
     "langchain>=0.3.0",
     "langgraph>=0.3.0",
-    "modelscope>=1.39.1",
     "pillow>=11.0.0",
     "pyautogui>=0.9.54",
     "pydantic>=2.10.0",
     "pyperclip>=1.11.0",
+    "python-dotenv>=1.2.3",
     "textual>=2.0.0",
 ]
 
