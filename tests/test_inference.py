@@ -9,7 +9,16 @@ import httpx
 import pytest
 from PIL import Image
 
-from max_gui.config import Settings, UnknownModelError, load_settings, resolve_model_alias
+from max_gui.config import (
+    MODELSCOPE_BASE_URL,
+    MissingProviderKeyError,
+    Settings,
+    UnknownProviderError,
+    has_provider_key,
+    load_settings,
+    require_provider_key,
+    require_weights,
+)
 from max_gui.inference.client import (
     ConnectionFailedError,
     InferenceClient,
@@ -19,26 +28,19 @@ from max_gui.inference.client import (
 from max_gui.inference.images import ImagePrepError, prepare_image
 
 
-def test_unknown_alias_rejected() -> None:
-    """未知别名抛 `UnknownModelError`。"""
-    try:
-        resolve_model_alias("not-a-model")
-    except UnknownModelError:
-        return
-    raise AssertionError("expected UnknownModelError")
-
-
-def test_default_alias_is_2b() -> None:
-    """`qwen2b` 规范为 `qwen3.5-2b`。"""
-    assert resolve_model_alias("qwen2b") == "qwen3.5-2b"
+def _isolate_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """把配置根指到临时目录，避免读仓库 `.env`。"""
+    monkeypatch.setenv("MAX_GUI_ROOT", str(tmp_path))
+    (tmp_path / "model").mkdir(exist_ok=True)
+    (tmp_path / "pyproject.toml").write_text("", encoding="utf-8")
 
 
 def test_load_settings_defaults_to_4b(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """未覆盖模型时默认别名是 `qwen3.5-4b`。"""
-    monkeypatch.delenv("MAX_GUI_MODEL", raising=False)
-    monkeypatch.setenv("MAX_GUI_ROOT", str(tmp_path))
+    """未覆盖模型时默认名是 `qwen3.5-4b`。"""
+    _isolate_root(monkeypatch, tmp_path)
     settings = load_settings(workspace=tmp_path)
-    assert settings.canonical_model == "qwen3.5-4b"
+    assert settings.provider == "local"
+    assert settings.model_name == "qwen3.5-4b"
 
 
 def test_load_settings_default_max_iterations(
@@ -46,9 +48,83 @@ def test_load_settings_default_max_iterations(
 ) -> None:
     """未设置环境变量时迭代上限为 20。"""
     monkeypatch.delenv("MAX_GUI_MAX_ITERATIONS", raising=False)
-    monkeypatch.setenv("MAX_GUI_ROOT", str(tmp_path))
+    _isolate_root(monkeypatch, tmp_path)
     settings = load_settings(workspace=tmp_path)
     assert settings.max_iterations == 20
+
+
+def test_env_file_sets_provider(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """根目录 `.env` 写入 `MAX_PROVIDER` 后生效。"""
+    _isolate_root(monkeypatch, tmp_path)
+    (tmp_path / ".env").write_text(
+        "MAX_PROVIDER=modelscope\nMAX_PROVIDER_KEY=tok-from-file\n",
+        encoding="utf-8",
+    )
+    settings = load_settings(workspace=tmp_path)
+    assert settings.provider == "modelscope"
+    assert settings.model_name == "Qwen/Qwen3.8-27B"
+    assert settings.api_key == "tok-from-file"
+    assert settings.base_url == MODELSCOPE_BASE_URL
+
+
+def test_process_env_overrides_dotenv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """进程里已有 `MAX_PROVIDER` 时不被 `.env` 覆盖。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", "local")
+    (tmp_path / ".env").write_text("MAX_PROVIDER=modelscope\n", encoding="utf-8")
+    settings = load_settings(workspace=tmp_path)
+    assert settings.provider == "local"
+    assert settings.model_name == "qwen3.5-4b"
+
+
+def test_modelscope_default_model_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`modelscope` 且未写 `MODEL_NAME` 时默认为 Qwen3.8-27B。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", "modelscope")
+    monkeypatch.setenv("MAX_PROVIDER_KEY", "tok")
+    settings = load_settings(workspace=tmp_path)
+    assert settings.model_name == "Qwen/Qwen3.8-27B"
+
+
+def test_unknown_provider_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """非法 `MAX_PROVIDER` 抛 `UnknownProviderError`。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", "openai")
+    try:
+        load_settings(workspace=tmp_path)
+    except UnknownProviderError as exc:
+        assert "openai" in str(exc)
+        return
+    raise AssertionError("expected UnknownProviderError")
+
+
+def test_sdk_token_not_used_as_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """仅有 `MODELSCOPE_SDK_TOKEN` 时仍视为缺密钥。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", "modelscope")
+    monkeypatch.setenv("MODELSCOPE_SDK_TOKEN", "sdk-token")
+    settings = load_settings(workspace=tmp_path)
+    assert not has_provider_key(settings.api_key)
+    try:
+        require_provider_key(settings)
+    except MissingProviderKeyError:
+        return
+    raise AssertionError("expected MissingProviderKeyError")
+
+
+def test_local_short_name_not_aliased(settings: Settings, tmp_path: Path) -> None:
+    """短名 `4b` 不会映射到 `qwen3.5-4b`。"""
+    settings.provider = "local"
+    settings.model_name = "4b"
+    settings.model_root = tmp_path / "model"
+    try:
+        require_weights(settings)
+    except Exception as exc:
+        assert "4b" in str(exc)
+        assert "qwen3.5-4b" not in str(exc)
+        assert "download" not in str(exc)
+        return
+    raise AssertionError("expected missing weights for model/4b")
 
 
 def test_prepare_oversized_image(tmp_path: Path, settings: Settings) -> None:
@@ -146,10 +222,10 @@ def test_inject_system_unless_already_present(settings: Settings) -> None:
     assert already[0]["content"] == "已有"
 
 
-def test_only_last_two_images_get_image_url(tmp_path: Path, settings: Settings) -> None:
-    """第三张更早的截图只留路径摘要。"""
+def test_only_last_image_gets_image_url(tmp_path: Path, settings: Settings) -> None:
+    """更早的截图只留路径摘要，仅最后一张带 image_url。"""
     paths = []
-    for index in range(3):
+    for index in range(2):
         path = tmp_path / f"shot{index}.png"
         Image.new("RGB", (16, 16), color=(index * 40, 20, 20)).save(path)
         paths.append(path)
@@ -180,7 +256,6 @@ def test_only_last_two_images_get_image_url(tmp_path: Path, settings: Settings) 
     assert "历史截图已省略" in encoded[0]["content"]
     assert str(paths[0]) in encoded[0]["content"]
     assert image_parts(encoded[1]) == 1
-    assert image_parts(encoded[2]) == 1
 
 
 def test_tool_result_missing_image_keeps_text(settings: Settings, tmp_path: Path) -> None:
@@ -313,7 +388,7 @@ async def test_stream_http_error_includes_status(settings: Settings) -> None:
 
 
 async def test_connection_error_mentions_serve(settings: Settings) -> None:
-    """连不上服务时提示 `max-gui serve`。"""
+    """本地后端连不上时提示 `max-gui serve`。"""
     client = InferenceClient(settings, check_weights=False)
     try:
         await client.stream([{"role": "user", "content": "hi"}])
@@ -321,3 +396,124 @@ async def test_connection_error_mentions_serve(settings: Settings) -> None:
         assert "max-gui serve" in str(exc)
         return
     raise AssertionError("expected ConnectionFailedError")
+
+
+async def test_modelscope_connection_omits_serve(settings: Settings) -> None:
+    """魔搭后端连不上时不提示 `max-gui serve`。"""
+    settings.provider = "modelscope"
+    settings.api_key = "tok"
+    settings.model_name = "Qwen/Qwen3.8-27B"
+    client = InferenceClient(settings, check_weights=True)
+    try:
+        await client.stream([{"role": "user", "content": "hi"}])
+    except ConnectionFailedError as exc:
+        assert "max-gui serve" not in str(exc)
+        assert "MAX_PROVIDER_KEY" in str(exc)
+        return
+    raise AssertionError("expected ConnectionFailedError")
+
+
+async def test_modelscope_missing_key_skips_http(settings: Settings) -> None:
+    """缺 `MAX_PROVIDER_KEY` 时不发请求。"""
+    settings.provider = "modelscope"
+    settings.api_key = ""
+    settings.model_name = "Qwen/Qwen3.8-27B"
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("must not send HTTP without key")
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=True)
+    try:
+        await client.stream([{"role": "user", "content": "hi"}])
+    except MissingProviderKeyError as exc:
+        assert "max-gui serve" not in str(exc)
+        return
+    raise AssertionError("expected MissingProviderKeyError")
+
+
+async def test_modelscope_skips_local_weights_and_sends_id(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """云端不检查本地目录，请求 `model` 为 Model Id。"""
+    settings.provider = "modelscope"
+    settings.api_key = "tok"
+    settings.model_name = "Qwen/Qwen3.8-27B"
+    settings.model_root = tmp_path / "no-weights"
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        seen["model"] = payload["model"]
+        seen["tools"] = payload.get("tools")
+        seen["tool_choice"] = payload.get("tool_choice")
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_sse(["ok"]).encode(),
+        )
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=True)
+    tools = [{"type": "function", "function": {"name": "screenshot", "parameters": {}}}]
+    result = await client.stream([{"role": "user", "content": "hi"}], tools=tools)
+    assert result.text == "ok"
+    assert seen["model"] == "Qwen/Qwen3.8-27B"
+    assert seen["tools"] == tools
+    assert seen["tool_choice"] == "auto"
+
+
+def _sse_tool_calls() -> str:
+    """两段 `tool_calls` 增量拼成一次调用。"""
+    chunks = [
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "function": {"name": "screenshot", "arguments": ""},
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [{"index": 0, "function": {"name": "", "arguments": "{}"}}]
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        },
+    ]
+    lines = [f"data: {json.dumps(item)}" for item in chunks]
+    lines.append("data: [DONE]")
+    return "\n".join(lines) + "\n"
+
+
+async def test_modelscope_assembles_tool_calls(settings: Settings) -> None:
+    """魔搭兼容 SSE 的 `tool_calls` 增量拼成完整调用。"""
+    settings.provider = "modelscope"
+    settings.api_key = "tok"
+    settings.model_name = "Qwen/Qwen3.8-27B"
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_sse_tool_calls().encode(),
+        )
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=True)
+    result = await client.stream(
+        [{"role": "user", "content": "hi"}],
+        tools=[{"type": "function", "function": {"name": "screenshot"}}],
+    )
+    assert result.tool_calls == [
+        {"id": "call_1", "type": "function", "function": {"name": "screenshot", "arguments": "{}"}}
+    ]

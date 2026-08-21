@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 from max_gui.agent.graph import ITERATION_LIMIT_MESSAGE, AgentRunner
+from max_gui.agent.prompts import os_contract
 from max_gui.config import Settings
 from max_gui.desktop.fake import FakeDesktopBackend
 from max_gui.inference.client import ChatDelta
@@ -262,6 +265,15 @@ async def test_next_turn_reuses_saved_view_frame(settings: Settings) -> None:
     assert f"逻辑坐标 ({expected_x}, {expected_y})" not in text
 
 
+def test_os_contract_darwin_not_windows() -> None:
+    """darwin 文案含 macOS 且否定 Windows。"""
+    text = os_contract("Darwin")
+    assert "macOS" in text
+    assert "不是 Windows" in text
+    assert "command" in text
+    assert "不是 Windows" not in os_contract("Windows")
+
+
 async def test_think_injects_system_not_persisted(settings: Settings) -> None:
     """think 请求带 GUI system，会话 JSON 不保存该角色。"""
     client = ScriptedClient([ChatDelta(text="好")])
@@ -269,12 +281,57 @@ async def test_think_injects_system_not_persisted(settings: Settings) -> None:
     session = store.create(model="qwen3.5-2b")
     await runner.run(session, user_text="你好")
     assert client.requests[0][0]["role"] == "system"
-    assert "screenshot" in client.requests[0][0]["content"]
-    assert "view_width" in client.requests[0][0]["content"]
-    assert "逻辑坐标" in client.requests[0][0]["content"]
+    content = client.requests[0][0]["content"]
+    assert "screenshot" in content
+    assert "view_width" in content
+    assert "逻辑坐标" in content
+    assert "红十字" in content
+    assert "键鼠" in content
+    assert "核验" in content
     loaded = store.get(session.id)
     assert loaded is not None
     assert all(msg.role != "system" for msg in loaded.messages)
+
+
+async def test_think_system_names_macos(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    """darwin 上系统消息标明 macOS，不是 Windows。"""
+    monkeypatch.setattr("max_gui.agent.prompts.platform.system", lambda: "Darwin")
+    client = ScriptedClient([ChatDelta(text="好")])
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    await runner.run(session, user_text="你好")
+    content = client.requests[0][0]["content"]
+    assert "macOS" in content
+    assert "不是 Windows" in content
+    assert "command" in content
+
+
+async def test_think_system_includes_view_size(settings: Settings) -> None:
+    """截图成功后下一轮 think 的 system 含当前视图宽高。"""
+    client = ScriptedClient(
+        [
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "shot1",
+                        "type": "function",
+                        "function": {"name": "screenshot", "arguments": "{}"},
+                    }
+                ]
+            ),
+            ChatDelta(text="看到了"),
+        ]
+    )
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    await runner.run(session, user_text="截图")
+    loaded = store.get(session.id)
+    assert loaded is not None and loaded.view_frame is not None
+    content = client.requests[1][0]["content"]
+    assert str(loaded.view_frame["view_width"]) in content
+    assert str(loaded.view_frame["view_height"]) in content
 
 
 async def test_plan_stays_on_tool_error(settings: Settings) -> None:
@@ -366,7 +423,7 @@ async def test_tool_message_stores_exec_not_run_file(settings: Settings) -> None
 
 
 async def test_click_followup_image_reaches_think(settings: Settings) -> None:
-    """点击成功后的新截图会编进下一轮 think。"""
+    """移鼠成功后的新截图会编进下一轮 think。"""
     client = ScriptedClient(
         [
             ChatDelta(
@@ -375,13 +432,13 @@ async def test_click_followup_image_reaches_think(settings: Settings) -> None:
                         "id": "clk",
                         "type": "function",
                         "function": {
-                            "name": "mouse_click",
+                            "name": "mouse_move",
                             "arguments": '{"x": 8, "y": 8}',
                         },
                     }
                 ]
             ),
-            ChatDelta(text="点完了"),
+            ChatDelta(text="移完了"),
         ]
     )
     runner, store = _runner(settings, client)
@@ -393,6 +450,32 @@ async def test_click_followup_image_reaches_think(settings: Settings) -> None:
     tool_encoded = next(item for item in client.requests[1] if item.get("role") == "tool")
     types = [part["type"] for part in tool_encoded["content"]]
     assert "text" in types and "image_url" in types
+
+
+class FailingStreamClient:
+    """`stream` 抛出推理 HTTP 错误，供测试落盘。"""
+
+    async def stream(
+        self, messages, *, tools=None, on_token=None, on_reasoning=None, should_stop=None
+    ):
+        """始终失败。"""
+        raise RuntimeError("推理服务返回 400：maximum context length")
+
+
+async def test_think_stream_error_persists_session(settings: Settings) -> None:
+    """think 推理失败后会话 status 为 error，并带上错误正文。"""
+    client = FailingStreamClient()
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text="继续")
+    assert state["status"] == "error"
+    assert "400" in str(state.get("error"))
+    loaded = store.get(session.id)
+    assert loaded is not None
+    assert loaded.status == "error"
+    assert loaded.checkpoint is not None
+    assert loaded.checkpoint.get("status") == "error"
+    assert "400" in str(loaded.checkpoint.get("error") or loaded.status)
 
 
 async def test_progress_and_incremental_persist(settings: Settings) -> None:

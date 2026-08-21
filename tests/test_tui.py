@@ -22,6 +22,40 @@ async def test_unknown_command_does_not_call_model(settings: Settings) -> None:
         await pilot.pause()
 
 
+async def test_model_command_is_unknown(settings: Settings) -> None:
+    """`/model` 按未知命令处理，不改变当前模型。"""
+    app = MaxGuiApp(settings, force_new=True)
+    async with app.run_test() as pilot:
+        await app._handle_command("/model qwen3.5-4b")
+        assert app.settings.model_name == "qwen3.5-2b"
+        log = app.query_one("#transcript", RichLog)
+        rendered = "\n".join(strip.text for strip in log.lines)
+        assert "未知命令" in rendered
+        await app._handle_command("/model")
+        rendered = "\n".join(strip.text for strip in log.lines)
+        assert rendered.count("未知命令") >= 2
+        await pilot.pause()
+
+
+async def test_switch_session_keeps_configured_model(settings: Settings) -> None:
+    """切换旧会话不覆盖 `.env` 里的模型名。"""
+    store = SessionStore(settings.sessions_dir)
+    old = store.create(model="2b")
+    store.append_messages(
+        old, [SessionMessage(role="user", content={"text": "旧会话", "images": []})]
+    )
+    app = MaxGuiApp(settings, force_new=True)
+    async with app.run_test() as pilot:
+        assert app.settings.model_name == "qwen3.5-2b"
+        await app._handle_command(f"/sessions {old.id}")
+        assert app.session is not None
+        assert app.session.id == old.id
+        assert app.settings.model_name == "qwen3.5-2b"
+        assert app.runner is not None
+        assert app.runner.settings.model_name == "qwen3.5-2b"
+        await pilot.pause()
+
+
 async def test_attach_and_empty_send(settings: Settings, tmp_path: Path) -> None:
     """空发送忽略；附件校验、`/new` 清空队列；列表与中断命令可执行。"""
     image = tmp_path / "photo.png"

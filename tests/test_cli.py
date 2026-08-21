@@ -8,31 +8,71 @@ from pathlib import Path
 import pytest
 
 from max_gui.cli import build_parser
-from max_gui.config import MissingVllmError, MissingWeightsError, Settings, require_weights
-from max_gui.lifecycle import _serve_command, resolve_vllm_bin
+from max_gui.config import (
+    MissingVllmError,
+    MissingWeightsError,
+    ServeNotAllowedError,
+    Settings,
+    require_weights,
+)
+from max_gui.lifecycle import _serve_command, resolve_vllm_bin, serve_model
 
 
 def test_parser_default_and_subcommands() -> None:
-    """无子命令、`tui --new`、`download`、`serve --model` 能解析。"""
+    """无子命令、`tui --new`、`serve` 能解析；无 `--model`。"""
     parser = build_parser()
     assert parser.parse_args([]).command is None
     assert parser.parse_args(["tui", "--new"]).new is True
-    download = parser.parse_args(["download"])
-    assert download.alias is None
-    serve = parser.parse_args(["serve", "--model", "qwen3.5-2b"])
-    assert serve.model == "qwen3.5-2b"
+    serve = parser.parse_args(["serve"])
+    assert serve.command == "serve"
 
 
-def test_missing_weights_includes_download(settings: Settings, tmp_path: Path) -> None:
-    """缺权重时错误信息包含 `max-gui download qwen3.5-2b`。"""
+def test_download_subcommand_removed() -> None:
+    """`download` 不再是受支持的子命令。"""
+    parser = build_parser()
+    try:
+        parser.parse_args(["download"])
+    except SystemExit:
+        return
+    raise AssertionError("expected SystemExit for removed download command")
+
+
+def test_model_flag_removed() -> None:
+    """`--model` 不再作为 CLI 开关。"""
+    parser = build_parser()
+    try:
+        parser.parse_args(["--model", "qwen3.5-2b"])
+    except SystemExit:
+        return
+    raise AssertionError("expected SystemExit for removed --model")
+
+
+def test_missing_weights_includes_path_not_download(settings: Settings, tmp_path: Path) -> None:
+    """缺权重时错误信息包含目录路径，不含 download 命令。"""
+    settings.model_name = "qwen3.5-2b"
     settings.model_root = tmp_path / "empty-models"
     settings.model_root.mkdir()
     try:
         require_weights(settings)
     except MissingWeightsError as exc:
-        assert "max-gui download qwen3.5-2b" in str(exc)
+        message = str(exc)
+        assert "qwen3.5-2b" in message
+        assert "download" not in message
         return
     raise AssertionError("expected MissingWeightsError")
+
+
+def test_serve_rejected_for_modelscope(settings: Settings) -> None:
+    """`modelscope` 下 `serve_model` 拒绝启动。"""
+    settings.provider = "modelscope"
+    settings.model_name = "Qwen/Qwen3.8-27B"
+    try:
+        serve_model(settings)
+    except ServeNotAllowedError as exc:
+        assert "local" in str(exc)
+        assert ".env" in str(exc)
+        return
+    raise AssertionError("expected ServeNotAllowedError")
 
 
 def test_serve_command_uses_resolved_binary(settings: Settings, tmp_path: Path) -> None:
@@ -47,6 +87,7 @@ def test_serve_command_uses_resolved_binary(settings: Settings, tmp_path: Path) 
     assert "--max-model-len" in command
     assert "--enable-auto-tool-choice" in command
     assert "--tool-call-parser" in command
+    assert settings.model_name in command
     assert "python" not in Path(command[0]).name
     assert "-m" not in command
 
