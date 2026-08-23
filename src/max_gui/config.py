@@ -9,32 +9,50 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 DEFAULT_PROVIDER = "local"
-PROVIDERS = frozenset({"local", "modelscope"})
+PROVIDERS = frozenset({"local", "modelscope", "dashscope"})
+CLOUD_PROVIDERS = frozenset({"modelscope", "dashscope"})
 DEFAULT_LOCAL_MODEL = "qwen3.5-4b"
 DEFAULT_MODELSCOPE_MODEL = "Qwen/Qwen3.8-27B"
+DEFAULT_DASHSCOPE_MODEL = "qwen3.8-27b"
 MODELSCOPE_BASE_URL = "https://api-inference.modelscope.cn/v1"
+DASHSCOPE_HOST_SUFFIX = ".cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
 DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:8000/v1"
 
 DEFAULT_VLLM_BIN = Path.home() / ".venv-vllm-metal" / "bin" / "vllm"
 DEFAULT_OCR_MODEL = "paddleocr-vl-1.5"
 DEFAULT_OCR_BASE_URL = "http://127.0.0.1:8001/v1"
+DEFAULT_OMNIPARSER_DIR = "omniparserv2"
+DEFAULT_OMNIPARSER_BASE_URL = "http://127.0.0.1:8002"
 
 
 class UnknownProviderError(ValueError):
-    """`MAX_PROVIDER` 不是 `local` 或 `modelscope`。"""
+    """`MAX_PROVIDER` 不是 `local`、`modelscope` 或 `dashscope`。"""
 
     def __init__(self, raw: str) -> None:
         """参数：`raw` 为用户给出的非法值。"""
-        super().__init__(f"未知推理后端：{raw}。可用：local, modelscope")
+        allowed = ", ".join(sorted(PROVIDERS))
+        super().__init__(f"未知推理后端：{raw}。可用：{allowed}")
 
 
 class MissingProviderKeyError(ValueError):
-    """`modelscope` 后端缺少 `MAX_PROVIDER_KEY`。"""
+    """云端后端缺少 `MAX_PROVIDER_KEY`。"""
+
+    def __init__(self, provider: str = "modelscope") -> None:
+        """参数：`provider` 为当前云端后端名，用于区分文案。"""
+        if provider == "dashscope":
+            detail = "使用 dashscope 时请在 .env 中填写百炼 API Key。"
+        else:
+            detail = "使用 modelscope 时请在 .env 中填写魔搭 Access Token。"
+        super().__init__(f"未设置 MAX_PROVIDER_KEY。{detail}")
+
+
+class MissingDashscopeWorkspaceError(ValueError):
+    """`dashscope` 后端缺少 `MAX_DASHSCOPE_WORKSPACE`。"""
 
     def __init__(self) -> None:
-        """提示在 `.env` 填写魔搭 Access Token。"""
+        """提示在 `.env` 填写百炼业务空间 ID。"""
         super().__init__(
-            "未设置 MAX_PROVIDER_KEY。使用 modelscope 时请在 .env 中填写魔搭 Access Token。"
+            "未设置 MAX_DASHSCOPE_WORKSPACE。使用 dashscope 时请在 .env 中填写百炼业务空间 ID。"
         )
 
 
@@ -106,7 +124,7 @@ def load_env_file(root: Path) -> None:
 
 
 def parse_provider(raw: str | None) -> str:
-    """把 `MAX_PROVIDER` 规范成 `local` 或 `modelscope`。
+    """把 `MAX_PROVIDER` 规范成 `local`、`modelscope` 或 `dashscope`。
 
     参数：
         raw: 环境变量原文；空则视为 `local`。
@@ -124,9 +142,26 @@ def parse_provider(raw: str | None) -> str:
 
 
 def has_provider_key(api_key: str) -> bool:
-    """`api_key` 是否可作为魔搭 Token（非空且不是占位 `EMPTY`）。"""
+    """`api_key` 是否可作为云端密钥（非空且不是占位 `EMPTY`）。"""
     key = api_key.strip()
     return bool(key) and key != "EMPTY"
+
+
+def has_dashscope_workspace(workspace_id: str) -> bool:
+    """业务空间 ID 去空白后是否非空。"""
+    return bool(workspace_id.strip())
+
+
+def dashscope_base_url(workspace_id: str) -> str:
+    """由业务空间 ID 拼出华北 2（北京）专属 OpenAI 兼容根路径。
+
+    参数：
+        workspace_id: 百炼业务空间 ID，调用方保证已去空白。
+
+    返回：
+        `https://{id}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`。
+    """
+    return f"https://{workspace_id}{DASHSCOPE_HOST_SUFFIX}"
 
 
 @dataclass(slots=True)
@@ -140,6 +175,7 @@ class Settings:
     base_url: str = DEFAULT_LOCAL_BASE_URL
     api_key: str = "EMPTY"
     model_name: str = DEFAULT_LOCAL_MODEL
+    dashscope_workspace: str = ""
     project_root: Path = Path(".")
     workspace: Path = Path(".")
     sessions_dir: Path = Path("artifacts/sessions")
@@ -156,6 +192,10 @@ class Settings:
     ocr_start_timeout: float = 180.0
     ocr_timeout: float = 120.0
     ocr_gpu_memory_utilization: float = 0.20
+    omniparser_dir: str = DEFAULT_OMNIPARSER_DIR
+    omniparser_base_url: str = DEFAULT_OMNIPARSER_BASE_URL
+    omniparser_start_timeout: float = 180.0
+    omniparser_timeout: float = 120.0
 
     @property
     def model_path(self) -> Path:
@@ -167,6 +207,11 @@ class Settings:
         """PaddleOCR-VL 权重目录：`model_root / paddleocr-vl-1.5`。"""
         return self.model_root / DEFAULT_OCR_MODEL
 
+    @property
+    def omniparser_model_path(self) -> Path:
+        """OmniParser 权重目录：`model_root / omniparser_dir`，默认 `omniparserv2`。"""
+        return self.model_root / self.omniparser_dir
+
 
 def load_settings(
     *,
@@ -177,10 +222,11 @@ def load_settings(
 
     先按 `detect_project_root` 定位根目录并载入 `.env`（不覆盖已有环境变量）。
     环境变量：`MAX_PROVIDER`、`MAX_PROVIDER_KEY`、`MODEL_NAME`、
-    `MAX_GUI_BASE_URL`、`MAX_GUI_WORKSPACE`、`MAX_GUI_MAX_ITERATIONS`、
-    `MAX_GUI_MAX_IMAGE_*`、`MAX_GUI_TOOL_TIMEOUT`、`MAX_GUI_MAX_MODEL_LEN`、
-    `MAX_GUI_GPU_MEM`、`MAX_GUI_DTYPE`、`MAX_GUI_OCR_*`。
-    不读取 `MODELSCOPE_SDK_TOKEN`。
+    `MAX_DASHSCOPE_WORKSPACE`、`MAX_GUI_BASE_URL`、`MAX_GUI_WORKSPACE`、
+    `MAX_GUI_MAX_ITERATIONS`、`MAX_GUI_MAX_IMAGE_*`、`MAX_GUI_TOOL_TIMEOUT`、
+    `MAX_GUI_MAX_MODEL_LEN`、`MAX_GUI_GPU_MEM`、`MAX_GUI_DTYPE`、`MAX_GUI_OCR_*`、
+    `MAX_GUI_OMNIPARSER_*`。
+    不读取 `MODELSCOPE_SDK_TOKEN` 或 `DASHSCOPE_API_KEY`。
 
     参数：
         workspace: 工具读写根；缺省 `MAX_GUI_WORKSPACE` 或 cwd。
@@ -195,11 +241,18 @@ def load_settings(
     root = detect_project_root()
     load_env_file(root)
     provider = parse_provider(os.environ.get("MAX_PROVIDER"))
+    dashscope_workspace = (os.environ.get("MAX_DASHSCOPE_WORKSPACE") or "").strip()
     if provider == "modelscope":
         model_name = (os.environ.get("MODEL_NAME") or DEFAULT_MODELSCOPE_MODEL).strip()
         if not model_name:
             model_name = DEFAULT_MODELSCOPE_MODEL
         base_url = MODELSCOPE_BASE_URL
+        api_key = (os.environ.get("MAX_PROVIDER_KEY") or "").strip()
+    elif provider == "dashscope":
+        model_name = (os.environ.get("MODEL_NAME") or DEFAULT_DASHSCOPE_MODEL).strip()
+        if not model_name:
+            model_name = DEFAULT_DASHSCOPE_MODEL
+        base_url = dashscope_base_url(dashscope_workspace) if dashscope_workspace else ""
         api_key = (os.environ.get("MAX_PROVIDER_KEY") or "").strip()
     else:
         model_name = (os.environ.get("MODEL_NAME") or DEFAULT_LOCAL_MODEL).strip()
@@ -212,6 +265,7 @@ def load_settings(
         base_url=base_url,
         api_key=api_key,
         model_name=model_name,
+        dashscope_workspace=dashscope_workspace,
         project_root=root,
         workspace=(workspace or Path(os.environ.get("MAX_GUI_WORKSPACE") or Path.cwd())).resolve(),
         sessions_dir=(sessions_dir or root / "artifacts" / "sessions").resolve(),
@@ -228,18 +282,35 @@ def load_settings(
         ocr_start_timeout=float(os.environ.get("MAX_GUI_OCR_START_TIMEOUT") or 180),
         ocr_timeout=float(os.environ.get("MAX_GUI_OCR_TIMEOUT") or 120),
         ocr_gpu_memory_utilization=float(os.environ.get("MAX_GUI_OCR_GPU_MEM") or 0.20),
+        omniparser_dir=(os.environ.get("MAX_GUI_OMNIPARSER_DIR") or DEFAULT_OMNIPARSER_DIR).strip(),
+        omniparser_base_url=os.environ.get("MAX_GUI_OMNIPARSER_BASE_URL")
+        or DEFAULT_OMNIPARSER_BASE_URL,
+        omniparser_start_timeout=float(os.environ.get("MAX_GUI_OMNIPARSER_START_TIMEOUT") or 180),
+        omniparser_timeout=float(os.environ.get("MAX_GUI_OMNIPARSER_TIMEOUT") or 120),
     )
     return settings
 
 
 def require_provider_key(settings: Settings) -> None:
-    """`modelscope` 时必须已有 `MAX_PROVIDER_KEY`。
+    """`modelscope` 与 `dashscope` 时必须已有 `MAX_PROVIDER_KEY`。
 
     异常：
         MissingProviderKeyError: 密钥为空。
     """
-    if settings.provider == "modelscope" and not has_provider_key(settings.api_key):
-        raise MissingProviderKeyError()
+    if settings.provider in CLOUD_PROVIDERS and not has_provider_key(settings.api_key):
+        raise MissingProviderKeyError(settings.provider)
+
+
+def require_dashscope_workspace(settings: Settings) -> None:
+    """`dashscope` 时必须已有 `MAX_DASHSCOPE_WORKSPACE`。
+
+    异常：
+        MissingDashscopeWorkspaceError: 业务空间 ID 为空。
+    """
+    if settings.provider == "dashscope" and not has_dashscope_workspace(
+        settings.dashscope_workspace
+    ):
+        raise MissingDashscopeWorkspaceError()
 
 
 def weights_ready(path: Path) -> bool:

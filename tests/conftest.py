@@ -16,9 +16,12 @@ def _clear_provider_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "MAX_PROVIDER",
         "MAX_PROVIDER_KEY",
         "MODEL_NAME",
+        "MAX_DASHSCOPE_WORKSPACE",
+        "MAX_BAILIAN_WORKSPACE",
         "MAX_GUI_MODEL",
         "MAX_GUI_API_KEY",
         "MODELSCOPE_SDK_TOKEN",
+        "DASHSCOPE_API_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
 

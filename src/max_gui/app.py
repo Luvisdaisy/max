@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -17,6 +18,8 @@ from max_gui.config import MissingProviderKeyError, Settings, load_settings
 from max_gui.inference.client import ConnectionFailedError, InferenceClient
 from max_gui.inference.images import SUPPORTED_SUFFIXES, ImagePrepError
 from max_gui.inference.ocr import shutdown_owned_ocr
+from max_gui.inference.omniparser import shutdown_owned_locate
+from max_gui.observability import RunEvent, usage_from_data
 from max_gui.session.store import Session, SessionStore
 from max_gui.tools.protocol import ConfirmationGate, ConfirmationScope
 from max_gui.tools.registry import ToolRegistry, build_default_registry
@@ -82,6 +85,7 @@ class MaxGuiApp(App[None]):
     TITLE = "max-gui"
     CSS = """
     #record { height: 1fr; border: solid $accent; }
+    #monitor { height: 8; border: solid $primary; padding: 0 1; color: $text-muted; }
     #transcript { height: 1fr; border: none; }
     #live { height: auto; max-height: 16; overflow-y: auto; display: none; padding: 0 1; }
     #prompt { height: 8; border: solid $primary; }
@@ -105,6 +109,10 @@ class MaxGuiApp(App[None]):
         self._turn_active = False
         self._stream_text = ""
         self._stream_reasoning = ""
+        self._monitor: dict[str, Any] = {}
+        self._monitor_recent: list[str] = []
+        self._monitor_received_at = time.monotonic()
+        self._reset_monitor()
 
     def compose(self) -> ComposeResult:
         """自上而下：标题、记录框（历史+实时流）、待附件、输入、状态、页脚。"""
@@ -112,6 +120,7 @@ class MaxGuiApp(App[None]):
         with Vertical(id="record"):
             yield RichLog(id="transcript", highlight=True, markup=True, wrap=True)
             yield Static("", id="live", markup=False)
+        yield Static("", id="monitor", markup=False)
         yield Static("", id="pending")
         yield PromptInput(id="prompt")
         yield Static("就绪", id="status")
@@ -125,6 +134,8 @@ class MaxGuiApp(App[None]):
         self._rebuild_runner()
         self.query_one(PromptInput).focus()
         self._render_session()
+        self._refresh_monitor()
+        self.set_interval(0.5, self._refresh_monitor_clock)
         self._set_status(f"会话 {self.session.id} · 模型 {self.settings.model_name}")
 
     def _rebuild_runner(self) -> None:
@@ -301,6 +312,9 @@ class MaxGuiApp(App[None]):
             saw_message = True
             self.call_later(self._commit_stream_message, role, content)
 
+        def on_event(event: RunEvent) -> None:
+            self.call_later(self._handle_run_event, event)
+
         try:
             resume = self.session.status == "interrupted" and not text
             state = await self.runner.run(
@@ -312,6 +326,7 @@ class MaxGuiApp(App[None]):
                 on_reasoning=on_reasoning,
                 on_status=on_status,
                 on_message=on_message,
+                on_event=on_event,
             )
             if not saw_message:
                 messages = state.get("messages") or []
@@ -344,6 +359,149 @@ class MaxGuiApp(App[None]):
                 self._flush_live_stream()
             self._turn_active = False
             self.session = self.store.get(self.session.id) or self.session
+
+    def _reset_monitor(self) -> None:
+        """把独立运行监控状态重置为默认可见的就绪摘要。"""
+        self._monitor = {
+            "run_id": "—",
+            "status": "就绪",
+            "iteration": 0,
+            "subtask": "—",
+            "activity": "—",
+            "elapsed_ms": 0,
+            "model_duration_ms": 0,
+            "tool_duration_ms": 0,
+            "tool_successes": 0,
+            "tool_failures": 0,
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "total_tokens": None,
+            "active": False,
+            "diagnostic": "",
+        }
+        self._monitor_recent = []
+        self._monitor_received_at = time.monotonic()
+
+    def _handle_run_event(self, event: RunEvent) -> None:
+        """消费一条安全事件摘要并刷新监控面板，不写入会话记录区。"""
+        data = event.data
+        if event.event_type == "run.started":
+            self._reset_monitor()
+            self._monitor.update(
+                {
+                    "run_id": event.run_id,
+                    "status": "启动",
+                    "active": True,
+                }
+            )
+        elif event.event_type == "run.resumed":
+            self._monitor.update(
+                {
+                    "run_id": event.run_id,
+                    "status": "恢复",
+                    "active": True,
+                }
+            )
+            if data.get("unfinished_tools"):
+                self._monitor["diagnostic"] = "上次工具结果未知，已等待重新观察"
+        elif event.event_type == "state.changed":
+            self._monitor["status"] = _monitor_status(str(data.get("to") or ""))
+        elif event.event_type == "model.started":
+            self._monitor["activity"] = f"模型 {(data.get('model') or '未知')!s}"
+        elif event.event_type in {"model.completed", "model.failed"}:
+            self._monitor["model_duration_ms"] += _nonnegative_int(data.get("duration_ms"))
+            self._add_monitor_usage(data)
+            self._monitor["activity"] = (
+                "模型完成" if event.event_type.endswith("completed") else "模型失败"
+            )
+        elif event.event_type == "tool.started":
+            self._monitor["activity"] = f"工具 {(data.get('tool_name') or '未知')!s}"
+        elif event.event_type in {"tool.completed", "tool.failed"}:
+            self._monitor["tool_duration_ms"] += _nonnegative_int(data.get("duration_ms"))
+            if event.event_type == "tool.completed":
+                self._monitor["tool_successes"] += 1
+            else:
+                self._monitor["tool_failures"] += 1
+            self._monitor["activity"] = _event_summary(event)
+        elif event.event_type == "observation.completed":
+            self._monitor["activity"] = "观察完成"
+        elif event.event_type in {"run.completed", "run.failed", "run.interrupted"}:
+            self._monitor.update(
+                {
+                    "status": _monitor_status(str(data.get("final_status") or "")),
+                    "model_duration_ms": _nonnegative_int(data.get("model_duration_ms")),
+                    "tool_duration_ms": _nonnegative_int(data.get("tool_duration_ms")),
+                    "tool_successes": _nonnegative_int(data.get("tool_successes")),
+                    "tool_failures": _nonnegative_int(data.get("tool_failures")),
+                    "activity": "—",
+                    "active": False,
+                }
+            )
+            self._replace_monitor_usage(data)
+        elif event.event_type == "recorder.failed":
+            self._monitor["diagnostic"] = "运行日志写入失败"
+
+        self._monitor["run_id"] = event.run_id
+        self._monitor["iteration"] = event.iteration
+        self._monitor["subtask"] = event.subtask or "—"
+        self._monitor["elapsed_ms"] = event.elapsed_ms
+        self._monitor_received_at = time.monotonic()
+        self._monitor_recent.append(_event_summary(event))
+        self._monitor_recent = self._monitor_recent[-3:]
+        self._refresh_monitor()
+
+    def _add_monitor_usage(self, data: dict[str, Any]) -> None:
+        """把一次已知模型用量累加到面板；未知则保持原累计。"""
+        usage = usage_from_data(data)
+        if usage is None:
+            return
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            current = self._monitor.get(key)
+            base = 0 if current is None else _nonnegative_int(current)
+            self._monitor[key] = base + usage[key]
+
+    def _replace_monitor_usage(self, data: dict[str, Any]) -> None:
+        """用终态汇总覆盖面板用量，避免把同一运行再加一遍。"""
+        usage = usage_from_data(data)
+        if usage is None:
+            self._monitor["prompt_tokens"] = None
+            self._monitor["completion_tokens"] = None
+            self._monitor["total_tokens"] = None
+            return
+        self._monitor.update(usage)
+
+    def _refresh_monitor_clock(self) -> None:
+        """活动运行期间推进显示耗时；不写事件也不修改持久化数据。"""
+        if not self._monitor.get("active"):
+            return
+        self._refresh_monitor()
+
+    def _refresh_monitor(self) -> None:
+        """按当前安全摘要渲染默认可见的独立监控面板。"""
+        try:
+            monitor = self.query_one("#monitor", Static)
+        except Exception:
+            return
+        elapsed_ms = _nonnegative_int(self._monitor.get("elapsed_ms"))
+        if self._monitor.get("active"):
+            elapsed_ms += int((time.monotonic() - self._monitor_received_at) * 1000)
+        run_id = str(self._monitor.get("run_id") or "—")
+        run_short = run_id if len(run_id) <= 18 else f"{run_id[:14]}…"
+        recent = "｜".join(self._monitor_recent) or "暂无事件"
+        diagnostic = str(self._monitor.get("diagnostic") or "")
+        diagnostic_line = f"\n诊断：{diagnostic}" if diagnostic else ""
+        monitor.update(
+            "运行监控（本机）\n"
+            f"任务：{run_short}  状态：{self._monitor['status']}  "
+            f"轮次：{self._monitor['iteration']}/{self.settings.max_iterations}  "
+            f"耗时：{elapsed_ms / 1000:.1f}s\n"
+            f"子任务：{self._monitor['subtask']}  当前：{self._monitor['activity']}\n"
+            f"模型：{self._monitor['model_duration_ms']}ms  "
+            f"工具：{self._monitor['tool_duration_ms']}ms  "
+            f"成功/失败：{self._monitor['tool_successes']}/{self._monitor['tool_failures']}\n"
+            f"{_usage_line(self._monitor)}\n"
+            f"最近：{recent}{diagnostic_line}"
+        )
 
     def _live(self) -> Static:
         """流式助手文本控件。"""
@@ -413,8 +571,9 @@ class MaxGuiApp(App[None]):
         self._write_message(role, payload)
 
     def on_unmount(self) -> None:
-        """退出时尽量停掉本进程拉起的 OCR 子进程。"""
+        """退出时尽量停掉本进程拉起的 OCR 与 OmniParser 子进程。"""
         shutdown_owned_ocr()
+        shutdown_owned_locate()
 
     def action_interrupt_or_quit(self) -> None:
         """Ctrl+C：回合中中断，否则退出。"""
@@ -431,6 +590,75 @@ class MaxGuiApp(App[None]):
             self.pending_images.append(path.resolve())
             self._refresh_pending()
             event.stop()
+
+
+def _usage_line(monitor: dict[str, Any]) -> str:
+    """把面板累计用量收成一行中文；没有任何已知用量时写未知，不用 0 表示缺失。"""
+    usage = usage_from_data(monitor)
+    if usage is None:
+        return "用量：未知"
+    return (
+        f"用量：输入 {usage['prompt_tokens']} / 输出 {usage['completion_tokens']} "
+        f"/ 合计 {usage['total_tokens']}"
+    )
+
+
+def _nonnegative_int(value: Any) -> int:
+    """把监控统计字段收成非负整数，坏值视为零。"""
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _monitor_status(status: str) -> str:
+    """把内部状态映射为监控面板的短中文。"""
+    return {
+        "thinking": "思考中",
+        "acting": "执行工具",
+        "observing": "观察中",
+        "done": "完成",
+        "error": "错误",
+        "interrupted": "已中断",
+    }.get(status, status or "就绪")
+
+
+def _event_summary(event: RunEvent) -> str:
+    """生成不含 reasoning、键盘正文、OCR 全文和路径的安全事件摘要。"""
+    data = event.data
+    if event.event_type == "tool.started":
+        return f"工具开始 {(data.get('tool_name') or '未知')!s}"
+    if event.event_type in {"tool.completed", "tool.failed"}:
+        result = "成功" if event.event_type == "tool.completed" else "失败"
+        return (
+            f"工具{result} {(data.get('tool_name') or '未知')!s} "
+            f"{_nonnegative_int(data.get('duration_ms'))}ms"
+        )
+    if event.event_type == "model.started":
+        return "模型开始"
+    if event.event_type in {"model.completed", "model.failed"}:
+        result = "完成" if event.event_type == "model.completed" else "失败"
+        usage = usage_from_data(data)
+        duration = f"{_nonnegative_int(data.get('duration_ms'))}ms"
+        if usage is None:
+            return f"模型{result} {duration} 用量未知"
+        return (
+            f"模型{result} {duration} 输入 {usage['prompt_tokens']} "
+            f"输出 {usage['completion_tokens']}"
+        )
+    if event.event_type == "state.changed":
+        return f"状态 {_monitor_status(str(data.get('to') or ''))}"
+    if event.event_type == "observation.completed":
+        return "观察完成"
+    if event.event_type == "recorder.failed":
+        return "运行日志写入失败"
+    return {
+        "run.started": "任务开始",
+        "run.resumed": "任务恢复",
+        "run.completed": "任务完成",
+        "run.failed": "任务失败",
+        "run.interrupted": "任务中断",
+    }.get(event.event_type, event.event_type)
 
 
 def run_app(settings: Settings | None = None, *, force_new: bool = False) -> None:

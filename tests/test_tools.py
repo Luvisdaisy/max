@@ -1,4 +1,4 @@
-"""工具层：工作区读写/搜索、确认门，以及桌面工具行为。"""
+"""工具层：确认门、未知工具，以及桌面工具行为。"""
 
 from __future__ import annotations
 
@@ -28,42 +28,32 @@ def _text(result: str | ToolResult) -> str:
     return result.text if isinstance(result, ToolResult) else str(result)
 
 
-async def test_read_file_and_reject_escape(settings: Settings) -> None:
-    """能读工作区内文件，拒绝逃出工作区的路径。"""
-    notes = settings.workspace / "notes.md"
-    notes.write_text("hello workspace", encoding="utf-8")
-    registry = build_default_registry(settings, desktop=FakeDesktopBackend())
-    assert "hello workspace" == await registry.invoke("read_file", {"path": "notes.md"})
-    denied = await registry.invoke("read_file", {"path": "../outside.txt"})
-    assert "权限" in denied
-
-
-async def test_search_files(settings: Settings) -> None:
-    """按内容搜索返回路径与摘录。"""
-    (settings.workspace / "a.txt").write_text("alpha token here", encoding="utf-8")
-    registry = build_default_registry(settings, desktop=FakeDesktopBackend())
-    result = await registry.invoke("search_files", {"query": "token"})
-    assert "a.txt" in result
-    assert "token" in result
-
-
-async def test_unknown_tool_and_write_file_skips_gate(settings: Settings) -> None:
-    """未知工具报错；写文件不再走确认门，DenyGate 也挡不住。"""
+async def test_unknown_tool_and_screenshot_skips_gate(settings: Settings) -> None:
+    """未知工具报错；截图不再走确认门，DenyGate 也挡不住。"""
     registry = build_default_registry(settings, gate=DenyGate(), desktop=FakeDesktopBackend())
     unknown = await registry.invoke("not_a_tool", {})
     assert "未知工具" in unknown
-    written = await registry.invoke("write_file", {"path": "x.txt", "content": "yes"})
-    assert "已写入" in written
-    assert (settings.workspace / "x.txt").exists()
+    shot = await registry.invoke("screenshot", {})
+    assert isinstance(shot, ToolResult)
+    assert shot.images
 
 
-async def test_run_python_is_unknown(settings: Settings) -> None:
-    """默认注册表不再暴露 `run_python`，调用按未知工具处理。"""
+async def test_removed_workspace_file_tools_are_unknown(settings: Settings) -> None:
+    """默认注册表不再暴露文件读写与搜索，调用按未知工具处理。"""
     registry = build_default_registry(settings, desktop=FakeDesktopBackend())
     names = [schema["function"]["name"] for schema in registry.schemas()]
-    assert "run_python" not in names
-    result = await registry.invoke("run_python", {"code": "print(1)"})
-    assert "未知工具" in result
+    removed = (
+        "read_file",
+        "write_file",
+        "list_dir",
+        "search_files",
+        "run_python",
+        "ocr_locate",
+    )
+    for name in removed:
+        assert name not in names
+        result = await registry.invoke(name, {})
+        assert "未知工具" in result
 
 
 def _desktop_registry(settings: Settings, *, gate=None, backend: FakeDesktopBackend | None = None):
@@ -74,13 +64,11 @@ def _desktop_registry(settings: Settings, *, gate=None, backend: FakeDesktopBack
 
 
 async def test_tools_run_without_auto_approve(settings: Settings) -> None:
-    """未开自动批准时写文件、按键、点击都立即执行。"""
+    """未开自动批准时截图、按键、点击都立即执行。"""
     registry, backend = _desktop_registry(
         settings,
         gate=SessionScopedGate(auto_approve=False, auto_approve_desktop=False),
     )
-    written = await registry.invoke("write_file", {"path": "ok.txt", "content": "yes"})
-    assert "已写入" in written
     await registry.invoke("screenshot", {})
     pressed = await registry.invoke("keyboard_press", {"keys": "enter"})
     assert "已按下 enter" in _text(pressed)

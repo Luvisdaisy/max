@@ -7,12 +7,14 @@ import sys
 from pathlib import Path
 
 from max_gui.config import (
+    MissingDashscopeWorkspaceError,
     MissingProviderKeyError,
     MissingVllmError,
     MissingWeightsError,
     ServeNotAllowedError,
     UnknownProviderError,
     load_settings,
+    require_dashscope_workspace,
     require_provider_key,
 )
 from max_gui.lifecycle import serve_model
@@ -48,8 +50,9 @@ def main(argv: list[str] | None = None) -> None:
         argv: 参数列表；`None` 时读 `sys.argv[1:]`。
 
     异常：
-        SystemExit: 非法 provider 退出码 2；缺密钥、缺权重、非 local 下 serve
-            或找不到 vLLM 退出码 1；`serve` 成功时以 vLLM 进程退出码结束。
+        SystemExit: 非法 provider 退出码 2；缺密钥、缺 Workspace、缺权重、
+            非 local 下 serve 或找不到 vLLM 退出码 1；`serve` 成功时以
+            vLLM 进程退出码结束。
     """
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -68,7 +71,8 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(1) from exc
     try:
         require_provider_key(settings)
-    except MissingProviderKeyError as exc:
+        require_dashscope_workspace(settings)
+    except (MissingProviderKeyError, MissingDashscopeWorkspaceError) as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(1) from exc
     from max_gui.app import run_app

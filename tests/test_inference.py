@@ -11,11 +11,14 @@ from PIL import Image
 
 from max_gui.config import (
     MODELSCOPE_BASE_URL,
+    MissingDashscopeWorkspaceError,
     MissingProviderKeyError,
     Settings,
     UnknownProviderError,
+    dashscope_base_url,
     has_provider_key,
     load_settings,
+    require_dashscope_workspace,
     require_provider_key,
     require_weights,
 )
@@ -93,9 +96,95 @@ def test_unknown_provider_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     try:
         load_settings(workspace=tmp_path)
     except UnknownProviderError as exc:
-        assert "openai" in str(exc)
+        message = str(exc)
+        assert "openai" in message
+        assert "dashscope" in message
         return
     raise AssertionError("expected UnknownProviderError")
+
+
+def test_dashscope_default_model_and_endpoint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`dashscope` 未写 `MODEL_NAME` 时默认为 `qwen3.8-27b`，端点含 Workspace。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", "dashscope")
+    monkeypatch.setenv("MAX_PROVIDER_KEY", "sk-tok")
+    monkeypatch.setenv("MAX_DASHSCOPE_WORKSPACE", "llm-demo")
+    settings = load_settings(workspace=tmp_path)
+    assert settings.provider == "dashscope"
+    assert settings.model_name == "qwen3.8-27b"
+    assert settings.dashscope_workspace == "llm-demo"
+    assert settings.base_url == dashscope_base_url("llm-demo")
+    assert settings.api_key == "sk-tok"
+
+
+def test_dashscope_uses_model_name_from_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`dashscope` 已写 `MODEL_NAME` 时请求模型名用该值，不覆盖为缺省。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", "dashscope")
+    monkeypatch.setenv("MAX_PROVIDER_KEY", "sk-tok")
+    monkeypatch.setenv("MAX_DASHSCOPE_WORKSPACE", "llm-demo")
+    monkeypatch.setenv("MODEL_NAME", "qwen3.5-plus")
+    settings = load_settings(workspace=tmp_path)
+    assert settings.model_name == "qwen3.5-plus"
+
+
+def test_dashscope_missing_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`dashscope` 缺 `MAX_PROVIDER_KEY` 时视为缺密钥。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", "dashscope")
+    monkeypatch.setenv("MAX_DASHSCOPE_WORKSPACE", "llm-demo")
+    settings = load_settings(workspace=tmp_path)
+    assert not has_provider_key(settings.api_key)
+    try:
+        require_provider_key(settings)
+    except MissingProviderKeyError as exc:
+        assert "max-gui serve" not in str(exc)
+        assert "dashscope" in str(exc)
+        return
+    raise AssertionError("expected MissingProviderKeyError")
+
+
+def test_dashscope_missing_workspace(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`dashscope` 缺业务空间 ID 时中文报错。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", "dashscope")
+    monkeypatch.setenv("MAX_PROVIDER_KEY", "sk-tok")
+    settings = load_settings(workspace=tmp_path)
+    assert settings.dashscope_workspace == ""
+    try:
+        require_dashscope_workspace(settings)
+    except MissingDashscopeWorkspaceError as exc:
+        assert "MAX_DASHSCOPE_WORKSPACE" in str(exc)
+        assert "max-gui serve" not in str(exc)
+        return
+    raise AssertionError("expected MissingDashscopeWorkspaceError")
+
+
+def test_dashscope_env_not_used_as_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """仅有 `DASHSCOPE_API_KEY` 时仍视为缺密钥。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", "dashscope")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-from-dashscope")
+    monkeypatch.setenv("MAX_DASHSCOPE_WORKSPACE", "llm-demo")
+    settings = load_settings(workspace=tmp_path)
+    assert not has_provider_key(settings.api_key)
+    try:
+        require_provider_key(settings)
+    except MissingProviderKeyError:
+        return
+    raise AssertionError("expected MissingProviderKeyError")
+
+
+def test_local_does_not_require_workspace(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`local` 不要求 `MAX_DASHSCOPE_WORKSPACE`。"""
+    _isolate_root(monkeypatch, tmp_path)
+    settings = load_settings(workspace=tmp_path)
+    assert settings.provider == "local"
+    require_dashscope_workspace(settings)
 
 
 def test_sdk_token_not_used_as_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -313,6 +402,77 @@ async def test_stream_tokens(settings: Settings) -> None:
     assert result.text == "你好"
     assert result.reasoning == ""
     assert tokens == ["你", "好"]
+    assert result.usage is None
+
+
+def _sse_with_usage(chunks: list[str], usage: dict) -> str:
+    """正文块之后追加空 choices 的用量块。"""
+    lines = []
+    for chunk in chunks:
+        payload = {"choices": [{"delta": {"content": chunk}, "finish_reason": None}]}
+        lines.append(f"data: {json.dumps(payload)}")
+    lines.append(f"data: {json.dumps({'choices': [], 'usage': usage})}")
+    lines.append("data: [DONE]")
+    return "\n".join(lines) + "\n"
+
+
+async def test_stream_requests_include_usage_and_parses_empty_choices(
+    settings: Settings,
+) -> None:
+    """请求带 include_usage；空 choices 用量块被采纳且不触发正文回调。"""
+    body = _sse_with_usage(
+        ["你", "好"],
+        {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20},
+    )
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=body.encode()
+        )
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=False)
+    tokens: list[str] = []
+    result = await client.stream([{"role": "user", "content": "hi"}], on_token=tokens.append)
+    assert captured["stream"] is True
+    assert captured["stream_options"] == {"include_usage": True}
+    assert tokens == ["你", "好"]
+    assert result.text == "你好"
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 12
+    assert result.usage.completion_tokens == 8
+    assert result.usage.total_tokens == 20
+
+
+async def test_stream_usage_total_falls_back_to_sum(settings: Settings) -> None:
+    """缺 total_tokens 时用输入加输出。"""
+    body = _sse_with_usage(["ok"], {"prompt_tokens": 3, "completion_tokens": 4})
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=body.encode()
+        )
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=False)
+    result = await client.stream([{"role": "user", "content": "hi"}])
+    assert result.usage is not None
+    assert result.usage.total_tokens == 7
+
+
+async def test_stream_without_usage_stays_unknown(settings: Settings) -> None:
+    """整段流没有 usage 时用量为未知，不得写成 0。"""
+    body = _sse(["只", "有", "正文"])
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=body.encode()
+        )
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=False)
+    result = await client.stream([{"role": "user", "content": "hi"}])
+    assert result.text == "只有正文"
+    assert result.usage is None
 
 
 def _sse_mixed() -> str:
@@ -354,7 +514,7 @@ async def test_stream_reasoning_separate_from_content(settings: Settings) -> Non
 
 
 def test_assistant_reasoning_not_encoded(settings: Settings) -> None:
-    """编码发给模型时丢掉助手 `reasoning`，只保留正文。"""
+    """本地编码发给模型时丢掉助手 `reasoning`，只保留正文。"""
     messages = to_chat_messages(
         [
             {
@@ -367,6 +527,34 @@ def test_assistant_reasoning_not_encoded(settings: Settings) -> None:
     assert messages[0]["content"] == "已完成"
     encoded = json.dumps(messages, ensure_ascii=False)
     assert "先截图再点微信" not in encoded
+    assert "reasoning_content" not in messages[0]
+
+
+def test_dashscope_assistant_reasoning_encoded(settings: Settings) -> None:
+    """`dashscope` 把思考写成独立 `reasoning_content`，不拼进正文。"""
+    settings.provider = "dashscope"
+    messages = to_chat_messages(
+        [
+            {
+                "role": "assistant",
+                "content": {"text": "你好", "reasoning": "先问候"},
+            }
+        ],
+        settings=settings,
+    )
+    assert messages[0]["content"] == "你好"
+    assert messages[0]["reasoning_content"] == "先问候"
+
+
+def test_dashscope_assistant_without_reasoning_omits_field(settings: Settings) -> None:
+    """`dashscope` 助手无思考时不加 `reasoning_content`。"""
+    settings.provider = "dashscope"
+    messages = to_chat_messages(
+        [{"role": "assistant", "content": {"text": "你好"}}],
+        settings=settings,
+    )
+    assert messages[0]["content"] == "你好"
+    assert "reasoning_content" not in messages[0]
 
 
 async def test_stream_http_error_includes_status(settings: Settings) -> None:
@@ -494,6 +682,118 @@ def _sse_tool_calls() -> str:
     lines = [f"data: {json.dumps(item)}" for item in chunks]
     lines.append("data: [DONE]")
     return "\n".join(lines) + "\n"
+
+
+def _configure_dashscope(settings: Settings, tmp_path: Path) -> None:
+    """把夹具改成可用的 `dashscope` 配置，且无本地权重目录。"""
+    settings.provider = "dashscope"
+    settings.api_key = "sk-tok"
+    settings.dashscope_workspace = "llm-demo"
+    settings.model_name = "qwen3.5-plus"
+    settings.model_root = tmp_path / "no-weights"
+
+
+async def test_dashscope_connection_omits_serve(settings: Settings, tmp_path: Path) -> None:
+    """DashScope 后端连不上时不提示 `max-gui serve`。"""
+    _configure_dashscope(settings, tmp_path)
+    client = InferenceClient(settings, check_weights=True)
+    try:
+        await client.stream([{"role": "user", "content": "hi"}])
+    except ConnectionFailedError as exc:
+        message = str(exc)
+        assert "max-gui serve" not in message
+        assert "MAX_PROVIDER_KEY" in message
+        assert "MAX_DASHSCOPE_WORKSPACE" in message
+        return
+    raise AssertionError("expected ConnectionFailedError")
+
+
+async def test_dashscope_missing_key_skips_http(settings: Settings, tmp_path: Path) -> None:
+    """`dashscope` 缺密钥时不发请求。"""
+    _configure_dashscope(settings, tmp_path)
+    settings.api_key = ""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("must not send HTTP without key")
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=True)
+    try:
+        await client.stream([{"role": "user", "content": "hi"}])
+    except MissingProviderKeyError as exc:
+        assert "max-gui serve" not in str(exc)
+        return
+    raise AssertionError("expected MissingProviderKeyError")
+
+
+async def test_dashscope_missing_workspace_skips_http(settings: Settings, tmp_path: Path) -> None:
+    """`dashscope` 缺 Workspace 时不发请求。"""
+    _configure_dashscope(settings, tmp_path)
+    settings.dashscope_workspace = ""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("must not send HTTP without workspace")
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=True)
+    try:
+        await client.stream([{"role": "user", "content": "hi"}])
+    except MissingDashscopeWorkspaceError as exc:
+        assert "max-gui serve" not in str(exc)
+        return
+    raise AssertionError("expected MissingDashscopeWorkspaceError")
+
+
+async def test_dashscope_skips_local_weights_and_sends_id(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """DashScope 不检查本地目录，请求打专属域名且 `model` 为当前 `MODEL_NAME`。"""
+    _configure_dashscope(settings, tmp_path)
+    settings.base_url = dashscope_base_url("llm-demo")
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        seen["url"] = str(request.url)
+        seen["model"] = payload["model"]
+        seen["tools"] = payload.get("tools")
+        seen["tool_choice"] = payload.get("tool_choice")
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_sse(["ok"]).encode(),
+        )
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=True)
+    tools = [{"type": "function", "function": {"name": "screenshot", "parameters": {}}}]
+    result = await client.stream([{"role": "user", "content": "hi"}], tools=tools)
+    assert result.text == "ok"
+    assert seen["model"] == "qwen3.5-plus"
+    assert seen["tools"] == tools
+    assert seen["tool_choice"] == "auto"
+    assert seen["url"] == (
+        "https://llm-demo.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
+    )
+
+
+async def test_dashscope_assembles_tool_calls(settings: Settings, tmp_path: Path) -> None:
+    """DashScope 兼容 SSE 的 `tool_calls` 增量拼成完整调用。"""
+    _configure_dashscope(settings, tmp_path)
+    settings.base_url = dashscope_base_url("llm-demo")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_sse_tool_calls().encode(),
+        )
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=True)
+    result = await client.stream(
+        [{"role": "user", "content": "hi"}],
+        tools=[{"type": "function", "function": {"name": "screenshot"}}],
+    )
+    assert result.tool_calls == [
+        {"id": "call_1", "type": "function", "function": {"name": "screenshot", "arguments": "{}"}}
+    ]
 
 
 async def test_modelscope_assembles_tool_calls(settings: Settings) -> None:

@@ -15,7 +15,13 @@ from typing import Any
 import httpx
 from PIL import Image
 
-from max_gui.config import Settings, require_provider_key, require_weights
+from max_gui.config import (
+    CLOUD_PROVIDERS,
+    Settings,
+    require_dashscope_workspace,
+    require_provider_key,
+    require_weights,
+)
 from max_gui.inference.images import prepare_image
 
 
@@ -28,6 +34,15 @@ class ConnectionFailedError(RuntimeError):
         super().__init__(hint or f"无法连接推理服务（{base_url}）。请先运行：max-gui serve")
 
 
+@dataclass(frozen=True, slots=True)
+class TokenUsage:
+    """一次补全的 token 用量。三项都未知时不构造此对象。"""
+
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
 @dataclass(slots=True)
 class ChatDelta:
     """一次流式增量或拼好的完整回复。
@@ -37,12 +52,14 @@ class ChatDelta:
         reasoning: 思考增量或累计思考；不并入 `text`。
         tool_calls: OpenAI 风格工具调用（流式时按 index 拼装）。
         finish_reason: `stop` / `interrupted` 等。
+        usage: 接口回传的用量；未回传时为 `None`，不得写成全 0。
     """
 
     text: str = ""
     reasoning: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     finish_reason: str | None = None
+    usage: TokenUsage | None = None
 
 
 class InferenceClient:
@@ -82,8 +99,9 @@ class InferenceClient:
             ConnectionFailedError: 网络层失败。
             RuntimeError: HTTP 非 2xx。
         """
-        if self.settings.provider == "modelscope":
+        if self.settings.provider in CLOUD_PROVIDERS:
             require_provider_key(self.settings)
+            require_dashscope_workspace(self.settings)
         elif self.check_weights:
             require_weights(self.settings)
 
@@ -91,6 +109,7 @@ class InferenceClient:
             "model": self.settings.model_name,
             "messages": messages,
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
         if tools:
             payload["tools"] = tools
@@ -139,17 +158,19 @@ class InferenceClient:
                                 slot["function"]["arguments"] += fn["arguments"]
                         if delta.finish_reason:
                             assembled.finish_reason = delta.finish_reason
+                        if delta.usage is not None:
+                            assembled.usage = delta.usage
         except httpx.HTTPStatusError as exc:
             detail = await _http_error_detail(exc)
             raise RuntimeError(f"推理服务返回 {exc.response.status_code}：{detail}") from exc
         except httpx.HTTPError as exc:
-            if self.settings.provider == "modelscope":
+            if self.settings.provider in CLOUD_PROVIDERS:
+                extra = "请检查网络与 MAX_PROVIDER_KEY。"
+                if self.settings.provider == "dashscope":
+                    extra = "请检查网络、MAX_PROVIDER_KEY 与 MAX_DASHSCOPE_WORKSPACE。"
                 raise ConnectionFailedError(
                     self.settings.base_url,
-                    hint=(
-                        f"无法连接推理服务（{self.settings.base_url}）。"
-                        "请检查网络与 MAX_PROVIDER_KEY。"
-                    ),
+                    hint=f"无法连接推理服务（{self.settings.base_url}）。{extra}",
                 ) from exc
             raise ConnectionFailedError(self.settings.base_url) from exc
 
@@ -270,9 +291,11 @@ def to_chat_messages(
 ) -> list[dict[str, Any]]:
     """把会话状态消息转成 OpenAI chat 请求体，并回注最近一张图像。
 
+    `dashscope` 且助手 content 含思考时，另设 `reasoning_content`，不拼进正文。
+
     参数：
         raw_messages: 图状态中的消息。
-        settings: 图像预处理上限。
+        settings: 图像预处理上限与当前后端。
         system: 若给出且原始消息不以 system 开头，则插到请求最前。
 
     返回：
@@ -315,10 +338,13 @@ def to_chat_messages(
             elif isinstance(content, str):
                 item["content"] = content
             elif isinstance(content, dict):
-                # 思考只给 TUI 回放，不编进下一轮请求。
                 item["content"] = content.get("text") or ""
             else:
                 item["content"] = content
+            if settings.provider == "dashscope" and isinstance(content, dict):
+                reasoning = str(content.get("reasoning") or "")
+                if reasoning:
+                    item["reasoning_content"] = reasoning
             if message.get("tool_calls"):
                 item["tool_calls"] = message["tool_calls"]
             encoded.append(item)
@@ -350,9 +376,12 @@ def _parse_sse_line(line: str) -> ChatDelta | None:
         payload = json.loads(data)
     except json.JSONDecodeError:
         return None
+    usage = parse_token_usage(payload.get("usage"))
     choices = payload.get("choices") or []
     if not choices:
-        return None
+        if usage is None:
+            return None
+        return ChatDelta(usage=usage)
     choice = choices[0]
     delta = choice.get("delta") or {}
     reasoning = delta.get("reasoning_content")
@@ -363,7 +392,42 @@ def _parse_sse_line(line: str) -> ChatDelta | None:
         reasoning=str(reasoning or ""),
         tool_calls=list(delta.get("tool_calls") or []),
         finish_reason=choice.get("finish_reason"),
+        usage=usage,
     )
+
+
+def parse_token_usage(raw: Any) -> TokenUsage | None:
+    """从 Chat Completions `usage` 对象取出三项用量；无法构成完整用量则返回 `None`。
+
+    参数：
+        raw: 响应里的 `usage`；非对象或缺输入/输出时视为未知。
+
+    返回：
+        已知用量，或 `None`。缺 `total_tokens` 时用输入加输出；不得把缺失写成 0。
+    """
+    if not isinstance(raw, dict):
+        return None
+    prompt = _nonneg_int(raw.get("prompt_tokens"))
+    completion = _nonneg_int(raw.get("completion_tokens"))
+    if prompt is None or completion is None:
+        return None
+    total = _nonneg_int(raw.get("total_tokens"))
+    if total is None:
+        total = prompt + completion
+    return TokenUsage(prompt_tokens=prompt, completion_tokens=completion, total_tokens=total)
+
+
+def _nonneg_int(value: Any) -> int | None:
+    """把 JSON 数值收成非负整数；布尔值与坏值视为缺失。"""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    if number < 0:
+        return None
+    return number
 
 
 async def collect_stream(stream: AsyncIterator[ChatDelta]) -> ChatDelta:
@@ -374,4 +438,6 @@ async def collect_stream(stream: AsyncIterator[ChatDelta]) -> ChatDelta:
         assembled.reasoning += delta.reasoning
         assembled.tool_calls.extend(delta.tool_calls)
         assembled.finish_reason = delta.finish_reason or assembled.finish_reason
+        if delta.usage is not None:
+            assembled.usage = delta.usage
     return assembled

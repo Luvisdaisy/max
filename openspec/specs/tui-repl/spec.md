@@ -6,6 +6,62 @@ Textual REPL：提示符、历史、流式 token、斜杠命令、非阻塞界�
 
 ## Requirements
 
+### Requirement: 默认展示独立运行监控面板
+
+TUI MUST 在会话记录区之外默认展示独立运行监控面板。面板 MUST 显示当前运行编号摘要、状态、当前轮次与上限、当前子任务、活动模型或工具、累计耗时、模型与工具累计耗时、工具成功/失败数和最近运行事件；没有活动运行时 MUST 显示就绪或最近终态。运行监控内容 MUST NOT 作为用户、助手或工具消息写入会话记录区。
+
+#### Scenario: 启动后面板默认可见
+
+- **WHEN** 用户启动 Textual REPL 且尚未提交新任务
+- **THEN** 独立运行监控面板已经可见并显示就绪状态
+
+#### Scenario: 工具执行时实时更新
+
+- **WHEN** Agent 发出 `tool.started` 事件
+- **THEN** 面板在工具返回前显示当前工具名和执行中状态，会话记录区不新增调试事件行
+
+#### Scenario: 运行完成后保留摘要
+
+- **WHEN** Agent 发出运行终态事件
+- **THEN** 面板显示该运行的最终状态、总耗时、调用统计和最近事件
+
+### Requirement: 监控面板展示 token 用量
+
+独立运行监控面板 MUST 展示本次运行已累计的输入、输出与合计 token。有已知累计时 MUST 使用中文「用量：输入 N / 输出 M / 合计 T」形式。没有任何已知用量时 MUST 显示「用量：未知」，MUST NOT 显示输入 0、输出 0 来表示未知。最近事件中的模型完成摘要 MUST 包含当次输入与输出，或在当次未知时写「用量未知」。用量 MUST NOT 作为用户、助手或工具消息写入会话记录区。
+
+#### Scenario: 模型完成后面板出现累计用量
+
+- **WHEN** Agent 发出带 `prompt_tokens=12`、`completion_tokens=8`、`total_tokens=20` 的 `model.completed`
+- **THEN** 监控面板可见「用量：输入 12 / 输出 8 / 合计 20」，会话记录区不新增用量行
+
+#### Scenario: 未知用量不显示零
+
+- **WHEN** 当前运行尚无任何已知 token 用量
+- **THEN** 监控面板显示「用量：未知」，且 MUST NOT 以「输入 0 / 输出 0」表示未知
+
+#### Scenario: 最近事件带当次用量
+
+- **WHEN** 一次模型调用完成且当次用量已知
+- **THEN** 面板最近事件摘要含该次输入与输出 token 数
+
+### Requirement: 监控面板隐藏大段敏感正文
+
+监控面板 MUST 只显示事件摘要，MUST NOT 展示完整 reasoning、`keyboard_type` 输入正文、OCR 全文、截图字节、API Key、Authorization Header 或 `.env` 内容。面板 MUST NOT 依赖展示 `artifacts/runs/` 绝对路径来表达运行状态。
+
+#### Scenario: 键盘输入事件只显示工具摘要
+
+- **WHEN** 当前事件来自含正文参数的 `keyboard_type`
+- **THEN** 面板可显示工具名、字符数、耗时和结果，但不显示输入正文
+
+### Requirement: 日志写入故障在面板中可见
+
+当运行记录器无法创建或追加 JSONL 时，TUI MUST 在独立监控面板显示中文诊断，且界面 MUST 保持可响应。该诊断 MUST 与 Agent 业务终态分开表达，MUST NOT 把成功完成的任务显示为工具失败。
+
+#### Scenario: 运行文件不可写
+
+- **WHEN** 运行记录器通过内存回调报告写入失败
+- **THEN** 面板显示“运行日志写入失败”及安全的错误摘要，用户仍可中断或继续使用 TUI
+
 ### Requirement: 启动 Textual REPL
 
 用户执行 `max-gui` 或 `max-gui tui` 时，CLI SHALL 启动 Textual TUI。TUI MUST 展示会话记录、多行提示符和状态区。推理或工具运行时，界面 MUST 保持可响应。
@@ -83,7 +139,7 @@ TUI SHALL 允许用户通过 `/attach <path>` 附加一张或多张图像（终�
 
 ### Requirement: 工具执行不弹确认
 
-TUI MUST NOT 因 Agent 调用 `write_file`、`mouse_click`、`mouse_drag`、`mouse_scroll`、`keyboard_type` 或 `keyboard_press` 而弹出确认对话框。工具结果仍写入记录区。
+TUI MUST NOT 因 Agent 调用 `mouse_click`、`mouse_drag`、`mouse_scroll`、`keyboard_type` 或 `keyboard_press` 而弹出确认对话框。工具结果仍写入记录区。
 
 #### Scenario: 点击不弹框
 

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-OpenAI 兼容客户端（本机 vLLM 或魔搭 API-Inference）、模型配置、图像编码。
+OpenAI 兼容客户端（本机 vLLM、魔搭 API-Inference 或阿里云百炼）、模型配置、图像编码。
 
 ## Requirements
 
@@ -131,7 +131,7 @@ OpenAI 兼容客户端（本机 vLLM 或魔搭 API-Inference）、模型配置�
 
 ### Requirement: serve 与 download 辅助命令
 
-CLI SHALL 提供 `max-gui serve`，仅当 `MAX_PROVIDER=local` 时以 OpenAI 兼容模式启动 vLLM，并带上配置的 `--max-model-len`、`--gpu-memory-utilization`、`--dtype`。开发默认加载 `model/qwen3.5-4b`。vLLM 可执行文件 MUST 按 `MAX_GUI_VLLM`、`PATH` 中的 `vllm`、`~/.venv-vllm-metal/bin/vllm` 的顺序解析，MUST NOT 回退到当前解释器的 `python -m vllm`。找不到可执行文件时 MUST 以非零退出码报中文错误。`MAX_PROVIDER=modelscope` 时 `max-gui serve` MUST 以非零退出码失败并提示修改 `.env`。CLI MUST NOT 提供 `max-gui download` 子命令。
+CLI SHALL 提供 `max-gui serve`，仅当 `MAX_PROVIDER=local` 时以 OpenAI 兼容模式启动 vLLM，并带上配置的 `--max-model-len`、`--gpu-memory-utilization`、`--dtype`。开发默认加载 `model/qwen3.5-4b`。vLLM 可执行文件 MUST 按 `MAX_GUI_VLLM`、`PATH` 中的 `vllm`、`~/.venv-vllm-metal/bin/vllm` 的顺序解析，MUST NOT 回退到当前解释器的 `python -m vllm`。找不到可执行文件时 MUST 以非零退出码报中文错误。`MAX_PROVIDER` 为 `modelscope` 或 `dashscope` 时 `max-gui serve` MUST 以非零退出码失败并提示修改 `.env`。CLI MUST NOT 提供 `max-gui download` 子命令。
 
 #### Scenario: 启动已配置模型
 
@@ -141,6 +141,11 @@ CLI SHALL 提供 `max-gui serve`，仅当 `MAX_PROVIDER=local` 时以 OpenAI 兼
 #### Scenario: modelscope 下拒绝 serve
 
 - **WHEN** `MAX_PROVIDER=modelscope` 且用户执行 `max-gui serve`
+- **THEN** 命令以非零退出码失败，错误信息提示将 `MAX_PROVIDER` 改为 `local`
+
+#### Scenario: dashscope 下拒绝 serve
+
+- **WHEN** `MAX_PROVIDER=dashscope` 且用户执行 `max-gui serve`
 - **THEN** 命令以非零退出码失败，错误信息提示将 `MAX_PROVIDER` 改为 `local`
 
 #### Scenario: 未激活独立 vLLM 环境
@@ -160,7 +165,7 @@ CLI SHALL 提供 `max-gui serve`，仅当 `MAX_PROVIDER=local` 时以 OpenAI 兼
 
 ### Requirement: 双推理后端
 
-系统 MUST 根据 `MAX_PROVIDER` 选择后端。`local` MUST 使用可配置的本机 OpenAI 兼容端点（缺省 `http://127.0.0.1:8000/v1`），并在发请求前确认 `model/<MODEL_NAME>` 权重完整。`modelscope` MUST 使用 `https://api-inference.modelscope.cn/v1`，MUST 将请求中的 `model` 设为 `MODEL_NAME` 原文，MUST NOT 检查本地权重目录。`modelscope` 且 `MAX_PROVIDER_KEY` 为空时，MUST 在启动 TUI 或首次请求前以中文报错，MUST NOT 提示 `max-gui serve`。两种后端 MUST 共用同一套消息编码与流式解析，MUST NOT 为云端省略 `tools`。
+系统 MUST 根据 `MAX_PROVIDER` 选择后端。`local` MUST 使用可配置的本机 OpenAI 兼容端点（缺省 `http://127.0.0.1:8000/v1`），并在发请求前确认 `model/<MODEL_NAME>` 权重完整。`modelscope` MUST 使用 `https://api-inference.modelscope.cn/v1`，MUST 将请求中的 `model` 设为 `MODEL_NAME` 原文，MUST NOT 检查本地权重目录。`modelscope` 且 `MAX_PROVIDER_KEY` 为空时，MUST 在启动 TUI 或首次请求前以中文报错，MUST NOT 提示 `max-gui serve`。`dashscope` MUST 使用 `https://{MAX_DASHSCOPE_WORKSPACE}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`，MUST 将请求中的 `model` 设为 `MODEL_NAME` 原文，MUST NOT 检查本地权重目录。`dashscope` 且 `MAX_PROVIDER_KEY` 为空时，MUST 在启动 TUI 或首次请求前以中文报错，MUST NOT 提示 `max-gui serve`。三种后端 MUST 共用同一套消息编码与流式解析（`dashscope` 的思考回传除外），MUST NOT 为云端省略 `tools`。
 
 #### Scenario: local 仍检查权重
 
@@ -182,16 +187,74 @@ CLI SHALL 提供 `max-gui serve`，仅当 `MAX_PROVIDER=local` 时以 OpenAI 兼
 - **WHEN** `MAX_PROVIDER=modelscope` 且魔搭端点拒绝连接
 - **THEN** 用户可见错误不包含 `max-gui serve`
 
+#### Scenario: dashscope 使用北京专属域名
+
+- **WHEN** `MAX_PROVIDER=dashscope`、`MAX_DASHSCOPE_WORKSPACE=llm-demo`、`MAX_PROVIDER_KEY` 非空
+- **THEN** 客户端向 `https://llm-demo.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions` 发请求，`model` 为当前 `MODEL_NAME`，且不检查 `model/qwen3.8-27b`
+
+#### Scenario: dashscope 缺密钥
+
+- **WHEN** `MAX_PROVIDER=dashscope` 且 `MAX_PROVIDER_KEY` 为空
+- **THEN** 系统报告中文缺密钥错误，不提示 `max-gui serve`，不发起 HTTP 请求
+
+#### Scenario: dashscope 连接失败不提 serve
+
+- **WHEN** `MAX_PROVIDER=dashscope` 且百炼端点拒绝连接
+- **THEN** 用户可见错误不包含 `max-gui serve`
+
 ### Requirement: 云端与本地均发送工具 schema
 
-当 Agent 调用推理且工具注册表非空时，客户端 MUST 在请求中包含 `tools` 与 `tool_choice=auto`，无论 `MAX_PROVIDER` 为 `local` 还是 `modelscope`。解析 SSE 时 MUST 按现有规则拼装 `tool_calls`。系统 MUST NOT 因云端后端而改为从正文 JSON 解析工具调用。
+当 Agent 调用推理且工具注册表非空时，客户端 MUST 在请求中包含 `tools` 与 `tool_choice=auto`，无论 `MAX_PROVIDER` 为 `local`、`modelscope` 还是 `dashscope`。解析 SSE 时 MUST 按现有规则拼装 `tool_calls`。系统 MUST NOT 因云端后端而改为从正文 JSON 解析工具调用。
 
 #### Scenario: modelscope 请求带 tools
 
 - **WHEN** `MAX_PROVIDER=modelscope` 且注册表含桌面工具 schema
 - **THEN** POST `/chat/completions` 的 JSON 含 `tools` 数组与 `tool_choice` 为 `auto`
 
+#### Scenario: dashscope 请求带 tools
+
+- **WHEN** `MAX_PROVIDER=dashscope` 且注册表含桌面工具 schema
+- **THEN** POST `/chat/completions` 的 JSON 含 `tools` 数组与 `tool_choice` 为 `auto`
+
 #### Scenario: 云端流式 tool_calls 拼装
 
-- **WHEN** 魔搭兼容 SSE 推送带 `index` 的 `delta.tool_calls` 增量
+- **WHEN** 魔搭或百炼兼容 SSE 推送带 `index` 的 `delta.tool_calls` 增量
 - **THEN** 客户端产出的完整回复含拼好的 `tool_calls`，可供 Agent `act` 使用
+
+### Requirement: dashscope 回传思考字段
+
+当 `MAX_PROVIDER=dashscope` 且助手消息 content 含非空 `reasoning` 时，`to_chat_messages` MUST 在该条请求消息上设置独立字段 `reasoning_content`，其值等于已存思考文本；`content` MUST 仍为正文，MUST NOT 把思考拼进 `content`。无思考的助手消息 MUST NOT 带 `reasoning_content`。`local` 与 `modelscope` MUST 仍不把思考编进请求。
+
+#### Scenario: dashscope 助手带 reasoning_content
+
+- **WHEN** `MAX_PROVIDER=dashscope`，助手 content 为 `{text: "你好", reasoning: "先问候"}`
+- **THEN** 编码结果该条含 `content` 为 `你好`，且 `reasoning_content` 为 `先问候`
+
+#### Scenario: dashscope 无思考不加字段
+
+- **WHEN** `MAX_PROVIDER=dashscope`，助手 content 仅有 `text`、无 `reasoning`
+- **THEN** 编码结果该条不含 `reasoning_content`
+
+#### Scenario: local 仍不回传思考
+
+- **WHEN** `MAX_PROVIDER=local`，助手 content 含 `reasoning`
+- **THEN** 编码结果该条无 `reasoning_content`，`content` 仅为正文
+
+### Requirement: 流式补全回传 token 用量
+
+客户端在 `stream` 为真的 `/chat/completions` 请求中 MUST 发送 `stream_options.include_usage` 为真。解析 SSE 时 MUST 读取 payload 级 `usage`（含 `choices` 为空的用量块），并从中取出 `prompt_tokens`、`completion_tokens`、`total_tokens`。用量块 MUST NOT 触发正文或思考 token 回调，MUST NOT 把空 `choices` 当成补全失败。`total_tokens` 缺失但输入与输出均存在时，合计 MUST 等于二者之和。整段流没有可用 `usage` 时，完整回复 MUST 将用量标为未知，MUST NOT 写成 0。提供方忽略 `stream_options` 时 MUST 仍能完成流式正文与工具调用拼装。
+
+#### Scenario: 空 choices 用量块被采纳
+
+- **WHEN** SSE 在正文增量之后推送一块 `choices` 为空且含 `usage.prompt_tokens`、`usage.completion_tokens`、`usage.total_tokens` 的数据
+- **THEN** 拼好的回复带有对应三项用量，且正文与思考回调未因该块被再次调用
+
+#### Scenario: 未回传用量则为未知
+
+- **WHEN** 整个 SSE 流只有带 `delta.content` 的块，没有任何 `usage`
+- **THEN** 拼好的回复用量为未知，且正文仍按顺序产出
+
+#### Scenario: 请求带 include_usage
+
+- **WHEN** 客户端发起流式 `/chat/completions`
+- **THEN** JSON 请求体含 `stream` 为真，且 `stream_options.include_usage` 为真

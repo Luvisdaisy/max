@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 
 from PIL import Image
@@ -11,8 +10,6 @@ from PIL import Image
 from max_gui.config import DEFAULT_OCR_MODEL, Settings
 from max_gui.desktop.fake import FakeDesktopBackend
 from max_gui.inference.ocr import (
-    OCR_LOCATE_PARSE_MESSAGE,
-    OCR_LOCATE_SKIP_MESSAGE,
     OCR_SKIP_MESSAGE,
     OcrRuntime,
     ocr_serve_command,
@@ -20,7 +17,7 @@ from max_gui.inference.ocr import (
 )
 from max_gui.inference.spotting import SpottingParseError, parse_spotting
 from max_gui.lifecycle import _serve_command
-from max_gui.tools.desktop import active_locate_hits, clear_desktop_context
+from max_gui.tools.desktop import clear_desktop_context
 from max_gui.tools.protocol import ToolResult
 from max_gui.tools.registry import DenyGate, build_default_registry
 
@@ -253,71 +250,6 @@ async def _healthy_true() -> bool:
 
 async def _healthy_false() -> bool:
     return False
-
-
-async def test_ocr_locate_draws_boxes_and_records_hits(settings: Settings) -> None:
-    """定位成功返回带框图，并写入可点编号。"""
-    runtime = OcrRuntime(
-        settings,
-        start_fn=_DummyProc,
-        healthy_fn=_healthy_true,
-        complete_fn=_async_text('[{"text": "确定", "bbox": [0, 0, 32, 32]}]'),
-    )
-    registry = _registry(settings, runtime)
-    tool = registry.get("ocr_locate")
-    assert tool is not None
-    assert tool.requires_confirmation is False
-    path = _write_png(settings.screenshots_dir / "shot.png")
-    result = await registry.invoke("ocr_locate", {"path": str(path)})
-    assert isinstance(result, ToolResult)
-    payload = json.loads(result.text)
-    assert payload["items"][0]["text"] == "确定"
-    assert payload["items"][0]["id"] == 1
-    assert result.images and result.images[0].is_file()
-    hits = active_locate_hits()
-    assert 1 in hits
-
-
-async def test_ocr_locate_rejects_escape_and_parse_failure(settings: Settings) -> None:
-    """越权路径不启动；无法解析则返回中文错误。"""
-    runtime = OcrRuntime(
-        settings,
-        start_fn=_DummyProc,
-        healthy_fn=_healthy_true,
-        complete_fn=_async_text("这里没有框"),
-    )
-    registry = _registry(settings, runtime)
-    outside = settings.project_root / "secret.png"
-    _write_png(outside)
-    denied = await registry.invoke("ocr_locate", {"path": str(outside)})
-    assert "权限" in denied
-    assert runtime.start_count == 0
-    path = _write_png(settings.screenshots_dir / "bad.png")
-    parsed = await registry.invoke("ocr_locate", {"path": str(path)})
-    assert parsed == OCR_LOCATE_PARSE_MESSAGE
-
-
-async def test_ocr_locate_skips_when_both_fail(settings: Settings) -> None:
-    """两档推理都失败时定位可跳过。"""
-
-    async def boom_complete(_part: dict) -> str:
-        raise RuntimeError("vllm down")
-
-    async def boom_tf(_path: Path) -> str:
-        raise RuntimeError("tf down")
-
-    settings.ocr_start_timeout = 0.05
-    runtime = OcrRuntime(
-        settings,
-        start_fn=_DummyProc,
-        healthy_fn=_healthy_false,
-        complete_fn=boom_complete,
-        transformers_fn=boom_tf,
-    )
-    registry = _registry(settings, runtime)
-    path = _write_png(settings.screenshots_dir / "down.png")
-    skipped = await registry.invoke("ocr_locate", {"path": str(path)})
-    assert skipped == OCR_LOCATE_SKIP_MESSAGE
 
 
 def _async_text(text: str):

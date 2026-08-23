@@ -15,6 +15,7 @@ from max_gui.agent.prompts import compose_gui_system_prompt
 from max_gui.agent.state import AgentState
 from max_gui.config import Settings
 from max_gui.inference.client import ChatDelta, InferenceClient, to_chat_messages
+from max_gui.observability import RunEvent, RunEventType, RunRecorder, safe_error_summary
 from max_gui.session.store import Session, SessionMessage, SessionStore
 from max_gui.tools.desktop import (
     active_view_frame,
@@ -48,7 +49,10 @@ class AgentRunner:
         self._on_reasoning: Callable[[str], None] | None = None
         self._on_status: Callable[[str], None] | None = None
         self._on_message: Callable[[str, dict[str, Any]], None] | None = None
+        self._on_event: Callable[[RunEvent], None] | None = None
         self._session: Session | None = None
+        self._recorder: RunRecorder | None = None
+        self._last_status: str | None = None
         self._graph = _build_graph(self)
 
     def interrupt(self) -> None:
@@ -70,6 +74,7 @@ class AgentRunner:
         on_reasoning: Callable[[str], None] | None = None,
         on_status: Callable[[str], None] | None = None,
         on_message: Callable[[str, dict[str, Any]], None] | None = None,
+        on_event: Callable[[RunEvent], None] | None = None,
     ) -> AgentState:
         """跑完一图并持久化。
 
@@ -85,6 +90,7 @@ class AgentRunner:
             on_reasoning: 流式思考回调。
             on_status: 节点状态变化回调。
             on_message: 一条助手或工具消息已提交时回调。
+            on_event: 结构化运行事件回调；观察者异常不会进入 Agent 控制流。
 
         返回：
             终态 `AgentState`。
@@ -94,13 +100,27 @@ class AgentRunner:
         self._on_reasoning = on_reasoning
         self._on_status = on_status
         self._on_message = on_message
+        self._on_event = on_event
+        self._last_status = None
         token = current_session_id.set(session.id)
         self._session = session
         restore_desktop_context(session.view_frame, session.locate_hits)
+        checkpoint_run_id = None
+        if resume and session.checkpoint:
+            raw_run_id = session.checkpoint.get("run_id")
+            if isinstance(raw_run_id, str) and raw_run_id:
+                checkpoint_run_id = raw_run_id
+        self._recorder = RunRecorder(
+            self.settings.project_root / "artifacts" / "runs",
+            session.id,
+            run_id=checkpoint_run_id,
+            on_event=on_event,
+        )
         try:
             if resume and session.checkpoint:
                 state: AgentState = dict(session.checkpoint)  # type: ignore[assignment]
                 state["session_id"] = session.id
+                state["run_id"] = self._recorder.run_id
             else:
                 messages = [_message_to_state(item) for item in session.messages]
                 if user_text is not None:
@@ -113,6 +133,7 @@ class AgentRunner:
                     )
                 state = {
                     "session_id": session.id,
+                    "run_id": self._recorder.run_id,
                     "messages": messages,
                     "images": list(image_paths or []),
                     "pending_tool_calls": [],
@@ -123,14 +144,47 @@ class AgentRunner:
                     "current_subtask": None,
                 }
 
-            if on_status:
-                on_status(str(state.get("status") or "thinking"))
+            unfinished = self._recorder.unfinished_tools
+            run_event: RunEventType = "run.resumed" if checkpoint_run_id else "run.started"
+            self._emit_event(
+                run_event,
+                state,
+                {
+                    "provider": self.settings.provider,
+                    "model": self.settings.model_name,
+                    "max_iterations": self.settings.max_iterations,
+                    "legacy_checkpoint": bool(
+                        resume and session.checkpoint and not checkpoint_run_id
+                    ),
+                    "unfinished_tools": [
+                        {"call_id": call_id, "tool_name": name}
+                        for call_id, name in unfinished.items()
+                    ],
+                },
+            )
+            self._emit_status(str(state.get("status") or "thinking"), state)
 
-            result = await self._graph.ainvoke(state)
+            try:
+                result = await self._graph.ainvoke(state)
+            except Exception as exc:
+                self._emit_event(
+                    "run.failed",
+                    state,
+                    {
+                        **self._run_summary("error"),
+                        "error": safe_error_summary(exc),
+                    },
+                )
+                raise
+            self._emit_status(str(result.get("status") or "done"), result)
             self._persist(session, result)
+            self._emit_terminal(result)
             return result
         finally:
             self._flush_desktop_context()
+            if self._recorder is not None:
+                self._recorder.close()
+            self._recorder = None
             self._session = None
             current_session_id.reset(token)
 
@@ -141,7 +195,7 @@ class AgentRunner:
         """
         if self._interrupt.is_set():
             return {**state, "status": "interrupted"}
-        self._emit_status("thinking")
+        self._emit_status("thinking", state)
         if int(state.get("iteration") or 0) >= self.settings.max_iterations:
             messages = list(state.get("messages") or [])
             assistant = {"role": "assistant", "content": {"text": ITERATION_LIMIT_MESSAGE}}
@@ -155,6 +209,12 @@ class AgentRunner:
                 "pending_tool_calls": [],
             }
 
+        model_started = time.perf_counter()
+        self._emit_event(
+            "model.started",
+            state,
+            {"provider": self.settings.provider, "model": self.settings.model_name},
+        )
         try:
             encoded = to_chat_messages(
                 list(state.get("messages") or []),
@@ -169,6 +229,17 @@ class AgentRunner:
                 should_stop=self._interrupt.is_set,
             )
         except Exception as exc:
+            self._emit_event(
+                "model.failed",
+                state,
+                {
+                    "provider": self.settings.provider,
+                    "model": self.settings.model_name,
+                    "duration_ms": int((time.perf_counter() - model_started) * 1000),
+                    "error": safe_error_summary(exc),
+                    "error_type": type(exc).__name__,
+                },
+            )
             return {
                 **state,
                 "status": "error",
@@ -177,10 +248,12 @@ class AgentRunner:
             }
         if self._interrupt.is_set() or delta.finish_reason == "interrupted":
             messages = list(state.get("messages") or [])
+            message_index: int | None = None
             if delta.text or delta.reasoning:
                 assistant = {"role": "assistant", "content": _assistant_content(delta)}
                 messages.append(assistant)
-                self._commit_message(assistant)
+                message_index = self._commit_message(assistant)
+            self._emit_model_completed(state, delta, model_started, message_index)
             return {**state, "messages": messages, "status": "interrupted"}
 
         messages = list(state.get("messages") or [])
@@ -192,8 +265,10 @@ class AgentRunner:
         )
         if delta.tool_calls:
             assistant["tool_calls"] = delta.tool_calls
-            messages.append(assistant)
-            self._commit_message(assistant)
+        messages.append(assistant)
+        message_index = self._commit_message(assistant)
+        self._emit_model_completed(state, delta, model_started, message_index)
+        if delta.tool_calls:
             return {
                 **state,
                 "messages": messages,
@@ -202,8 +277,6 @@ class AgentRunner:
                 "plan": plan,
                 "current_subtask": current,
             }
-        messages.append(assistant)
-        self._commit_message(assistant)
         return {
             **state,
             "messages": messages,
@@ -217,13 +290,23 @@ class AgentRunner:
         """依次执行 `pending_tool_calls`，每完成一个即落盘并回调 `on_message`。"""
         if self._interrupt.is_set():
             return {**state, "status": "interrupted"}
-        self._emit_status("acting")
+        self._emit_status("acting", state)
         results: list[dict[str, Any]] = []
         for call in state.get("pending_tool_calls") or []:
             if self._interrupt.is_set():
                 return {**state, "status": "interrupted"}
             fn = call.get("function") or {}
             name = str(fn.get("name") or "")
+            call_id = str(call.get("id") or name)
+            self._emit_event(
+                "tool.started",
+                state,
+                {
+                    "call_id": call_id,
+                    "tool_name": name,
+                    "argument_chars": _argument_chars(fn.get("arguments")),
+                },
+            )
             started = time.perf_counter()
             output = await self.registry.invoke(name, fn.get("arguments"))
             duration_ms = int((time.perf_counter() - started) * 1000)
@@ -254,11 +337,24 @@ class AgentRunner:
             item = {
                 "role": "tool",
                 "content": content,
-                "tool_call_id": call.get("id") or name,
+                "tool_call_id": call_id,
                 "name": name,
             }
             results.append(item)
-            self._commit_message(item)
+            message_index = self._commit_message(item)
+            event_type: RunEventType = "tool.failed" if error else "tool.completed"
+            event_data: dict[str, Any] = {
+                "call_id": call_id,
+                "tool_name": name,
+                "duration_ms": duration_ms,
+                "session_message_index": message_index,
+                "has_image": has_image,
+                "image_count": len(images),
+                "outcome": "failed" if error else "success",
+            }
+            if error:
+                event_data["error"] = safe_error_summary(error)
+            self._emit_event(event_type, state, event_data)
         self._flush_desktop_context()
         return {
             **state,
@@ -268,7 +364,7 @@ class AgentRunner:
 
     async def observe(self, state: AgentState) -> AgentState:
         """把工具结果追加到消息，迭代计数加一，回到 `thinking`。"""
-        self._emit_status("observing")
+        self._emit_status("observing", state)
         messages = list(state.get("messages") or [])
         tool_messages = list(state.get("pending_tool_calls") or [])
         failed = any(_tool_message_failed(item) for item in tool_messages)
@@ -279,7 +375,7 @@ class AgentRunner:
             tool_failed=failed,
         )
         messages.extend(tool_messages)
-        return {
+        next_state: AgentState = {
             **state,
             "messages": messages,
             "pending_tool_calls": [],
@@ -288,6 +384,23 @@ class AgentRunner:
             "plan": plan,
             "current_subtask": current,
         }
+        captured_images = 0
+        for item in tool_messages:
+            content = item.get("content")
+            if isinstance(content, dict) and isinstance(content.get("images"), list):
+                captured_images += len(content["images"])
+        self._emit_event(
+            "observation.completed",
+            next_state,
+            {
+                "tool_count": len(tool_messages),
+                "tool_failed": failed,
+                "post_action_observation_captured": captured_images > 0,
+                "image_count": captured_images,
+                "business_verified": False,
+            },
+        )
+        return next_state
 
     def _flush_desktop_context(self) -> None:
         """把当前视图坐标系与定位表写入会话并落盘。"""
@@ -301,19 +414,89 @@ class AgentRunner:
             session.locate_hits = hits
         self.store.save(session)
 
-    def _emit_status(self, status: str) -> None:
-        """通知调用方当前节点状态。"""
+    def _emit_status(self, status: str, state: AgentState) -> None:
+        """通知调用方当前状态，并为真实迁移发出结构化事件。"""
         if self._on_status:
             self._on_status(status)
+        previous = self._last_status
+        if previous == status:
+            return
+        self._last_status = status
+        self._emit_event("state.changed", state, {"from": previous, "to": status})
 
-    def _commit_message(self, item: dict[str, Any]) -> None:
-        """把一条图消息写入会话并通知 TUI；已在会话中则只回调。"""
+    def _commit_message(self, item: dict[str, Any]) -> int | None:
+        """把图消息写入会话并通知 TUI，返回追加后的稳定消息下标。"""
         session_msg = _state_to_session_message(item)
         session = self._session
+        message_index: int | None = None
         if session is not None:
             self.store.append_messages(session, [session_msg])
+            message_index = len(session.messages) - 1
         if self._on_message:
             self._on_message(session_msg.role, session_msg.content)
+        return message_index
+
+    def _emit_event(
+        self,
+        event_type: RunEventType,
+        state: AgentState,
+        data: dict[str, Any] | None = None,
+    ) -> RunEvent | None:
+        """把当前图上下文收进记录器；无记录器时安全跳过。"""
+        recorder = self._recorder
+        if recorder is None:
+            return None
+        return recorder.record(
+            event_type,
+            iteration=int(state.get("iteration") or 0),
+            subtask=state.get("current_subtask"),
+            data=data,
+        )
+
+    def _emit_model_completed(
+        self,
+        state: AgentState,
+        delta: ChatDelta,
+        started: float,
+        message_index: int | None,
+    ) -> None:
+        """记录一次模型调用汇总，不复制正文或 reasoning 原文。"""
+        data: dict[str, Any] = {
+            "provider": self.settings.provider,
+            "model": self.settings.model_name,
+            "duration_ms": int((time.perf_counter() - started) * 1000),
+            "finish_reason": delta.finish_reason,
+            "text_chars": len(delta.text),
+            "reasoning_chars": len(delta.reasoning),
+            "tool_call_count": len(delta.tool_calls),
+            "session_message_index": message_index,
+        }
+        if delta.usage is not None:
+            data["prompt_tokens"] = delta.usage.prompt_tokens
+            data["completion_tokens"] = delta.usage.completion_tokens
+            data["total_tokens"] = delta.usage.total_tokens
+        self._emit_event("model.completed", state, data)
+
+    def _run_summary(self, final_status: str) -> dict[str, Any]:
+        """返回当前记录器汇总；记录器缺失时给最小终态。"""
+        if self._recorder is None:
+            return {"final_status": final_status}
+        return self._recorder.summary(final_status=final_status)
+
+    def _emit_terminal(self, state: AgentState) -> None:
+        """按 Agent 终态发出对应运行终态和统计。"""
+        status = str(state.get("status") or "done")
+        event_type: RunEventType
+        if status == "interrupted":
+            event_type = "run.interrupted"
+        elif status == "error":
+            event_type = "run.failed"
+        else:
+            event_type = "run.completed"
+        data = self._run_summary(status)
+        if state.get("error"):
+            data["error"] = safe_error_summary(str(state["error"]))
+        self._emit_event(event_type, state, data)
 
     def _persist(self, session: Session, state: AgentState) -> None:
         """写回 status、checkpoint、桌面坐标系；尚未落盘的消息才追加。"""
@@ -356,6 +539,18 @@ def _build_graph(runner: AgentRunner):
 
 
 _ARGS_MAX_CHARS = 2000
+
+
+def _argument_chars(arguments: Any) -> int:
+    """返回原始工具参数的字符数，只供运行诊断且不保存正文。"""
+    if arguments is None:
+        return 0
+    if isinstance(arguments, str):
+        return len(arguments)
+    try:
+        return len(json.dumps(arguments, ensure_ascii=False))
+    except TypeError:
+        return len(str(arguments))
 
 
 def _short_args(arguments: Any) -> Any:

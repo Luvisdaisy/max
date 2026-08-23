@@ -2,55 +2,32 @@
 
 ## Purpose
 
-统一 Function Calling 工具（文件、搜索、图像、OCR、桌面）及结果回注。
+统一 Function Calling 工具（图像、OCR、桌面）及结果回注。
 
 ## Requirements
 
 ### Requirement: 统一工具协议
 
-每个工具 MUST 暴露名称、JSON schema 与异步 invoke。`act` 节点 MUST 仅按名称分发已注册工具。未知工具名 MUST 返回工具错误消息，且 MUST NOT 把异常抛出图外。
+每个工具 MUST 暴露名称、JSON schema 与异步 invoke。`act` 节点 MUST 仅按名称分发已注册工具。未知工具名 MUST 返回工具错误消息，且 MUST NOT 把异常抛出图外。默认注册表 MUST NOT 包含 `read_file`、`write_file`、`list_dir`、`search_files`。
 
 #### Scenario: 已注册工具
 
-- **WHEN** 模型以合法路径调用 `read_file`
-- **THEN** `act` 调用 `read_file`，`observe` 记录其结果
+- **WHEN** 模型调用已注册的 `screenshot`
+- **THEN** `act` 分发该工具，`observe` 记录其结果
 
 #### Scenario: 未知工具名
 
 - **WHEN** 模型调用 `not_a_tool`
 - **THEN** `observe` 收到错误字符串，图继续进入 `think`
 
-### Requirement: 限定工作区的文件系统工具
+#### Scenario: 已移除的文件工具按未知处理
 
-`read_file`、`write_file`、`list_dir` MUST 将路径解析到已配置的工作区根之内。逃出工作区的路径 MUST 被拒绝。
-
-#### Scenario: 读取工作区内文件
-
-- **WHEN** 模型调用 `read_file`，参数为 `notes.md`，且该文件在工作区中存在
-- **THEN** 工具返回文件内容
-
-#### Scenario: 拒绝路径逃逸
-
-- **WHEN** 模型调用 `read_file`，参数为 `../outside.txt`
-- **THEN** 工具返回权限错误，且不读取该文件
-
-### Requirement: 本地文件搜索
-
-`search_files` MUST 在工作区下搜索文件内容，返回匹配路径与行摘录。MUST NOT 搜索工作区之外。
-
-#### Scenario: 工作区内命中
-
-- **WHEN** 模型调用 `search_files`，查询词出现在工作区某文件中
-- **THEN** 结果包含该路径及匹配摘录
+- **WHEN** 模型调用 `read_file`、`write_file`、`list_dir` 或 `search_files`
+- **THEN** `observe` 收到未知工具错误，且 MUST NOT 读写或搜索工作区文件
 
 ### Requirement: 破坏性工具需确认
 
-已注册工具 MUST NOT 因确认门而等待用户批准。`write_file`、`mouse_click`、`mouse_drag`、`mouse_scroll`、`keyboard_type`、`keyboard_press` 的 `confirmation_scope` MUST 为 `none`。会话 `auto_approve` 与 `auto_approve_desktop` MUST NOT 影响是否执行这些工具。
-
-#### Scenario: 写文件无需确认
-
-- **WHEN** 模型调用 `write_file` 且路径合法
-- **THEN** 不弹出确认，文件被写入工作区内部
+已注册工具 MUST NOT 因确认门而等待用户批准。`mouse_click`、`mouse_drag`、`mouse_scroll`、`keyboard_type`、`keyboard_press` 的 `confirmation_scope` MUST 为 `none`。会话 `auto_approve` 与 `auto_approve_desktop` MUST NOT 影响是否执行这些工具。
 
 #### Scenario: 点击无需确认
 
@@ -96,7 +73,7 @@
 
 #### Scenario: 文本工具保持字符串
 
-- **WHEN** `read_file` 返回文件内容
+- **WHEN** `screen_info` 返回屏幕信息
 - **THEN** tool 消息内容仍是文本，不含图像引用
 
 ### Requirement: 桌面破坏性工具使用独立确认

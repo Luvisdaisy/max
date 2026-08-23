@@ -75,6 +75,20 @@ def test_serve_rejected_for_modelscope(settings: Settings) -> None:
     raise AssertionError("expected ServeNotAllowedError")
 
 
+def test_serve_rejected_for_dashscope(settings: Settings) -> None:
+    """`dashscope` 下 `serve_model` 拒绝启动。"""
+    settings.provider = "dashscope"
+    settings.model_name = "qwen3.5-plus"
+    settings.dashscope_workspace = "llm-demo"
+    try:
+        serve_model(settings)
+    except ServeNotAllowedError as exc:
+        assert "local" in str(exc)
+        assert ".env" in str(exc)
+        return
+    raise AssertionError("expected ServeNotAllowedError")
+
+
 def test_serve_command_uses_resolved_binary(settings: Settings, tmp_path: Path) -> None:
     """`vllm serve` 使用指定二进制，不含 `python -m`。"""
     binary = tmp_path / "vllm"
