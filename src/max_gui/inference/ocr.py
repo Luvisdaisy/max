@@ -1,6 +1,6 @@
 """独立 OCR 推理：懒启动 vLLM、Chat Completions，以及 transformers 回退。
 
-支持整图 `OCR:` 与文字定位 `Spotting:`，提示词由调用方传入。
+整图任务使用提示词 `OCR:`。界面画框改由 OmniParser `locate` 提供。
 """
 
 from __future__ import annotations
@@ -22,12 +22,8 @@ from max_gui.config import DEFAULT_OCR_MODEL, MissingVllmError, Settings
 from max_gui.lifecycle import resolve_vllm_bin
 
 OCR_PROMPT = "OCR:"
-SPOTTING_PROMPT = "Spotting:"
 OCR_SKIP_MESSAGE = "OCR 不可用，请仅根据已有截图继续。"
-OCR_LOCATE_SKIP_MESSAGE = "文字定位不可用，请仅根据已有截图继续。"
-OCR_LOCATE_PARSE_MESSAGE = "无法解析文字定位结果，请仅根据已有截图继续。"
 OCR_FALLBACK_NOTE = "（已回退 transformers）"
-SPOTTING_MAX_NEW_TOKENS = 2048
 
 StartFn = Callable[[], subprocess.Popen[bytes]]
 HealthyFn = Callable[[], Awaitable[bool]]

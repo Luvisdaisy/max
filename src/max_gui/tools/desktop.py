@@ -1,14 +1,16 @@
 """桌面工具：截图回注、屏幕信息、移鼠、点按、拖拽、滚轮与键盘输入。
 
-点击、拖拽、滚动与键盘成功后会在同一条结果里附新截图。
-视图坐标系与 `ocr_locate` 命中表经 `restore_desktop_context` /
+`mouse_move` 成功后回注带光标的截图；点击、拖拽、滚动与键盘成功后再附一帧。
+视图坐标系与 `locate` 命中表经 `restore_desktop_context` /
 `snapshot_desktop_context` 与会话 JSON 同步，避免跨回合丢失。
+进程内当前帧以会话缓存为准，避免父 ContextVar 盖住后置截图。
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -32,6 +34,7 @@ KEY_ALIASES = {
     "control": "ctrl",
     "option": "alt",
     "cmd": "command",
+    "win": "windows",
 }
 NAMED_KEYS = {
     "enter",
@@ -84,8 +87,12 @@ current_view_frame: ContextVar[ViewFrame | None] = ContextVar("current_view_fram
 current_locate_hits: ContextVar[dict[int, tuple[int, int]] | None] = ContextVar(
     "current_locate_hits", default=None
 )
+current_cursor_verify: ContextVar[str | None] = ContextVar("current_cursor_verify", default=None)
+current_cursor_placed: ContextVar[bool] = ContextVar("current_cursor_placed", default=False)
 _session_view_frames: dict[str, ViewFrame] = {}
 _session_locate_hits: dict[str, dict[int, tuple[int, int]]] = {}
+_session_cursor_verify: dict[str, str] = {}
+_session_cursor_placed: dict[str, bool] = {}
 
 
 def _session_key() -> str:
@@ -94,8 +101,33 @@ def _session_key() -> str:
 
 
 def active_view_frame() -> ViewFrame | None:
-    """优先 ContextVar，否则按会话编号取进程内缓存。"""
-    return current_view_frame.get() or _session_view_frames.get(_session_key())
+    """优先按会话缓存，避免父 ContextVar 盖住后置截图；否则读 ContextVar。"""
+    return _session_view_frames.get(_session_key()) or current_view_frame.get()
+
+
+def store_cursor_verify(source: str) -> None:
+    """记录最近一次光标截图来源：`mouse_move` / `screenshot` / `action`。"""
+    current_cursor_verify.set(source)
+    _session_cursor_verify[_session_key()] = source
+
+
+def active_cursor_verify() -> str | None:
+    """最近一次光标截图来源；优先会话缓存。"""
+    return _session_cursor_verify.get(_session_key()) or current_cursor_verify.get()
+
+
+def store_cursor_placed(placed: bool) -> None:
+    """记录自上次点击/拖拽以来是否已成功 `mouse_move`。"""
+    current_cursor_placed.set(placed)
+    _session_cursor_placed[_session_key()] = placed
+
+
+def active_cursor_placed() -> bool:
+    """上次点击之后是否已经 `mouse_move` 放过光标。"""
+    key = _session_key()
+    if key in _session_cursor_placed:
+        return _session_cursor_placed[key]
+    return bool(current_cursor_placed.get())
 
 
 def active_locate_hits() -> dict[int, tuple[int, int]]:
@@ -123,8 +155,12 @@ def clear_desktop_context() -> None:
     key = _session_key()
     current_view_frame.set(None)
     current_locate_hits.set(None)
+    current_cursor_verify.set(None)
+    current_cursor_placed.set(False)
     _session_view_frames.pop(key, None)
     _session_locate_hits.pop(key, None)
+    _session_cursor_verify.pop(key, None)
+    _session_cursor_placed.pop(key, None)
 
 
 def view_frame_to_dict(frame: ViewFrame | None) -> dict[str, Any] | None:
@@ -229,6 +265,17 @@ def clamp_point(x: int, y: int, width: int, height: int) -> tuple[int, int, bool
     return cx, cy, cx != int(x) or cy != int(y)
 
 
+def clamp_region(
+    x: int, y: int, width: int, height: int, screen_width: int, screen_height: int
+) -> tuple[int, int, int, int]:
+    """把截图区域夹紧到主屏逻辑范围内，宽高至少为 1。"""
+    origin_x = min(max(0, int(x)), max(0, screen_width - 1))
+    origin_y = min(max(0, int(y)), max(0, screen_height - 1))
+    region_w = min(max(1, int(width)), max(1, screen_width - origin_x))
+    region_h = min(max(1, int(height)), max(1, screen_height - origin_y))
+    return origin_x, origin_y, region_w, region_h
+
+
 def reject_if_outside_view(x: int, y: int, frame: ViewFrame | None) -> None:
     """有视图帧时拒绝图外坐标。
 
@@ -242,7 +289,7 @@ def reject_if_outside_view(x: int, y: int, frame: ViewFrame | None) -> None:
         return
     raise ToolError(
         f"坐标 ({vx}, {vy}) 超出最近截图视图 {frame.view_width}×{frame.view_height}，"
-        "请使用图上像素或 ocr_locate 的 target_id。"
+        "请使用图上像素或 locate 的 target_id。"
     )
 
 
@@ -281,14 +328,14 @@ def view_to_logical(
 
 
 def lookup_locate_hit(target_id: int) -> tuple[int, int]:
-    """按编号取最近一次 `ocr_locate` 的逻辑中心。
+    """按编号取最近一次 `locate` 的逻辑中心。
 
     异常：
         ToolError: 没有该编号。
     """
     hits = active_locate_hits()
     if target_id not in hits:
-        raise ToolError(f"没有 id={target_id} 的定位结果，请先调用 ocr_locate")
+        raise ToolError(f"没有 id={target_id} 的定位结果，请先调用 locate")
     return hits[target_id]
 
 
@@ -378,6 +425,8 @@ def _parse_keys(raw: Any) -> list[str]:
     keys = [_normalize_key(item) for item in parts]
     if not keys:
         raise ToolError("keys 不能为空")
+    if sys.platform == "darwin" and "windows" in keys:
+        raise ToolError("本机是 macOS，请使用 command，不要使用 windows")
     unknown = [key for key in keys if not _allowed_key(key)]
     if unknown:
         raise ToolError(f"拒绝未知键名：{', '.join(unknown)}")
@@ -386,8 +435,22 @@ def _parse_keys(raw: Any) -> list[str]:
     return keys
 
 
+def _require_click_ready() -> None:
+    """点击与拖拽前必须已 `mouse_move`，且最近一帧是移鼠或截图。"""
+    if not active_cursor_placed():
+        raise ToolError("请先调用 mouse_move，根据截图确认光标在正确位置后再执行。")
+    if active_cursor_verify() not in {"mouse_move", "screenshot"}:
+        raise ToolError("请先调用 mouse_move 或 screenshot，确认光标在正确位置后再执行。")
+
+
+def _require_screen_seen() -> None:
+    """键盘输入前必须已有截图坐标系。"""
+    if active_view_frame() is None:
+        raise ToolError("请先调用 screenshot 或 mouse_move，确认光标或焦点后再输入。")
+
+
 def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
-    """构造桌面工具。点击、拖拽、滚动与键盘的确认范围为 `desktop`。
+    """构造桌面工具。破坏性动作不再走确认门，点击前须先 `mouse_move`。
 
     参数：
         settings: 提供截图目录与图像上限。
@@ -458,18 +521,24 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
             ensure_ascii=False,
         )
 
-    async def screenshot(args: dict) -> ToolResult:
-        """截主屏或 `region`，落盘 PNG 并把图像回注给模型。"""
+    async def screenshot(args: dict, *, verify_source: str = "screenshot") -> ToolResult:
+        """截主屏或 `region`，落盘 PNG 并把图像回注给模型。
+
+        参数：
+            verify_source: 写入光标验证来源；后置截图可改为 `mouse_move` 或 `action`。
+        """
         width, height = await _call(backend.size)
         mouse_x, mouse_y = await _call(backend.position)
         region = args.get("region")
         region_tuple = None
         if isinstance(region, dict):
-            region_tuple = (
+            region_tuple = clamp_region(
                 int(region.get("x") or 0),
                 int(region.get("y") or 0),
                 int(region.get("width") or width),
                 int(region.get("height") or height),
+                width,
+                height,
             )
         image = await _call(backend.screenshot, region_tuple)
         if _is_black_or_tiny(image):
@@ -503,6 +572,9 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
                 image_path=path,
             )
         )
+        if verify_source != "mouse_move":
+            store_locate_hits({})
+        store_cursor_verify(verify_source)
         cursor_vx, cursor_vy = logical_to_view(
             mouse_x,
             mouse_y,
@@ -529,16 +601,16 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
         )
         return ToolResult(text=summary, images=[path])
 
-    async def _attach_new_frame(action_text: str) -> ToolResult:
+    async def _attach_new_frame(action_text: str, *, verify_source: str = "action") -> ToolResult:
         """动作成功后再截一帧，失败则只保留动作摘要与中文说明。"""
         try:
-            shot = await screenshot({})
+            shot = await screenshot({}, verify_source=verify_source)
         except ToolError as exc:
             return ToolResult(text=f"{action_text}\n后置截图失败：{exc}")
         return ToolResult(text=f"{action_text}\n{shot.text}", images=list(shot.images))
 
-    async def mouse_move(args: dict) -> str:
-        """移到视图像素对应的逻辑坐标，或按定位编号。"""
+    async def mouse_move(args: dict) -> ToolResult:
+        """移到视图像素对应的逻辑坐标，或按定位编号；成功后回注光标截图。"""
         width, height = await _call(backend.size)
         resolved = await _resolve_point(args, width, height, require=True)
         assert resolved is not None
@@ -546,50 +618,50 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
         used_id = args.get("target_id") is not None
         duration = float(args.get("duration") if args.get("duration") is not None else 0.2)
         await _call(backend.move_to, x, y, duration)
+        store_cursor_placed(True)
         where = _format_action_point(x, y, used_view=used_view, used_id=used_id, clamped=clamped)
-        return f"指针已移到{where}"
+        return await _attach_new_frame(f"指针已移到{where}", verify_source="mouse_move")
 
     async def mouse_click(args: dict) -> ToolResult:
-        """单击或双击；成功后附新截图。"""
-        width, height = await _call(backend.size)
+        """只点击当前指针；成功后附新截图。"""
+        if (
+            args.get("x") is not None
+            or args.get("y") is not None
+            or args.get("target_id") is not None
+        ):
+            raise ToolError(
+                "mouse_click 不接受坐标或 target_id，请先 mouse_move 并根据截图确认光标后再调用。"
+            )
+        _require_click_ready()
         button = str(args.get("button") or "left")
         clicks = int(args.get("clicks") or 1)
         duration = float(args.get("duration") if args.get("duration") is not None else 0.2)
-        resolved = await _resolve_point(args, width, height, require=False)
-        used_id = args.get("target_id") is not None
-        used_view = False
-        clamped = False
-        target_x = target_y = None
-        if resolved is not None:
-            target_x, target_y, used_view, clamped = resolved
-        await _call(
-            backend.click, button=button, clicks=clicks, x=target_x, y=target_y, duration=duration
+        await _call(backend.click, button=button, clicks=clicks, x=None, y=None, duration=duration)
+        store_cursor_placed(False)
+        mouse_x, mouse_y = await _call(backend.position)
+        frame = active_view_frame()
+        used_view = frame is not None
+        where = _format_action_point(
+            mouse_x, mouse_y, used_view=used_view, used_id=False, clamped=False
         )
-        if target_x is not None:
-            where = _format_action_point(
-                target_x,
-                target_y or 0,
-                used_view=used_view,
-                used_id=used_id,
-                clamped=clamped,
-            )
-        else:
-            where = "当前位置"
         action = f"已{('双击' if clicks == 2 else '单击')}{button} {where}"
         return await _attach_new_frame(action)
 
     async def mouse_drag(args: dict) -> ToolResult:
-        """从视图像素 `(x1, y1)` 拖到 `(x2, y2)`；成功后附新截图。"""
+        """从当前指针拖到视图像素 `(x2, y2)`；成功后附新截图。"""
+        if args.get("x1") is not None or args.get("y1") is not None:
+            raise ToolError("mouse_drag 从当前位置开始，请先 mouse_move；只需提供 x2/y2。")
+        _require_click_ready()
         width, height = await _call(backend.size)
-        start = await _resolve_point(args, width, height, x_key="x1", y_key="y1", require=True)
+        x1, y1 = await _call(backend.position)
         end = await _resolve_point(args, width, height, x_key="x2", y_key="y2", require=True)
-        assert start is not None and end is not None
-        x1, y1, v1, c1 = start
+        assert end is not None
         x2, y2, v2, c2 = end
         duration = float(args.get("duration") if args.get("duration") is not None else 0.2)
         button = str(args.get("button") or "left")
         await _call(backend.drag_to, x1, y1, x2, y2, duration=duration, button=button)
-        start_at = _format_action_point(x1, y1, used_view=v1, used_id=False, clamped=c1)
+        store_cursor_placed(False)
+        start_at = _format_action_point(x1, y1, used_view=v2, used_id=False, clamped=False)
         end_at = _format_action_point(x2, y2, used_view=v2, used_id=False, clamped=c2)
         action = f"已从{start_at} 拖到{end_at}"
         return await _attach_new_frame(action)
@@ -624,6 +696,7 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
 
     async def keyboard_type(args: dict) -> ToolResult:
         """ASCII 走 `write`，非 ASCII 走剪贴板粘贴；成功后附新截图。"""
+        _require_screen_seen()
         text = str(args.get("text") or "")
         if not text:
             raise ToolError("keyboard_type 需要 text")
@@ -642,6 +715,7 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
 
     async def keyboard_press(args: dict) -> ToolResult:
         """按白名单单键或组合键；成功后附新截图。"""
+        _require_screen_seen()
         keys = _parse_keys(args.get("keys"))
         interval = float(args.get("interval") or 0)
         delay_ms = int(args.get("delay_ms") or 0)
@@ -692,13 +766,16 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
         ),
         Tool(
             name="mouse_move",
-            description=f"将指针移到视图像素 (x, y)，或按 ocr_locate 的 target_id。{VIEW_COORD_HINT}",
+            description=(
+                f"将指针移到视图像素 (x, y)，或按 locate 的 target_id。"
+                f"成功后回注带光标标注的截图，请先看图再点击。{VIEW_COORD_HINT}"
+            ),
             parameters={
                 "type": "object",
                 "properties": {
                     "x": {"type": "integer"},
                     "y": {"type": "integer"},
-                    "target_id": {"type": "integer", "description": "ocr_locate 返回的编号"},
+                    "target_id": {"type": "integer", "description": "locate 返回的编号"},
                     "duration": {"type": "number"},
                 },
             },
@@ -706,40 +783,31 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
         ),
         Tool(
             name="mouse_click",
-            description=(
-                f"单击或双击。可先移到视图像素或 ocr_locate 的 target_id。{VIEW_COORD_HINT}"
-            ),
+            description="单击或双击当前指针位置。不要传坐标；请先 mouse_move 并根据截图确认光标。",
             parameters={
                 "type": "object",
                 "properties": {
                     "button": {"type": "string", "enum": ["left", "right", "middle"]},
                     "clicks": {"type": "integer", "enum": [1, 2]},
-                    "x": {"type": "integer"},
-                    "y": {"type": "integer"},
-                    "target_id": {"type": "integer"},
                     "duration": {"type": "number"},
                 },
             },
             invoke=mouse_click,
-            confirmation_scope="desktop",
         ),
         Tool(
             name="mouse_drag",
-            description=f"从视图像素 (x1, y1) 拖到 (x2, y2)。{VIEW_COORD_HINT}",
+            description=f"从当前指针拖到视图像素 (x2, y2)。请先 mouse_move 确认起点。{VIEW_COORD_HINT}",
             parameters={
                 "type": "object",
                 "properties": {
-                    "x1": {"type": "integer"},
-                    "y1": {"type": "integer"},
                     "x2": {"type": "integer"},
                     "y2": {"type": "integer"},
                     "duration": {"type": "number"},
                     "button": {"type": "string"},
                 },
-                "required": ["x1", "y1", "x2", "y2"],
+                "required": ["x2", "y2"],
             },
             invoke=mouse_drag,
-            confirmation_scope="desktop",
         ),
         Tool(
             name="mouse_scroll",
@@ -755,7 +823,6 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
                 "required": ["clicks"],
             },
             invoke=mouse_scroll,
-            confirmation_scope="desktop",
         ),
         Tool(
             name="keyboard_type",
@@ -770,7 +837,6 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
                 "required": ["text"],
             },
             invoke=keyboard_type,
-            confirmation_scope="desktop",
         ),
         Tool(
             name="keyboard_press",
@@ -790,6 +856,5 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
                 "required": ["keys"],
             },
             invoke=keyboard_press,
-            confirmation_scope="desktop",
         ),
     ]

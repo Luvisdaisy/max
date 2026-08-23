@@ -1,0 +1,167 @@
+## MODIFIED Requirements
+
+### Requirement: 截取主屏并返回逻辑元数据
+
+`screenshot` MUST 截取主屏（或给定逻辑像素 `region`），把 PNG 写入 `artifacts/screenshots/`，并返回文本摘要：路径、逻辑宽高、发给主模型后的视图宽高、区域逻辑原点、`scale`、当前光标的**视图像素**坐标，以及 `coordinate_space` 为 `view`。全黑或过小的图像 MUST 视为屏幕录制权限失败，返回中文步骤，且 MUST NOT 把空图发给模型。默认 MUST 在图上标注当前光标位置。成功截图 MUST 更新后续鼠标工具使用的视图坐标系，且该坐标系 MUST 写入当前会话，以便后续用户回合与进程重启后恢复。给定 `region` 时 MUST 先将原点与宽高夹紧到主屏逻辑范围内，摘要与视图帧的逻辑宽高 MUST 使用夹紧后的值，MUST NOT 把超出主屏的请求宽高写入坐标系。
+
+#### Scenario: 全屏截图成功
+
+- **WHEN** 模型调用 `screenshot` 且屏幕录制已授权
+- **THEN** 工具写入 PNG，摘要包含 `path`、逻辑宽高、`view_width`、`view_height`、`origin`、`scale`、`cursor`、`coordinate_space`，并附带该图像引用
+
+#### Scenario: 摘要光标使用视图像素
+
+- **WHEN** 全屏截图的逻辑尺寸为 1920×1080、视图为 1536×864，光标逻辑坐标为 (1282, 834)
+- **THEN** 摘要 `cursor` 为换算后的视图像素 (约 1026, 667)，且 `y` 不超过 `view_height`
+
+#### Scenario: 未授权得到黑图
+
+- **WHEN** 截图结果全黑或尺寸过小
+- **THEN** 工具返回屏幕录制授权的中文步骤，且不把该图作为模型输入
+
+#### Scenario: 超界区域按主屏夹紧
+
+- **WHEN** 主屏逻辑尺寸为 1920×1080，模型调用 `screenshot` 且 `region` 为 `(0, 0, 2560, 1440)`
+- **THEN** 视图帧逻辑宽高为 1920×1080，MUST NOT 把 2560 或 1440 写入坐标系
+
+### Requirement: 逻辑坐标移动指针
+
+`mouse_move` MUST 将输入的视图像素换算为逻辑像素后移动指针。有视图帧时，输入 MUST 先满足当前视图边界；换算后若逻辑坐标超出主屏，MUST 夹紧到主屏内并在结果中说明。MUST NOT 要求确认。可选 `target_id` 命中最近一次 `ocr_locate` 结果时，MUST 改用该项逻辑中心。移动成功后 MUST 再截取当前画面（含光标标注），按 `screenshot` 规则落盘、更新视图坐标系，并把该 PNG 作为同一条工具结果回注。
+
+#### Scenario: 移动到可见点
+
+- **WHEN** 模型调用 `mouse_move`，换算后的逻辑坐标在主屏内
+- **THEN** 指针移动到该逻辑坐标，且工具结果含新截图图像引用
+
+#### Scenario: 越界夹紧
+
+- **WHEN** 模型调用 `mouse_move`，输入落在当前视图内，但换算后的 `x` 或 `y` 超出主屏
+- **THEN** 指针移到夹紧后的位置，结果说明发生了夹紧，且仍附新截图
+
+### Requirement: 点击与拖拽需确认
+
+`mouse_click` MUST 支持左/右/中键与单击/双击，MUST 只点击当前指针，MUST NOT 要求确认。`mouse_drag` MUST 从当前指针拖到视图像素 `(x2, y2)`，MUST NOT 要求确认。二者在最近一次成功截图不是由 `mouse_move` 产生时 MUST 拒绝执行，并要求先 `mouse_move`。
+
+#### Scenario: 当前位置单击
+
+- **WHEN** 最近一次成功工具为 `mouse_move`，模型调用无坐标的 `mouse_click`
+- **THEN** 在当前指针位置单击左键，不弹出确认
+
+#### Scenario: 未先移鼠则拒绝拖拽
+
+- **WHEN** 本会话尚无 `mouse_move` 产生的光标截图，模型调用 `mouse_drag`
+- **THEN** 不移动指针、不按下鼠标，工具结果为错误，文案要求先 `mouse_move`
+
+### Requirement: 滚轮滚动
+
+系统 MUST 提供 `mouse_scroll`。该工具 MUST 接受整数 `clicks`（正数向上、负数向下），可选视图像素 `x`/`y`；给出坐标时 MUST 先换算为逻辑像素并移动，再滚动。MUST NOT 要求确认。MUST NOT 提供横向滚动。
+
+#### Scenario: 在指定点向上滚动
+
+- **WHEN** 模型调用 `mouse_scroll`，`clicks` 为正，并给出最近一次截图视图内的 `x`、`y`
+- **THEN** 指针先移到换算后的逻辑坐标，再向上滚动相应格数，且不弹出确认
+
+#### Scenario: 无坐标滚动当前位置
+
+- **WHEN** 模型调用 `mouse_scroll` 且只给 `clicks`
+- **THEN** 不先移动，按当前指针位置滚动
+
+### Requirement: 视图像素换算为逻辑像素
+
+`mouse_move`、`mouse_drag`、`mouse_scroll` 的坐标输入 MUST 解释为最近一次成功截图回注给主模型的那张图上的像素。工具 MUST 按该图的视图宽高、逻辑宽高与区域原点换算成逻辑像素，再交给桌面后端。有视图帧时，输入超出该图像素范围 MUST 拒绝执行，而不是夹紧后执行。换算后的逻辑坐标超出主屏时 MUST 夹紧到主屏内并在结果中说明。当前会话尚无成功截图时，输入 MUST 当作逻辑像素，并在结果中说明未做视图换算。该坐标系 MUST 在同一会话的后续用户回合中仍然有效，不得因 TUI worker 结束而丢失。进程内读取当前帧时 MUST 以按会话缓存的帧为准，MUST NOT 让已过期的 ContextVar 覆盖较新的缓存帧。
+
+#### Scenario: 按视图像素移动
+
+- **WHEN** 最近一次全屏截图的视图宽为逻辑宽的一半，模型调用 `mouse_move` 给出视图坐标 `(100, 40)`
+- **THEN** 后端收到的逻辑坐标为 `(200, 80)`（在未夹紧的情况下）
+
+#### Scenario: 区域截图后的局部坐标
+
+- **WHEN** 最近一次截图 `region` 原点为逻辑 `(200, 100)`，视图与区域逻辑尺寸之比为 1，模型给出视图 `(10, 15)`
+- **THEN** 后端收到的逻辑坐标为 `(210, 115)`
+
+#### Scenario: 下一用户回合仍按视图像素换算
+
+- **WHEN** 上一回合已成功全屏截图且视图宽为逻辑宽的一半，新回合在未再截图的情况下调用 `mouse_move` 给出视图 `(100, 40)`
+- **THEN** 后端收到的逻辑坐标为 `(200, 80)`，结果说明已从视图像素换算，且 MUST NOT 写「尚无截图」
+
+#### Scenario: 按定位编号移动
+
+- **WHEN** 最近一次 `ocr_locate` 成功且含 `id=1`，模型调用 `mouse_move` 且 `target_id` 为 `1`
+- **THEN** 指针移到该项的逻辑中心，不使用本次调用中的 `x`/`y`，并回注光标截图
+
+#### Scenario: 后置全屏截图覆盖超界区域帧
+
+- **WHEN** 先前 `screenshot` 误用大于主屏的 region 写入了错误逻辑尺寸，随后一次无 region 的成功截图使用主屏尺寸
+- **THEN** 之后的 `mouse_move` MUST 按主屏逻辑尺寸换算，MUST NOT 继续使用超界宽高
+
+### Requirement: 输入文本与按键分离
+
+`keyboard_type` MUST 只接受文本并写入当前前台窗口；MUST NOT 接受按键名。含非 ASCII 的文本 MUST 通过剪贴板粘贴，不得静默丢字。`keyboard_press` MUST 只接受白名单键名或组合键；MUST NOT 接受自由文本。白名单外的键名 MUST 拒绝。关机或退出登录相关组合 MUST 拒绝。二者 MUST NOT 要求确认。本会话尚无成功的 `screenshot` 或 `mouse_move` 截图时，二者 MUST 拒绝执行并要求先截图或移鼠。
+
+#### Scenario: 写入 ASCII 文本
+
+- **WHEN** 已有光标截图，模型调用 `keyboard_type`，`text` 为 `1+1`
+- **THEN** 该文本被输入到当前前台窗口，且不弹出确认
+
+#### Scenario: 按下回车
+
+- **WHEN** 已有光标截图，模型调用 `keyboard_press`，`keys` 为 `enter`
+- **THEN** 系统按下回车，且不把 `enter` 当作普通文本写入
+
+#### Scenario: 拒绝未知键名
+
+- **WHEN** 模型调用 `keyboard_press`，`keys` 含白名单外的名称
+- **THEN** 工具返回错误且不发送按键
+
+#### Scenario: 拒绝危险热键
+
+- **WHEN** 模型调用 `keyboard_press`，`keys` 为退出登录或关机相关组合
+- **THEN** 工具返回错误且不发送按键
+
+#### Scenario: 无截图则拒绝输入
+
+- **WHEN** 本会话尚无成功截图，模型调用 `keyboard_type`
+- **THEN** 不输入，工具结果为错误，文案要求先 `screenshot` 或 `mouse_move`
+
+### Requirement: 变异动作成功后附新截图
+
+`mouse_click`、`mouse_drag`、`mouse_scroll`、`keyboard_type`、`keyboard_press` 在桌面后端执行成功后，MUST 再截取当前画面，按既有 `screenshot` 规则落盘、更新视图坐标系，并把该 PNG 作为同一条工具结果的图像回注。结果文本 MUST 仍包含原动作摘要，且 MUST 包含新截图的路径与视图尺寸信息。动作失败或权限错误时 MUST NOT 追加截图，MUST NOT 用空图或黑图更新坐标系。`mouse_move` MUST 在移动成功后附带截图（见「逻辑坐标移动指针」）。`screen_info` MUST NOT 因此附带截图。后置截图失败（全黑或过小）时 MUST 保留动作摘要与中文权限说明，MUST NOT 把该空图发给模型。
+
+#### Scenario: 单击成功带回新图
+
+- **WHEN** 无坐标的 `mouse_click` 且后端点击成功
+- **THEN** 该次工具结果含新 PNG 引用，摘要含新图路径，且会话视图坐标系更新为该图
+
+#### Scenario: 移动指针附截图
+
+- **WHEN** 模型调用 `mouse_move` 且移动成功
+- **THEN** 工具结果含新截图图像引用，图上标注当前光标
+
+### Requirement: 视图像素必须落在当前视图内
+
+当会话已有成功截图的视图帧，且鼠标工具使用 `x`/`y`（而非 `target_id`）时，输入坐标 MUST 满足 `0 ≤ x < view_width` 且 `0 ≤ y < view_height`。任一端出界时 MUST 返回中文错误，错误中 MUST 包含给出的坐标与当前视图宽高，MUST NOT 移动指针、点击、拖拽或滚动，MUST NOT 将坐标夹紧到屏幕边缘后当作成功。`mouse_drag` 的终点 MUST 通过该校验。使用 `target_id` 时 MUST NOT 套用本条视图边界，改为使用定位表中的逻辑中心。尚无视图帧时 MUST NOT 套用本条，输入仍按逻辑像素处理。
+
+#### Scenario: 视图高度外的移动被拒绝
+
+- **WHEN** 最近一次截图视图为 1536×864，模型调用 `mouse_move` 且参数为 `(710, 950)`
+- **THEN** 不移动，工具结果为错误，文案含 `950` 与 `864`
+
+#### Scenario: 拖拽终点出界则整次拒绝
+
+- **WHEN** 最近一次截图视图为 1536×864，已通过 `mouse_move` 验证光标，模型调用 `mouse_drag`，终点 `y` 大于等于 864
+- **THEN** 不拖拽，工具结果为错误
+
+#### Scenario: 定位编号不受视图边界限制
+
+- **WHEN** 最近一次 `ocr_locate` 含 `id=1`，模型调用 `mouse_move` 且 `target_id` 为 `1`
+- **THEN** 按该项逻辑中心移动并回注截图，即使该中心换算回视图后贴近边缘
+
+### Requirement: 动作摘要只报告视图像素
+
+在已有视图帧时，`mouse_move`、`mouse_click`、`mouse_drag`、`mouse_scroll` 成功后的模型可见摘要 MUST 使用实际落点对应的视图像素，MUST NOT 写出逻辑分辨率下的坐标数字。若换算后因取整超出主屏而夹紧，摘要 MUST 说明发生了夹紧。后置截图 JSON 的 `cursor` 与 `coordinate_space` MUST 仍为视图像素。尚无视图帧时摘要可报告逻辑像素，且 MUST 说明未做视图换算。
+
+#### Scenario: 移动摘要不含逻辑坐标
+
+- **WHEN** 最近一次全屏截图视图宽为逻辑宽的一半，模型调用 `mouse_move` 给出视图 `(100, 40)` 且未夹紧
+- **THEN** 摘要含视图像素 `(100, 40)` 或与之等价的实际落点视图坐标，且 MUST NOT 把逻辑 `(200, 80)` 写进摘要

@@ -16,6 +16,7 @@ dependencies = [
     "pyautogui>=0.9.54",
     "pydantic>=2.10.0",
     "pyperclip>=1.11.0",
+    "python-dotenv>=1.2.3",
     "textual>=2.0.0",
 ]
 

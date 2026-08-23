@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Local runtime config (secrets)
+.env
+
 # Local session transcripts and screenshots
 artifacts/
 artifacts/screenshots/

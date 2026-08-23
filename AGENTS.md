@@ -4,7 +4,7 @@
 
 ## 项目是什么
 
-`max-gui` 是基于本地模型的多模态 ReAct GUI Agent CLI。已落地：Textual REPL（思考与正文分开展示、工具结果在执行当时写入记录区，状态栏跟随思考/执行工具/观察）、LangGraph ReAct（`think` 注入中文 GUI `system`，不落盘；状态含轻量 `plan` / `current_subtask`；`max_iterations` 默认 20；节点进度回调；think/act 增量落盘）、OpenAI 兼容 vLLM 客户端（开发默认 `model/qwen3.5-4b`，可切 `2b` / `9b`；发给模型时只把最近两张仍存在的图编成 `image_url`；SSE 思考字段与正文分通道）、工作区文件/搜索工具、PyAutoGUI 桌面工具（截图回注、移鼠、点按、拖拽、滚轮、`keyboard_type` / `keyboard_press`；鼠标坐标按模型看见的视图像素换算，必须落在当前视图宽高内，出界拒绝而不是夹到屏幕边；动作摘要只报视图像素；坐标系写入会话以免跨回合丢失；点击/拖拽/滚轮/输入/按键成功后在同一条工具结果附新截图）、整图 `ocr` 与文字定位 `ocr_locate`（首次调用再拉起独立 PaddleOCR-VL-1.5，失败回退 transformers，再失败则跳过），以及 `artifacts/sessions/` 下按时间戳命名的 JSON 会话（助手消息可带 `reasoning`；tool 消息含 `name` 与嵌套 `exec`，TUI 记录区只展示工具文本）。桌面调研记录见 `docs/gui-tools.md`。
+`max-gui` 是多模态 ReAct GUI Agent CLI。能够“看懂屏幕、操作电脑”的桌面 GUI 智能体原型。
 
 ## 语言
 
@@ -32,7 +32,7 @@
 - 实现过程中发现设计不对：先改 OpenSpec 产物，再改代码，不要只改代码。
 - 纯笔误、格式化、依赖锁文件等无行为变化的修补，可不开 change；除此之外不要绕过 OpenSpec。
 - 开发记录必须留在仓库里：`openspec/changes/`（进行中）与 `openspec/changes/archive/`（已完成）。不要用聊天记录代替归档。
-- 每次 OpenSpec 归档完成后，必须同步更新项目级说明文件（至少 `AGENTS.md`、`README.md`，以及本次变更实际影响的其他说明），使其与已落地的能力、流程和约束一致。不要只归档 change、不改对外说明。
+- 每次 OpenSpec 归档完成后，必须同步更新项目级说明文件（至少 `README.md`，以及本次变更实际影响的其他说明），使其与已落地的能力、流程和约束一致。不要只归档 change、不改对外说明，若没有明确提出，无需更新 `AGENTS.md`。
 
 相关技能：`.agents/skills/openspec-propose/`、`openspec-apply-change/`、`openspec-archive-change/`、`openspec-explore/`。
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from PIL import Image
@@ -9,8 +10,25 @@ from textual.widgets import RichLog, Static
 
 from max_gui.app import MaxGuiApp
 from max_gui.config import Settings
+from max_gui.observability import RunEvent
 from max_gui.session.store import SessionMessage, SessionStore
 from max_gui.widgets.prompt import PromptInput
+
+
+def _event(event_type: str, *, data: dict | None = None, elapsed_ms: int = 10) -> RunEvent:
+    """构造 TUI 测试使用的固定运行事件。"""
+    return RunEvent(
+        event_id=f"run-monitor:{event_type}",
+        sequence=1,
+        timestamp="2026-08-21T00:00:00.000+08:00",
+        elapsed_ms=elapsed_ms,
+        run_id="run-monitor",
+        session_id="session-monitor",
+        event_type=event_type,  # type: ignore[arg-type]
+        iteration=2,
+        subtask="填写表单",
+        data=data or {},
+    )
 
 
 async def test_unknown_command_does_not_call_model(settings: Settings) -> None:
@@ -19,6 +37,40 @@ async def test_unknown_command_does_not_call_model(settings: Settings) -> None:
     async with app.run_test() as pilot:
         await app._handle_command("/not-a-command")
         assert app._turn_active is False
+        await pilot.pause()
+
+
+async def test_model_command_is_unknown(settings: Settings) -> None:
+    """`/model` 按未知命令处理，不改变当前模型。"""
+    app = MaxGuiApp(settings, force_new=True)
+    async with app.run_test() as pilot:
+        await app._handle_command("/model qwen3.5-4b")
+        assert app.settings.model_name == "qwen3.5-2b"
+        log = app.query_one("#transcript", RichLog)
+        rendered = "\n".join(strip.text for strip in log.lines)
+        assert "未知命令" in rendered
+        await app._handle_command("/model")
+        rendered = "\n".join(strip.text for strip in log.lines)
+        assert rendered.count("未知命令") >= 2
+        await pilot.pause()
+
+
+async def test_switch_session_keeps_configured_model(settings: Settings) -> None:
+    """切换旧会话不覆盖 `.env` 里的模型名。"""
+    store = SessionStore(settings.sessions_dir)
+    old = store.create(model="2b")
+    store.append_messages(
+        old, [SessionMessage(role="user", content={"text": "旧会话", "images": []})]
+    )
+    app = MaxGuiApp(settings, force_new=True)
+    async with app.run_test() as pilot:
+        assert app.settings.model_name == "qwen3.5-2b"
+        await app._handle_command(f"/sessions {old.id}")
+        assert app.session is not None
+        assert app.session.id == old.id
+        assert app.settings.model_name == "qwen3.5-2b"
+        assert app.runner is not None
+        assert app.runner.settings.model_name == "qwen3.5-2b"
         await pilot.pause()
 
 
@@ -241,3 +293,149 @@ async def test_turn_status_does_not_mention_runs(settings: Settings) -> None:
         await pilot.pause()
         assert any("思考中" in item for item in recorded)
         assert all("artifacts/runs/" not in item for item in recorded)
+
+
+async def test_monitor_panel_is_visible_by_default(settings: Settings) -> None:
+    """应用启动后独立监控面板默认可见并显示就绪。"""
+    app = MaxGuiApp(settings, force_new=True)
+    async with app.run_test() as pilot:
+        monitor = app.query_one("#monitor", Static)
+        assert monitor.display
+        assert "运行监控（本机）" in str(monitor.content)
+        assert "就绪" in str(monitor.content)
+        assert "用量：未知" in str(monitor.content)
+        assert "输入 0" not in str(monitor.content)
+        assert monitor.parent is not app.query_one("#transcript").parent
+        await pilot.pause()
+
+
+async def test_tool_started_updates_monitor_before_runner_returns(settings: Settings) -> None:
+    """工具开始事件在假 Runner 返回前更新面板，且不污染会话记录区。"""
+    app = MaxGuiApp(settings, force_new=True)
+    gate = asyncio.Event()
+    async with app.run_test() as pilot:
+
+        async def fake_run(*_args, **kwargs):
+            on_event = kwargs.get("on_event")
+            if on_event:
+                on_event(
+                    _event(
+                        "tool.started",
+                        data={
+                            "tool_name": "keyboard_type",
+                            "argument_chars": 99,
+                            "text": "绝不能显示的键盘正文",
+                        },
+                    )
+                )
+            await gate.wait()
+            return {"status": "done", "messages": []}
+
+        assert app.runner is not None
+        app.runner.run = fake_run  # type: ignore[method-assign]
+        task = asyncio.create_task(app._handle_submit("填写"))
+        await pilot.pause()
+        rendered = str(app.query_one("#monitor", Static).content)
+        assert "keyboard_type" in rendered
+        assert "绝不能显示的键盘正文" not in rendered
+        assert "keyboard_type" not in _transcript(app)
+        gate.set()
+        await task
+        await pilot.pause()
+
+
+async def test_terminal_summary_and_recorder_failure_stay_in_monitor(
+    settings: Settings,
+) -> None:
+    """终态统计和写入诊断显示在面板，不作为对话消息。"""
+    app = MaxGuiApp(settings, force_new=True)
+    async with app.run_test() as pilot:
+        app._handle_run_event(_event("run.started"))
+        app._handle_run_event(
+            _event(
+                "run.completed",
+                elapsed_ms=1234,
+                data={
+                    "final_status": "done",
+                    "model_duration_ms": 800,
+                    "tool_duration_ms": 300,
+                    "tool_successes": 2,
+                    "tool_failures": 1,
+                },
+            )
+        )
+        app._handle_run_event(
+            _event(
+                "recorder.failed",
+                data={
+                    "message": "运行日志写入失败",
+                    "error": "/private/secret/path 不可写",
+                },
+            )
+        )
+        rendered = str(app.query_one("#monitor", Static).content)
+        assert "完成" in rendered
+        assert "800ms" in rendered
+        assert "300ms" in rendered
+        assert "2/1" in rendered
+        assert "运行日志写入失败" in rendered
+        assert "/private/secret/path" not in rendered
+        assert "运行日志写入失败" not in _transcript(app)
+        await pilot.pause()
+
+
+async def test_monitor_shows_token_usage_and_does_not_double_count(
+    settings: Settings,
+) -> None:
+    """面板累计用量、最近事件含当次输入输出；终态覆盖避免加两遍；记录区无用量行。"""
+    app = MaxGuiApp(settings, force_new=True)
+    async with app.run_test() as pilot:
+        app._handle_run_event(_event("run.started"))
+        app._handle_run_event(
+            _event(
+                "model.completed",
+                data={
+                    "duration_ms": 820,
+                    "prompt_tokens": 12,
+                    "completion_tokens": 8,
+                    "total_tokens": 20,
+                },
+            )
+        )
+        rendered = str(app.query_one("#monitor", Static).content)
+        assert "用量：输入 12 / 输出 8 / 合计 20" in rendered
+        assert "输入 12" in rendered and "输出 8" in rendered
+        assert "用量：未知" not in rendered
+        assert "用量：输入 12" not in _transcript(app)
+        app._handle_run_event(
+            _event(
+                "run.completed",
+                data={
+                    "final_status": "done",
+                    "model_duration_ms": 820,
+                    "tool_duration_ms": 0,
+                    "tool_successes": 0,
+                    "tool_failures": 0,
+                    "prompt_tokens": 12,
+                    "completion_tokens": 8,
+                    "total_tokens": 20,
+                },
+            )
+        )
+        rendered = str(app.query_one("#monitor", Static).content)
+        assert "用量：输入 12 / 输出 8 / 合计 20" in rendered
+        assert "用量：输入 24" not in rendered
+        await pilot.pause()
+
+
+async def test_monitor_unknown_usage_is_not_zero(settings: Settings) -> None:
+    """模型完成但无用量时面板仍为未知，最近事件写用量未知。"""
+    app = MaxGuiApp(settings, force_new=True)
+    async with app.run_test() as pilot:
+        app._handle_run_event(_event("run.started"))
+        app._handle_run_event(_event("model.completed", data={"duration_ms": 10}))
+        rendered = str(app.query_one("#monitor", Static).content)
+        assert "用量：未知" in rendered
+        assert "输入 0 / 输出 0" not in rendered
+        assert "用量未知" in rendered
+        await pilot.pause()

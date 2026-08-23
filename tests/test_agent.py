@@ -5,10 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 from max_gui.agent.graph import ITERATION_LIMIT_MESSAGE, AgentRunner
+from max_gui.agent.prompts import os_contract
 from max_gui.config import Settings
 from max_gui.desktop.fake import FakeDesktopBackend
-from max_gui.inference.client import ChatDelta
+from max_gui.inference.client import ChatDelta, TokenUsage
 from max_gui.session.store import SessionStore
 from max_gui.tools.desktop import clear_desktop_context
 from max_gui.tools.registry import AutoApproveGate, build_default_registry
@@ -63,6 +66,12 @@ def _runner(settings: Settings, client) -> tuple[AgentRunner, SessionStore]:
     return AgentRunner(settings, client, registry, store), store
 
 
+def _run_events(settings: Settings, run_id: str) -> list[dict]:
+    """读取指定运行的全部合法 JSONL 事件。"""
+    path = settings.project_root / "artifacts" / "runs" / f"{run_id}.jsonl"
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
 async def test_text_only_completion(settings: Settings) -> None:
     """无工具调用时直接完成，并落盘用户与助手消息。"""
     client = ScriptedClient([ChatDelta(text="世界")])
@@ -70,16 +79,19 @@ async def test_text_only_completion(settings: Settings) -> None:
     session = store.create(model="qwen3.5-2b")
     state = await runner.run(session, user_text="你好")
     assert state["status"] == "done"
+    assert state["run_id"].startswith("run-")
     assert state["messages"][-1]["content"]["text"] == "世界"
     loaded = store.get(session.id)
     assert loaded is not None
     assert any(msg.role == "user" for msg in loaded.messages)
     assert any(msg.role == "assistant" for msg in loaded.messages)
+    event_types = [item["event_type"] for item in _run_events(settings, state["run_id"])]
+    assert event_types[0] == "run.started"
+    assert event_types[-1] == "run.completed"
 
 
 async def test_one_tool_cycle(settings: Settings) -> None:
-    """一轮 `read_file` 后，工具结果进入下一轮 Think 的请求。"""
-    (settings.workspace / "notes.md").write_text("secret-note", encoding="utf-8")
+    """一轮 `screen_info` 后，工具结果进入下一轮 Think 的请求。"""
     client = ScriptedClient(
         [
             ChatDelta(
@@ -87,7 +99,7 @@ async def test_one_tool_cycle(settings: Settings) -> None:
                     {
                         "id": "call1",
                         "type": "function",
-                        "function": {"name": "read_file", "arguments": '{"path": "notes.md"}'},
+                        "function": {"name": "screen_info", "arguments": "{}"},
                     }
                 ]
             ),
@@ -96,13 +108,13 @@ async def test_one_tool_cycle(settings: Settings) -> None:
     )
     runner, store = _runner(settings, client)
     session = store.create(model="qwen3.5-2b")
-    state = await runner.run(session, user_text="读 notes")
+    state = await runner.run(session, user_text="看屏幕")
     assert state["status"] == "done"
     tool_msgs = [msg for msg in state["messages"] if msg.get("role") == "tool"]
     assert tool_msgs and isinstance(tool_msgs[0]["content"], dict)
-    assert "secret-note" in tool_msgs[0]["content"]["text"]
+    assert "screen_width" in tool_msgs[0]["content"]["text"]
     assert any(
-        msg.get("role") == "tool" and "secret-note" in str(msg.get("content"))
+        msg.get("role") == "tool" and "screen_width" in str(msg.get("content"))
         for req in client.requests
         for msg in req
     )
@@ -116,14 +128,14 @@ async def test_iteration_limit(settings: Settings) -> None:
             {
                 "id": "c1",
                 "type": "function",
-                "function": {"name": "list_dir", "arguments": '{"path": "."}'},
+                "function": {"name": "screen_info", "arguments": "{}"},
             }
         ]
     )
     client = ScriptedClient([loop_call, loop_call, loop_call])
     runner, store = _runner(settings, client)
     session = store.create(model="qwen3.5-2b")
-    state = await runner.run(session, user_text="一直列目录")
+    state = await runner.run(session, user_text="一直查屏幕")
     assert state["status"] == "error"
     assert ITERATION_LIMIT_MESSAGE in str(state.get("error"))
     assert not client.deltas or True
@@ -262,6 +274,15 @@ async def test_next_turn_reuses_saved_view_frame(settings: Settings) -> None:
     assert f"逻辑坐标 ({expected_x}, {expected_y})" not in text
 
 
+def test_os_contract_darwin_not_windows() -> None:
+    """darwin 文案含 macOS 且否定 Windows。"""
+    text = os_contract("Darwin")
+    assert "macOS" in text
+    assert "不是 Windows" in text
+    assert "command" in text
+    assert "不是 Windows" not in os_contract("Windows")
+
+
 async def test_think_injects_system_not_persisted(settings: Settings) -> None:
     """think 请求带 GUI system，会话 JSON 不保存该角色。"""
     client = ScriptedClient([ChatDelta(text="好")])
@@ -269,12 +290,59 @@ async def test_think_injects_system_not_persisted(settings: Settings) -> None:
     session = store.create(model="qwen3.5-2b")
     await runner.run(session, user_text="你好")
     assert client.requests[0][0]["role"] == "system"
-    assert "screenshot" in client.requests[0][0]["content"]
-    assert "view_width" in client.requests[0][0]["content"]
-    assert "逻辑坐标" in client.requests[0][0]["content"]
+    content = client.requests[0][0]["content"]
+    assert "screenshot" in content
+    assert "locate" in content
+    assert "ocr_locate" not in content
+    assert "view_width" in content
+    assert "逻辑坐标" in content
+    assert "红十字" in content
+    assert "键鼠" in content
+    assert "核验" in content
     loaded = store.get(session.id)
     assert loaded is not None
     assert all(msg.role != "system" for msg in loaded.messages)
+
+
+async def test_think_system_names_macos(
+    monkeypatch: pytest.MonkeyPatch, settings: Settings
+) -> None:
+    """darwin 上系统消息标明 macOS，不是 Windows。"""
+    monkeypatch.setattr("max_gui.agent.prompts.platform.system", lambda: "Darwin")
+    client = ScriptedClient([ChatDelta(text="好")])
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    await runner.run(session, user_text="你好")
+    content = client.requests[0][0]["content"]
+    assert "macOS" in content
+    assert "不是 Windows" in content
+    assert "command" in content
+
+
+async def test_think_system_includes_view_size(settings: Settings) -> None:
+    """截图成功后下一轮 think 的 system 含当前视图宽高。"""
+    client = ScriptedClient(
+        [
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "shot1",
+                        "type": "function",
+                        "function": {"name": "screenshot", "arguments": "{}"},
+                    }
+                ]
+            ),
+            ChatDelta(text="看到了"),
+        ]
+    )
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    await runner.run(session, user_text="截图")
+    loaded = store.get(session.id)
+    assert loaded is not None and loaded.view_frame is not None
+    content = client.requests[1][0]["content"]
+    assert str(loaded.view_frame["view_width"]) in content
+    assert str(loaded.view_frame["view_height"]) in content
 
 
 async def test_plan_stays_on_tool_error(settings: Settings) -> None:
@@ -303,18 +371,17 @@ async def test_plan_stays_on_tool_error(settings: Settings) -> None:
 
 async def test_plan_advances_after_successful_tool(settings: Settings) -> None:
     """成功工具且助手写了子任务完成后，推进到下一项。"""
-    (settings.workspace / "notes.md").write_text("x", encoding="utf-8")
     client = ScriptedClient(
         [
             ChatDelta(
-                text="1. 读文件\n2. 汇报\n子任务完成",
+                text="1. 看屏幕\n2. 汇报\n子任务完成",
                 tool_calls=[
                     {
                         "id": "r1",
                         "type": "function",
                         "function": {
-                            "name": "read_file",
-                            "arguments": '{"path": "notes.md"}',
+                            "name": "screen_info",
+                            "arguments": "{}",
                         },
                     }
                 ],
@@ -324,12 +391,12 @@ async def test_plan_advances_after_successful_tool(settings: Settings) -> None:
     )
     runner, store = _runner(settings, client)
     session = store.create(model="qwen3.5-2b")
-    state = await runner.run(session, user_text="读 notes")
+    state = await runner.run(session, user_text="看屏幕")
     assert state["current_subtask"] == "汇报"
 
 
-async def test_tool_message_stores_exec_not_run_file(settings: Settings) -> None:
-    """截图结果写入会话 `exec`，不创建 artifacts/runs。"""
+async def test_tool_message_stores_exec_and_run_reference(settings: Settings) -> None:
+    """截图结果保留会话 `exec`，独立运行事件用消息下标关联。"""
     client = ScriptedClient(
         [
             ChatDelta(
@@ -359,14 +426,19 @@ async def test_tool_message_stores_exec_not_run_file(settings: Settings) -> None
     saved = next(msg for msg in loaded.messages if msg.role == "tool")
     assert saved.content["exec"]["has_image"] is True
     runs = settings.project_root / "artifacts" / "runs"
-    assert not runs.exists() or not any(runs.iterdir())
+    assert runs.is_dir() and any(runs.iterdir())
+    events = _run_events(settings, state["run_id"])
+    tool_event = next(item for item in events if item["event_type"] == "tool.completed")
+    assert tool_event["data"]["tool_name"] == "screenshot"
+    assert isinstance(tool_event["data"]["session_message_index"], int)
+    assert "arguments" not in tool_event["data"]
     tool_encoded = next(item for item in client.requests[1] if item.get("role") == "tool")
     assert "exec" not in tool_encoded
     assert '"duration_ms"' not in json.dumps(tool_encoded, ensure_ascii=False)
 
 
 async def test_click_followup_image_reaches_think(settings: Settings) -> None:
-    """点击成功后的新截图会编进下一轮 think。"""
+    """移鼠成功后的新截图会编进下一轮 think。"""
     client = ScriptedClient(
         [
             ChatDelta(
@@ -375,13 +447,13 @@ async def test_click_followup_image_reaches_think(settings: Settings) -> None:
                         "id": "clk",
                         "type": "function",
                         "function": {
-                            "name": "mouse_click",
+                            "name": "mouse_move",
                             "arguments": '{"x": 8, "y": 8}',
                         },
                     }
                 ]
             ),
-            ChatDelta(text="点完了"),
+            ChatDelta(text="移完了"),
         ]
     )
     runner, store = _runner(settings, client)
@@ -393,6 +465,32 @@ async def test_click_followup_image_reaches_think(settings: Settings) -> None:
     tool_encoded = next(item for item in client.requests[1] if item.get("role") == "tool")
     types = [part["type"] for part in tool_encoded["content"]]
     assert "text" in types and "image_url" in types
+
+
+class FailingStreamClient:
+    """`stream` 抛出推理 HTTP 错误，供测试落盘。"""
+
+    async def stream(
+        self, messages, *, tools=None, on_token=None, on_reasoning=None, should_stop=None
+    ):
+        """始终失败。"""
+        raise RuntimeError("推理服务返回 400：maximum context length")
+
+
+async def test_think_stream_error_persists_session(settings: Settings) -> None:
+    """think 推理失败后会话 status 为 error，并带上错误正文。"""
+    client = FailingStreamClient()
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text="继续")
+    assert state["status"] == "error"
+    assert "400" in str(state.get("error"))
+    loaded = store.get(session.id)
+    assert loaded is not None
+    assert loaded.status == "error"
+    assert loaded.checkpoint is not None
+    assert loaded.checkpoint.get("status") == "error"
+    assert "400" in str(loaded.checkpoint.get("error") or loaded.status)
 
 
 async def test_progress_and_incremental_persist(settings: Settings) -> None:
@@ -409,12 +507,12 @@ async def test_progress_and_incremental_persist(settings: Settings) -> None:
                     {
                         "id": "a",
                         "type": "function",
-                        "function": {"name": "list_dir", "arguments": '{"path": "."}'},
+                        "function": {"name": "screen_info", "arguments": "{}"},
                     },
                     {
                         "id": "b",
                         "type": "function",
-                        "function": {"name": "list_dir", "arguments": '{"path": "."}'},
+                        "function": {"name": "screen_info", "arguments": "{}"},
                     },
                 ],
             ),
@@ -469,3 +567,146 @@ async def test_progress_and_incremental_persist(settings: Settings) -> None:
     assert assistants[0].created_at <= tools[0].created_at
     encoded = json.dumps(client.requests[1], ensure_ascii=False)
     assert "列两次" not in encoded
+
+
+async def test_two_turns_have_distinct_run_ids(settings: Settings) -> None:
+    """同一会话的两个普通回合生成不同运行编号。"""
+    client = ScriptedClient([ChatDelta(text="一"), ChatDelta(text="二")])
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    first = await runner.run(session, user_text="第一回合")
+    second = await runner.run(session, user_text="第二回合")
+    assert first["run_id"] != second["run_id"]
+    assert _run_events(settings, first["run_id"])[0]["session_id"] == session.id
+    assert _run_events(settings, second["run_id"])[0]["session_id"] == session.id
+
+
+async def test_reasoning_and_keyboard_text_are_not_duplicated_to_run_log(
+    settings: Settings,
+) -> None:
+    """reasoning 与键盘正文留在会话，运行事件只保存长度和引用。"""
+    secret_reasoning = "内部推理原文"
+    secret_input = "sensitive-input"
+    client = ScriptedClient(
+        [
+            ChatDelta(
+                reasoning=secret_reasoning,
+                tool_calls=[
+                    {
+                        "id": "type-1",
+                        "type": "function",
+                        "function": {
+                            "name": "keyboard_type",
+                            "arguments": json.dumps({"text": secret_input}),
+                        },
+                    }
+                ],
+            ),
+            ChatDelta(text="结束"),
+        ]
+    )
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text="输入")
+    loaded = store.get(session.id)
+    assert loaded is not None
+    assistant = next(item for item in loaded.messages if item.role == "assistant")
+    tool = next(item for item in loaded.messages if item.role == "tool")
+    assert assistant.content["reasoning"] == secret_reasoning
+    assert tool.content["exec"]["arguments"]["text"] == secret_input
+    log_text = json.dumps(_run_events(settings, state["run_id"]), ensure_ascii=False)
+    assert secret_reasoning not in log_text
+    assert secret_input not in log_text
+    model_event = next(
+        item
+        for item in _run_events(settings, state["run_id"])
+        if item["event_type"] == "model.completed"
+    )
+    assert model_event["data"]["reasoning_chars"] == len(secret_reasoning)
+    assert "prompt_tokens" not in model_event["data"]
+
+
+async def test_model_completed_records_usage_without_copying_text(
+    settings: Settings,
+) -> None:
+    """成功调用把三项用量写入运行事件，且不含回复原文。"""
+    secret = "这是不应进入运行日志的正文"
+    client = ScriptedClient(
+        [
+            ChatDelta(
+                text=secret,
+                usage=TokenUsage(prompt_tokens=12, completion_tokens=8, total_tokens=20),
+            )
+        ]
+    )
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text="用量")
+    events = _run_events(settings, state["run_id"])
+    completed = next(item for item in events if item["event_type"] == "model.completed")
+    terminal = next(item for item in events if item["event_type"] == "run.completed")
+    assert completed["data"]["prompt_tokens"] == 12
+    assert completed["data"]["completion_tokens"] == 8
+    assert completed["data"]["total_tokens"] == 20
+    assert secret not in json.dumps(completed, ensure_ascii=False)
+    assert terminal["data"]["prompt_tokens"] == 12
+    assert terminal["data"]["completion_tokens"] == 8
+    assert terminal["data"]["total_tokens"] == 20
+
+
+async def test_resume_reuses_run_and_reports_unfinished_tool(settings: Settings) -> None:
+    """带 run_id 的中断 checkpoint 续写原文件，并报告未闭合工具但不重放。"""
+    client = ScriptedClient([ChatDelta(text="重新观察后完成")])
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    run_id = "run-existing"
+    runs = settings.project_root / "artifacts" / "runs"
+    runs.mkdir(parents=True)
+    existing = {
+        "schema_version": 1,
+        "event_id": f"{run_id}:1",
+        "sequence": 1,
+        "timestamp": "2026-08-21T00:00:00.000+08:00",
+        "elapsed_ms": 10,
+        "run_id": run_id,
+        "session_id": session.id,
+        "event_type": "tool.started",
+        "iteration": 0,
+        "subtask": None,
+        "data": {"call_id": "click-1", "tool_name": "mouse_click"},
+    }
+    (runs / f"{run_id}.jsonl").write_text(
+        json.dumps(existing, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    session.status = "interrupted"
+    session.checkpoint = {
+        "session_id": session.id,
+        "run_id": run_id,
+        "messages": [{"role": "user", "content": {"text": "继续", "images": []}}],
+        "images": [],
+        "pending_tool_calls": [],
+        "iteration": 0,
+        "status": "thinking",
+        "error": None,
+    }
+    store.save(session)
+    state = await runner.run(session, resume=True)
+    assert state["run_id"] == run_id
+    events = _run_events(settings, run_id)
+    resumed = next(item for item in events if item["event_type"] == "run.resumed")
+    assert resumed["data"]["unfinished_tools"] == [
+        {"call_id": "click-1", "tool_name": "mouse_click"}
+    ]
+    assert [item["event_type"] for item in events].count("tool.started") == 1
+
+
+async def test_inference_error_emits_model_and_run_failures(settings: Settings) -> None:
+    """推理错误先形成模型失败，再以运行失败终止并保持会话 error。"""
+    runner, store = _runner(settings, FailingStreamClient())
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text="失败")
+    events = _run_events(settings, state["run_id"])
+    types = [item["event_type"] for item in events]
+    assert types.index("model.failed") < types.index("run.failed")
+    assert events[-1]["data"]["final_status"] == "error"

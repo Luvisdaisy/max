@@ -1,0 +1,2 @@
+# OmniParser worker 安装到独立解释器（默认 ~/.venv-vllm-metal），不要装进项目 .venv。
+ultralytics

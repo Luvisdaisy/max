@@ -12,6 +12,7 @@ class AgentState(TypedDict, total=False):
 
     字段：
         session_id: 当前会话编号。
+        run_id: 当前用户任务的运行编号；旧检查点可缺省。
         messages: OpenAI 风格消息列表，content 多为 `{text, images}`。
         images: 本回合用户附带的图像路径。
         pending_tool_calls: Think 产出的调用，或 Act 写回的工具结果。
@@ -23,6 +24,7 @@ class AgentState(TypedDict, total=False):
     """
 
     session_id: str
+    run_id: str
     messages: list[dict[str, Any]]
     images: list[str]
     pending_tool_calls: list[dict[str, Any]]

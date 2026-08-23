@@ -10,12 +10,12 @@ from max_gui.config import Settings
 from max_gui.desktop.backend import DesktopBackend
 from max_gui.desktop.pyautogui_backend import PyAutoGUIBackend
 from max_gui.inference.ocr import OcrRuntime
+from max_gui.inference.omniparser import LocateRuntime
 from max_gui.tools.desktop import desktop_tools
-from max_gui.tools.files import file_tools
 from max_gui.tools.image import image_tool
+from max_gui.tools.locate import locate_tool
 from max_gui.tools.ocr import ocr_tools
 from max_gui.tools.protocol import ConfirmationGate, ConfirmationScope, Tool, ToolError, ToolResult
-from max_gui.tools.search import search_tool
 
 
 class AutoApproveGate:
@@ -109,21 +109,22 @@ def build_default_registry(
     gate: ConfirmationGate | None = None,
     desktop: DesktopBackend | None = None,
     ocr: OcrRuntime | None = None,
+    locate: LocateRuntime | None = None,
 ) -> ToolRegistry:
-    """装配文件、搜索、图像预处理、OCR 与桌面工具。
+    """装配图像预处理、OCR、界面定位与桌面工具。
 
     参数：
         settings: 工作区、超时与截图目录。
         gate: 确认门；缺省自动批准。
         desktop: 桌面后端；缺省 `PyAutoGUIBackend`。
         ocr: OCR 运行时；缺省按配置懒启动。
+        locate: OmniParser 运行时；缺省按配置懒启动。
     """
     backend = desktop or PyAutoGUIBackend()
     tools = [
-        *file_tools(settings.workspace),
-        search_tool(settings.workspace),
         image_tool(settings.workspace, settings),
         *ocr_tools(settings, ocr),
+        locate_tool(settings, locate),
         *desktop_tools(settings, backend),
     ]
     return ToolRegistry(tools, gate=gate)
