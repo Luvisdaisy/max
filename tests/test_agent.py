@@ -8,7 +8,7 @@ import json
 import pytest
 
 from max_gui.agent.graph import ITERATION_LIMIT_MESSAGE, AgentRunner
-from max_gui.agent.prompts import os_contract
+from max_gui.agent.prompts import GUI_SYSTEM_PROMPT, os_contract
 from max_gui.config import Settings
 from max_gui.desktop.fake import FakeDesktopBackend
 from max_gui.inference.client import ChatDelta, TokenUsage
@@ -281,6 +281,14 @@ def test_os_contract_darwin_not_windows() -> None:
     assert "不是 Windows" in text
     assert "command" in text
     assert "不是 Windows" not in os_contract("Windows")
+
+
+def test_system_prompt_separates_user_reply_from_native_tools() -> None:
+    """提示词让普通正文回答用户，工具调用不再要求正文 JSON 协议。"""
+    assert "直接用简短、完整的自然语言回答用户" in GUI_SYSTEM_PROMPT
+    assert "原生 tool calling" in GUI_SYSTEM_PROMPT
+    assert "每次回复必须严格按以下 JSON 格式输出" not in GUI_SYSTEM_PROMPT
+    assert '"thought"' not in GUI_SYSTEM_PROMPT
 
 
 async def test_think_injects_system_not_persisted(settings: Settings) -> None:
@@ -579,6 +587,76 @@ async def test_two_turns_have_distinct_run_ids(settings: Settings) -> None:
     assert first["run_id"] != second["run_id"]
     assert _run_events(settings, first["run_id"])[0]["session_id"] == session.id
     assert _run_events(settings, second["run_id"])[0]["session_id"] == session.id
+
+
+async def test_new_task_does_not_replay_completed_task_messages(settings: Settings) -> None:
+    """同一会话的新任务只发送自身指令，不重放上一任务内容。"""
+    client = ScriptedClient([ChatDelta(text="第一任务完成"), ChatDelta(text="第二任务完成")])
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    await runner.run(session, user_text="旧任务专有指令")
+    second = await runner.run(session, user_text="新任务专有指令")
+    encoded = json.dumps(client.requests[1], ensure_ascii=False)
+    assert "新任务专有指令" in encoded
+    assert "旧任务专有指令" not in encoded
+    assert second["task_context"]["user_instruction"] == "新任务专有指令"
+    loaded = store.get(session.id)
+    assert loaded is not None
+    assert len(loaded.messages) == 4
+
+
+async def test_task_context_rolls_actions_and_redacts_keyboard_text(settings: Settings) -> None:
+    """任务胶囊最多保留六条动作，键盘正文不会进入动作摘要。"""
+    secret = "不能出现在胶囊里的键入内容"
+    calls = [
+        {
+            "id": "type",
+            "type": "function",
+            "function": {"name": "keyboard_type", "arguments": json.dumps({"text": secret})},
+        }
+    ]
+    calls.extend(
+        {
+            "id": f"screen-{index}",
+            "type": "function",
+            "function": {"name": "screen_info", "arguments": "{}"},
+        }
+        for index in range(6)
+    )
+    client = ScriptedClient([ChatDelta(tool_calls=calls), ChatDelta(text="完成")])
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text="执行多步任务")
+    history = state["task_context"]["action_history"]
+    assert len(history) == 6
+    assert all(secret not in json.dumps(item, ensure_ascii=False) for item in history)
+    request = client.requests[1]
+    assistant = next(item for item in request if item.get("role") == "assistant")
+    tool_ids = {str(item["tool_call_id"]) for item in request if item.get("role") == "tool"}
+    call_ids = {str(item["id"]) for item in assistant["tool_calls"]}
+    assert tool_ids == call_ids
+    loaded = store.get(session.id)
+    assert loaded is not None and loaded.task_context is not None
+    assert secret not in json.dumps(loaded.task_context, ensure_ascii=False)
+
+
+async def test_context_diagnostics_count_without_copying_user_text(settings: Settings) -> None:
+    """模型事件记录裁剪计数和任务标识，不复制用户指令。"""
+    secret = "不应写进运行诊断的用户指令"
+    client = ScriptedClient([ChatDelta(text="完成")])
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text=secret)
+    event = next(
+        item
+        for item in _run_events(settings, state["run_id"])
+        if item["event_type"] == "model.completed"
+    )
+    data = event["data"]
+    assert data["task_id"] == state["task_context"]["task_id"]
+    assert data["context_message_count"] >= 1
+    assert "context_excluded_message_count" in data
+    assert secret not in json.dumps(data, ensure_ascii=False)
 
 
 async def test_reasoning_and_keyboard_text_are_not_duplicated_to_run_log(

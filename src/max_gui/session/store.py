@@ -87,6 +87,7 @@ class Session:
     checkpoint: dict[str, Any] | None = None
     view_frame: dict[str, Any] | None = None
     locate_hits: dict[str, list[int]] = field(default_factory=dict)
+    task_context: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """转为可 JSON 序列化的字典。"""
@@ -110,6 +111,7 @@ class Session:
             checkpoint=data.get("checkpoint"),
             view_frame=_optional_dict(data.get("view_frame")),
             locate_hits=_string_int_points(data.get("locate_hits")),
+            task_context=_optional_dict(data.get("task_context")),
         )
 
 

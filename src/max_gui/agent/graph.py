@@ -6,10 +6,20 @@ import asyncio
 import json
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
 
+from max_gui.agent.context import (
+    TaskContext,
+    append_action_summary,
+    latest_observation_path,
+    new_task_context,
+    restore_task_context,
+    task_context_message,
+    update_task_context,
+)
 from max_gui.agent.plan import advance_subtask_after_tools, ingest_assistant_plan
 from max_gui.agent.prompts import compose_gui_system_prompt
 from max_gui.agent.state import AgentState
@@ -121,8 +131,17 @@ class AgentRunner:
                 state: AgentState = dict(session.checkpoint)  # type: ignore[assignment]
                 state["session_id"] = session.id
                 state["run_id"] = self._recorder.run_id
+                state["history_message_count"] = int(
+                    state.get("history_message_count")
+                    or max(0, len(session.messages) - len(state.get("messages") or []))
+                )
+                state["task_context"] = restore_task_context(
+                    state.get("task_context") or session.task_context,
+                    list(state.get("messages") or []),
+                )
             else:
-                messages = [_message_to_state(item) for item in session.messages]
+                messages: list[dict[str, Any]] = []
+                history_message_count = len(session.messages)
                 if user_text is not None:
                     images = [{"path": path} for path in (image_paths or [])]
                     user_msg = {"role": "user", "content": {"text": user_text, "images": images}}
@@ -142,6 +161,8 @@ class AgentRunner:
                     "error": None,
                     "plan": [],
                     "current_subtask": None,
+                    "task_context": new_task_context(user_text or "", image_paths or []),
+                    "history_message_count": history_message_count,
                 }
 
             unfinished = self._recorder.unfinished_tools
@@ -209,17 +230,36 @@ class AgentRunner:
                 "pending_tool_calls": [],
             }
 
+        context = update_task_context(
+            _task_context(state),
+            status="thinking",
+            plan=list(state.get("plan") or []),
+            current_subtask=state.get("current_subtask"),
+        )
+        state = {**state, "task_context": context}
+        model_messages = _model_messages(state)
+        inline_image = latest_observation_path(context)
         model_started = time.perf_counter()
         self._emit_event(
             "model.started",
             state,
-            {"provider": self.settings.provider, "model": self.settings.model_name},
+            {
+                "provider": self.settings.provider,
+                "model": self.settings.model_name,
+                **_context_diagnostics(
+                    state,
+                    model_messages,
+                    inline_image,
+                    historical_message_count=self._historical_message_count(state),
+                ),
+            },
         )
         try:
             encoded = to_chat_messages(
-                list(state.get("messages") or []),
+                model_messages,
                 settings=self.settings,
                 system=compose_gui_system_prompt(frame=active_view_frame()),
+                inline_image_path=inline_image,
             )
             delta: ChatDelta = await self.client.stream(
                 encoded,
@@ -254,7 +294,17 @@ class AgentRunner:
                 messages.append(assistant)
                 message_index = self._commit_message(assistant)
             self._emit_model_completed(state, delta, model_started, message_index)
-            return {**state, "messages": messages, "status": "interrupted"}
+            return {
+                **state,
+                "messages": messages,
+                "status": "interrupted",
+                "task_context": update_task_context(
+                    context,
+                    status="interrupted",
+                    plan=list(state.get("plan") or []),
+                    current_subtask=state.get("current_subtask"),
+                ),
+            }
 
         messages = list(state.get("messages") or [])
         assistant = {"role": "assistant", "content": _assistant_content(delta)}
@@ -276,6 +326,9 @@ class AgentRunner:
                 "status": "acting",
                 "plan": plan,
                 "current_subtask": current,
+                "task_context": update_task_context(
+                    context, status="acting", plan=plan, current_subtask=current
+                ),
             }
         return {
             **state,
@@ -284,6 +337,9 @@ class AgentRunner:
             "status": "done",
             "plan": plan,
             "current_subtask": current,
+            "task_context": update_task_context(
+                context, status="done", plan=plan, current_subtask=current
+            ),
         }
 
     async def act(self, state: AgentState) -> AgentState:
@@ -292,6 +348,7 @@ class AgentRunner:
             return {**state, "status": "interrupted"}
         self._emit_status("acting", state)
         results: list[dict[str, Any]] = []
+        context = _task_context(state)
         for call in state.get("pending_tool_calls") or []:
             if self._interrupt.is_set():
                 return {**state, "status": "interrupted"}
@@ -341,6 +398,16 @@ class AgentRunner:
                 "name": name,
             }
             results.append(item)
+            image_path = str(images[-1]["path"]) if images else None
+            context = append_action_summary(
+                context,
+                name=name,
+                arguments=fn.get("arguments"),
+                error=error,
+                has_observation=has_image,
+                conclusion=_action_conclusion(name, text),
+                image_path=image_path,
+            )
             message_index = self._commit_message(item)
             event_type: RunEventType = "tool.failed" if error else "tool.completed"
             event_data: dict[str, Any] = {
@@ -360,6 +427,12 @@ class AgentRunner:
             **state,
             "pending_tool_calls": results,
             "status": "observing",
+            "task_context": update_task_context(
+                context,
+                status="observing",
+                plan=list(state.get("plan") or []),
+                current_subtask=state.get("current_subtask"),
+            ),
         }
 
     async def observe(self, state: AgentState) -> AgentState:
@@ -383,6 +456,9 @@ class AgentRunner:
             "status": "thinking",
             "plan": plan,
             "current_subtask": current,
+            "task_context": update_task_context(
+                _task_context(state), status="thinking", plan=plan, current_subtask=current
+            ),
         }
         captured_images = 0
         for item in tool_messages:
@@ -470,6 +546,12 @@ class AgentRunner:
             "reasoning_chars": len(delta.reasoning),
             "tool_call_count": len(delta.tool_calls),
             "session_message_index": message_index,
+            **_context_diagnostics(
+                state,
+                _model_messages(state),
+                latest_observation_path(_task_context(state)),
+                historical_message_count=self._historical_message_count(state),
+            ),
         }
         if delta.usage is not None:
             data["prompt_tokens"] = delta.usage.prompt_tokens
@@ -482,6 +564,10 @@ class AgentRunner:
         if self._recorder is None:
             return {"final_status": final_status}
         return self._recorder.summary(final_status=final_status)
+
+    def _historical_message_count(self, state: AgentState) -> int:
+        """计算未进入当前任务推理上下文的会话消息数量。"""
+        return max(0, int(state.get("history_message_count") or 0))
 
     def _emit_terminal(self, state: AgentState) -> None:
         """按 Agent 终态发出对应运行终态和统计。"""
@@ -502,6 +588,14 @@ class AgentRunner:
         """写回 status、checkpoint、桌面坐标系；尚未落盘的消息才追加。"""
         session.status = str(state.get("status") or "done")
         session.checkpoint = dict(state)
+        session.task_context = dict(
+            update_task_context(
+                _task_context(state),
+                status=session.status,
+                plan=list(state.get("plan") or []),
+                current_subtask=state.get("current_subtask"),
+            )
+        )
         frame, hits = snapshot_desktop_context()
         if frame is not None:
             session.view_frame = frame
@@ -609,6 +703,96 @@ def _last_assistant_text(messages: list[dict[str, Any]]) -> str:
             return str(content.get("text") or "")
         return str(content or "")
     return ""
+
+
+def _task_context(state: AgentState) -> TaskContext:
+    """取得当前任务胶囊；旧 checkpoint 缺字段时即时构造兼容版本。"""
+    return restore_task_context(state.get("task_context"), list(state.get("messages") or []))
+
+
+def _model_messages(state: AgentState) -> list[dict[str, Any]]:
+    """从当前任务保留用户指令与近期完整工具调用链，拒绝重放会话历史。"""
+    context = _task_context(state)
+    messages = list(state.get("messages") or [])
+    user = _task_user_message(messages, context)
+    chains = _completed_tool_chains(messages)
+    selected: list[list[dict[str, Any]]] = []
+    action_count = 0
+    for chain in reversed(chains):
+        tool_count = sum(1 for item in chain if item.get("role") == "tool")
+        if selected and action_count + tool_count > 6:
+            break
+        selected.append(chain)
+        action_count += tool_count
+    output = [user]
+    for chain in reversed(selected):
+        output.extend(chain)
+    return output
+
+
+def _task_user_message(messages: list[dict[str, Any]], context: TaskContext) -> dict[str, Any]:
+    """构造模型可见的用户任务消息，并附带脱敏任务状态。"""
+    original: dict[str, Any] | None = None
+    for message in messages:
+        if message.get("role") == "user":
+            original = message
+            break
+    content = dict((original or {}).get("content") or {})
+    instruction = str(context.get("user_instruction") or content.get("text") or "继续当前任务")
+    content["text"] = f"{instruction}\n\n{task_context_message(context)}"
+    return {"role": "user", "content": content}
+
+
+def _completed_tool_chains(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """按 assistant 调用与其所有已完成 tool 结果切分合法的上下文链。"""
+    chains: list[list[dict[str, Any]]] = []
+    index = 0
+    while index < len(messages):
+        assistant = messages[index]
+        calls = assistant.get("tool_calls") if assistant.get("role") == "assistant" else None
+        if not isinstance(calls, list) or not calls:
+            index += 1
+            continue
+        call_ids = {str(call.get("id") or "") for call in calls}
+        chain = [assistant]
+        cursor = index + 1
+        while cursor < len(messages) and messages[cursor].get("role") == "tool":
+            tool = messages[cursor]
+            if str(tool.get("tool_call_id") or "") not in call_ids:
+                break
+            chain.append(tool)
+            cursor += 1
+        if len(chain) > 1:
+            chains.append(chain)
+        index = cursor
+    return chains
+
+
+def _context_diagnostics(
+    state: AgentState,
+    model_messages: list[dict[str, Any]],
+    inline_image: str | None,
+    *,
+    historical_message_count: int,
+) -> dict[str, Any]:
+    """返回只含计数的模型上下文诊断，避免把正文写入运行日志。"""
+    context = _task_context(state)
+    return {
+        "task_id": context.get("task_id"),
+        "context_message_count": len(model_messages),
+        "context_inline_image_count": int(bool(inline_image and Path(inline_image).is_file())),
+        "context_recent_action_count": len(context.get("action_history") or []),
+        "context_excluded_message_count": historical_message_count,
+    }
+
+
+def _action_conclusion(name: str, text: str) -> str:
+    """生成可存入胶囊的工具结论，排除 OCR 和键盘输入正文。"""
+    if name == "keyboard_type":
+        return "已执行键盘输入"
+    if name in {"ocr", "ocr_locate"}:
+        return "已完成文字识别"
+    return text[:400]
 
 
 def _route_after_think(state: AgentState) -> Literal["act", "__end__"]:

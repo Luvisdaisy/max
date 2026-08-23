@@ -225,9 +225,12 @@ def _collect_image_paths(content: dict[str, Any]) -> list[Path]:
 
 
 def _recent_image_slots(
-    raw_messages: list[dict[str, Any]], *, limit: int = MAX_INLINE_IMAGES
+    raw_messages: list[dict[str, Any]],
+    *,
+    limit: int = MAX_INLINE_IMAGES,
+    selected_path: str | None = None,
 ) -> set[tuple[int, str]]:
-    """按出现顺序取最后 `limit` 张仍存在的图，返回 `(消息下标, 路径)`。"""
+    """选择允许内联的图片；任务指定路径优先，否则沿用最后一张规则。"""
     slots: list[tuple[int, str]] = []
     for index, message in enumerate(raw_messages):
         content = message.get("content")
@@ -235,6 +238,8 @@ def _recent_image_slots(
             continue
         for path in _collect_image_paths(content):
             slots.append((index, str(path)))
+    if selected_path:
+        return {slot for slot in slots if slot[1] == selected_path}
     return set(slots[-limit:])
 
 
@@ -288,8 +293,9 @@ def to_chat_messages(
     *,
     settings: Settings,
     system: str | None = None,
+    inline_image_path: str | None = None,
 ) -> list[dict[str, Any]]:
-    """把会话状态消息转成 OpenAI chat 请求体，并回注最近一张图像。
+    """把任务状态消息转成 OpenAI chat 请求体，并回注选定的最近图像。
 
     `dashscope` 且助手 content 含思考时，另设 `reasoning_content`，不拼进正文。
 
@@ -297,11 +303,12 @@ def to_chat_messages(
         raw_messages: 图状态中的消息。
         settings: 图像预处理上限与当前后端。
         system: 若给出且原始消息不以 system 开头，则插到请求最前。
+        inline_image_path: 任务胶囊明确选定的本地图；缺省时按消息顺序取最后一张。
 
     返回：
         Chat Completions 的 `messages` 数组。
     """
-    keep = _recent_image_slots(raw_messages)
+    keep = _recent_image_slots(raw_messages, selected_path=inline_image_path)
     encoded: list[dict[str, Any]] = []
     for index, message in enumerate(raw_messages):
         role = message.get("role") or "user"

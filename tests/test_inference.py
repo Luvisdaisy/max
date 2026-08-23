@@ -817,3 +817,23 @@ async def test_modelscope_assembles_tool_calls(settings: Settings) -> None:
     assert result.tool_calls == [
         {"id": "call_1", "type": "function", "function": {"name": "screenshot", "arguments": "{}"}}
     ]
+
+
+def test_explicit_task_image_selection_overrides_message_order(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """任务胶囊指定截图时，即使它不是最后一张也只内联该图。"""
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    Image.new("RGB", (20, 20), color="red").save(first)
+    Image.new("RGB", (20, 20), color="blue").save(second)
+    messages = [
+        {"role": "user", "content": {"text": "任务", "images": [{"path": str(first)}]}},
+        {"role": "tool", "content": {"text": "新截图", "images": [{"path": str(second)}]}},
+    ]
+    encoded = to_chat_messages(messages, settings=settings, inline_image_path=str(first))
+    first_parts = encoded[0]["content"]
+    second_parts = encoded[1]["content"]
+    assert any(part["type"] == "image_url" for part in first_parts)
+    assert isinstance(second_parts, str)
+    assert "历史截图已省略" in second_parts

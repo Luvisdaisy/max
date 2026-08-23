@@ -128,3 +128,31 @@ def test_missing_image_placeholder(settings: Settings, tmp_path: Path) -> None:
     loaded = store.get(session.id)
     assert loaded is not None
     assert loaded.messages[0].content["images"][0]["missing"] is True
+
+
+def test_task_context_roundtrip_and_legacy_default(settings: Settings) -> None:
+    """任务胶囊可持久化，旧会话缺字段时仍按空值加载。"""
+    store = SessionStore(settings.sessions_dir)
+    session = store.create(model="qwen3.5-2b")
+    session.task_context = {
+        "task_id": "task-1",
+        "user_instruction": "移动光标",
+        "status": "interrupted",
+        "action_history": [{"name": "mouse_move", "arguments": {}, "outcome": "success"}],
+    }
+    store.save(session)
+    loaded = store.get(session.id)
+    assert loaded is not None
+    assert loaded.task_context is not None
+    assert loaded.task_context["task_id"] == "task-1"
+
+    legacy = settings.sessions_dir / "legacy-no-context.json"
+    legacy.write_text(
+        '{"id": "legacy-no-context", "title": "旧", "model": "qwen3.5-2b", '
+        '"created_at": "2026-08-14T00:00:00", "updated_at": "2026-08-14T00:00:00", '
+        '"messages": []}',
+        encoding="utf-8",
+    )
+    old = store.get("legacy-no-context")
+    assert old is not None
+    assert old.task_context is None
