@@ -9,6 +9,7 @@ from PIL import Image
 
 from max_gui.config import DEFAULT_OMNIPARSER_DIR, Settings
 from max_gui.desktop.fake import FakeDesktopBackend
+from max_gui.inference.images import prepare_image
 from max_gui.inference.omniparser import (
     LOCATE_EMPTY_MESSAGE,
     LOCATE_SKIP_MESSAGE,
@@ -116,8 +117,21 @@ async def test_locate_draws_boxes_and_default_path(settings: Settings) -> None:
     assert 1 in active_locate_hits()
 
 
+async def test_current_retina_screenshot_target_id_uses_logical_center(settings: Settings) -> None:
+    """当前 2 倍截图的框中心会回映射到桌面逻辑像素，而非物理像素。"""
+    backend = FakeDesktopBackend()
+    runtime = LocateRuntime(settings, parse_fn=_parse_boxes([_box(1400, 800, 1480, 1000, "按钮")]))
+    clear_desktop_context()
+    registry = build_default_registry(settings, desktop=backend, locate=runtime, gate=DenyGate())
+    await registry.invoke("screenshot", {})
+    located = await registry.invoke("locate", {})
+    assert isinstance(located, ToolResult)
+    await registry.invoke("mouse_move", {"target_id": 1})
+    assert backend.mouse == (720, 450)
+
+
 async def test_locate_caps_at_forty_boxes(settings: Settings) -> None:
-    """超过 40 个框时只编号 1 到 40。"""
+    """观察专用图片超过 40 个框时只编号 1 到 40，且不留下可执行命中。"""
     boxes = [_box(i * 10, 0, i * 10 + 8, 8, str(i), score=float(100 - i)) for i in range(50)]
     runtime = LocateRuntime(settings, parse_fn=_parse_boxes(boxes))
     registry = _registry(settings, runtime)
@@ -127,7 +141,76 @@ async def test_locate_caps_at_forty_boxes(settings: Settings) -> None:
     payload = json.loads(result.text)
     assert len(payload["items"]) == 40
     assert payload["items"][-1]["id"] == 40
-    assert set(active_locate_hits()) == set(range(1, 41))
+    assert payload["coordinate_space"] == "image"
+    assert payload["observation_only"] is True
+    assert active_locate_hits() == {}
+
+
+async def test_historical_retina_image_is_observation_only(settings: Settings) -> None:
+    """历史 2 倍物理像素图不生成可点击编号，避免把物理像素当逻辑像素。"""
+    runtime = LocateRuntime(settings, parse_fn=_parse_boxes([_box(1400, 800, 1480, 880, "按钮")]))
+    registry = _registry(settings, runtime)
+    await registry.invoke("screenshot", {})
+    store_locate_hits({9: (10, 20)})
+    historical = _write_png(settings.screenshots_dir / "history-retina.png", (2880, 1800))
+    result = await registry.invoke("locate", {"path": str(historical)})
+    assert isinstance(result, ToolResult)
+    payload = json.loads(result.text)
+    assert payload["coordinate_space"] == "image"
+    assert payload["observation_only"] is True
+    assert "logical" not in payload["items"][0]
+    assert active_locate_hits() == {}
+    moved = await registry.invoke("mouse_move", {"target_id": 1})
+    assert "请先调用 locate" in moved
+
+
+async def test_overlay_copy_is_observation_only(settings: Settings) -> None:
+    """当前截图生成的带框副本不继承原截图的桌面坐标帧。"""
+    runtime = LocateRuntime(settings, parse_fn=_parse_boxes([_box(0, 0, 16, 16, "按钮")]))
+    registry = _registry(settings, runtime)
+    await registry.invoke("screenshot", {})
+    current = await registry.invoke("locate", {})
+    assert isinstance(current, ToolResult)
+    copied = await registry.invoke("locate", {"path": str(current.images[0])})
+    assert isinstance(copied, ToolResult)
+    payload = json.loads(copied.text)
+    assert payload["observation_only"] is True
+    assert active_locate_hits() == {}
+
+
+async def test_locate_overlay_coordinates_match_encoded_image(settings: Settings) -> None:
+    """框图因字节上限缩小时，JSON 视图坐标仍匹配最终发送给模型的尺寸。"""
+    settings.max_image_edge = 64
+    settings.max_image_bytes = 400
+    runtime = LocateRuntime(settings, parse_fn=_parse_boxes([_box(0, 0, 32, 32, "按钮")]))
+    registry = _registry(settings, runtime)
+    await registry.invoke("screenshot", {})
+    result = await registry.invoke("locate", {})
+    assert isinstance(result, ToolResult)
+    payload = json.loads(result.text)
+    encoded = prepare_image(
+        result.images[0], max_edge=settings.max_image_edge, max_bytes=settings.max_image_bytes
+    )
+    item = payload["items"][0]
+    assert encoded.width < 64
+    assert item["view"]["x"] + item["view"]["w"] <= encoded.width
+    assert item["view"]["y"] + item["view"]["h"] <= encoded.height
+
+
+async def test_locate_rejects_remote_path_worker(settings: Settings) -> None:
+    """远端 worker 不得收到主进程本地绝对路径。"""
+    calls: list[Path] = []
+
+    async def record(path: Path) -> list[DetectedBox]:
+        calls.append(path)
+        return [_box(0, 0, 16, 16)]
+
+    settings.omniparser_base_url = "http://192.0.2.10:8002"
+    registry = _registry(settings, LocateRuntime(settings, parse_fn=record))
+    path = _write_png(settings.screenshots_dir / "remote.png")
+    result = await registry.invoke("locate", {"path": str(path)})
+    assert "仅支持本机 loopback" in result
+    assert calls == []
 
 
 async def test_locate_rejects_escape_and_skips(settings: Settings) -> None:
@@ -204,8 +287,8 @@ async def test_screenshot_clears_hits_move_keeps_them(settings: Settings) -> Non
     """模型截图与点击后清空编号；移鼠核验截图保留。"""
     runtime = LocateRuntime(settings, parse_fn=_parse_boxes([_box(0, 0, 16, 16, "A")]))
     registry = _registry(settings, runtime)
-    path = _write_png(settings.screenshots_dir / "a.png")
-    located = await registry.invoke("locate", {"path": str(path)})
+    await registry.invoke("screenshot", {})
+    located = await registry.invoke("locate", {})
     assert isinstance(located, ToolResult)
     assert 1 in active_locate_hits()
     moved = await registry.invoke("mouse_move", {"target_id": 1})
