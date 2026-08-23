@@ -124,9 +124,18 @@
 - **WHEN** 上一回合 `ocr_locate` 记下 `id=1` 的逻辑中心，新回合调用 `mouse_move` 且 `target_id` 为 `1`
 - **THEN** 指针移到该逻辑中心，且 MUST NOT 报没有该编号
 
+### Requirement: 桌面工具拒绝无当前坐标帧的定位编号
+
+`mouse_move` 与支持 `target_id` 的 `mouse_scroll` MUST 只接受由当前会话当前截图坐标帧生成的定位编号。定位工具清空编号、当前截图刷新编号或会话中不存在有效编号时，桌面工具 MUST 返回中文错误，MUST NOT 移动、滚动或点击。该限制 MUST 不影响模型直接传入最近截图的视图像素坐标。
+
+#### Scenario: 观察专用定位后拒绝编号
+
+- **WHEN** 模型对非当前截图调用 `locate`，随后以返回的 `target_id` 调用 `mouse_move`
+- **THEN** `mouse_move` 返回要求先对当前截图调用 `locate` 的中文错误，且桌面后端不接收移动操作
+
 ### Requirement: 输入文本与按键分离
 
-`keyboard_type` MUST 只接受文本并写入当前前台窗口；MUST NOT 接受按键名。含非 ASCII 的文本 MUST 通过剪贴板粘贴，不得静默丢字。`keyboard_press` MUST 只接受白名单键名或组合键；MUST NOT 接受自由文本。白名单外的键名 MUST 拒绝。关机或退出登录相关组合 MUST 拒绝。二者 MUST NOT 要求确认。本会话尚无成功的 `screenshot` 或 `mouse_move` 截图时，二者 MUST 拒绝执行并要求先截图或移鼠。
+`keyboard_type` MUST 只接受文本并写入当前前台窗口；MUST NOT 接受按键名。含非 ASCII 的文本 MUST 通过剪贴板粘贴，不得静默丢字。`keyboard_press.keys` MUST 只接受非空字符串数组；单键也必须使用单元素数组，例如 `["enter"]`，组合键必须使用数组，例如 `["command", "tab"]`。`keyboard_press` MUST NOT 接受自由文本、单个字符串或 JSON 数组文本形式的字符串。数组元素 MUST 是白名单键名；白名单外的键名 MUST 拒绝。关机或退出登录相关组合 MUST 拒绝。二者 MUST NOT 要求确认。本会话尚无成功的 `screenshot` 或 `mouse_move` 截图时，二者 MUST 拒绝执行并要求先截图或移鼠。
 
 #### Scenario: 写入 ASCII 文本
 
@@ -135,8 +144,18 @@
 
 #### Scenario: 按下回车
 
-- **WHEN** 已有光标截图，模型调用 `keyboard_press`，`keys` 为 `enter`
+- **WHEN** 已有光标截图，模型调用 `keyboard_press`，`keys` 为 `["enter"]`
 - **THEN** 系统按下回车，且不把 `enter` 当作普通文本写入
+
+#### Scenario: 按下组合键
+
+- **WHEN** 已有光标截图，模型调用 `keyboard_press`，`keys` 为 `["command", "tab"]`
+- **THEN** 系统将 `command` 与 `tab` 作为一个组合键发送
+
+#### Scenario: 拒绝非数组格式
+
+- **WHEN** 模型调用 `keyboard_press`，`keys` 为 `command+tab` 或 `["command", "tab"]` 的字符串表示
+- **THEN** 工具返回要求使用非空字符串数组的错误，且不发送按键
 
 #### Scenario: 拒绝未知键名
 
