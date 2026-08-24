@@ -283,8 +283,8 @@ async def test_ocr_locate_is_unknown(settings: Settings) -> None:
     assert "未知工具" in result
 
 
-async def test_screenshot_clears_hits_move_keeps_them(settings: Settings) -> None:
-    """模型截图与点击后清空编号；移鼠核验截图保留。"""
+async def test_screenshot_and_move_clear_stale_hits(settings: Settings) -> None:
+    """每张新截图都会使旧定位编号失效，包括移鼠后的核验截图。"""
     runtime = LocateRuntime(settings, parse_fn=_parse_boxes([_box(0, 0, 16, 16, "A")]))
     registry = _registry(settings, runtime)
     await registry.invoke("screenshot", {})
@@ -293,8 +293,7 @@ async def test_screenshot_clears_hits_move_keeps_them(settings: Settings) -> Non
     assert 1 in active_locate_hits()
     moved = await registry.invoke("mouse_move", {"target_id": 1})
     assert "定位编号" in (moved.text if isinstance(moved, ToolResult) else moved)
-    assert 1 in active_locate_hits()
-    await registry.invoke("screenshot", {})
+    assert active_locate_hits() == {}
     missing = await registry.invoke("mouse_move", {"target_id": 1})
     assert "没有 id=1" in missing
     store_locate_hits({1: (10, 10)})

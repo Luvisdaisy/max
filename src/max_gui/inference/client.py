@@ -17,6 +17,7 @@ from PIL import Image
 
 from max_gui.config import (
     CLOUD_PROVIDERS,
+    KEYED_PROVIDERS,
     Settings,
     require_dashscope_workspace,
     require_provider_key,
@@ -99,9 +100,10 @@ class InferenceClient:
             ConnectionFailedError: 网络层失败。
             RuntimeError: HTTP 非 2xx。
         """
-        if self.settings.provider in CLOUD_PROVIDERS:
+        if self.settings.provider in KEYED_PROVIDERS:
             require_provider_key(self.settings)
-            require_dashscope_workspace(self.settings)
+            if self.settings.provider in CLOUD_PROVIDERS:
+                require_dashscope_workspace(self.settings)
         elif self.check_weights:
             require_weights(self.settings)
 
@@ -171,6 +173,11 @@ class InferenceClient:
                 raise ConnectionFailedError(
                     self.settings.base_url,
                     hint=f"无法连接推理服务（{self.settings.base_url}）。{extra}",
+                ) from exc
+            if self.settings.provider == "remote":
+                raise ConnectionFailedError(
+                    self.settings.base_url,
+                    hint=f"无法连接 WSL 推理服务（{self.settings.base_url}）。请检查局域网、端口转发与 API Key。",
                 ) from exc
             raise ConnectionFailedError(self.settings.base_url) from exc
 

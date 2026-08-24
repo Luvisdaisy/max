@@ -80,6 +80,45 @@ def test_process_env_overrides_dotenv(monkeypatch: pytest.MonkeyPatch, tmp_path:
     assert settings.model_name == "qwen3.5-4b"
 
 
+def test_remote_uses_lan_endpoint_without_local_weights(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """remote 读取 LAN vLLM 地址与密钥，且不依赖 macOS 的模型目录。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", "remote")
+    monkeypatch.setenv("MAX_PROVIDER_KEY", "lan-token")
+    monkeypatch.setenv("MAX_GUI_BASE_URL", "http://192.168.1.158:8000/v1")
+    monkeypatch.setenv("MODEL_NAME", "qwen3.5-4b-lora")
+    settings = load_settings(workspace=tmp_path)
+    assert settings.provider == "remote"
+    assert settings.base_url == "http://192.168.1.158:8000/v1"
+    assert settings.api_key == "lan-token"
+    assert settings.model_name == "qwen3.5-4b-lora"
+    require_provider_key(settings)
+
+
+async def test_remote_stream_skips_local_weight_check(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """remote 请求仅校验 API Key，不因 macOS 没有 LoRA 权重而失败。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", "remote")
+    monkeypatch.setenv("MAX_PROVIDER_KEY", "lan-token")
+    monkeypatch.setenv("MAX_GUI_BASE_URL", "http://192.168.1.158:8000/v1")
+    settings = load_settings(workspace=tmp_path)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_sse(["ok"]).encode(),
+        )
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
+    result = await client.stream([{"role": "user", "content": "hi"}])
+    assert result.text == "ok"
+
+
 def test_modelscope_default_model_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """`modelscope` 且未写 `MODEL_NAME` 时默认为 Qwen3.8-27B。"""
     _isolate_root(monkeypatch, tmp_path)

@@ -8,6 +8,7 @@
 - 构建基于 ScreenAgent 预处理数据集的监督训练集与验证集。
 - 优化提示词工程，使模型更可靠地调用桌面工具。
 - 产出微调后模型权重，并与现有 max-gui 架构兼容。
+- 增加受密钥保护的 `remote` 推理后端，让 macOS 桌面客户端调用 WSL vLLM，且不要求 macOS 保存模型权重。
 
 **BREAKING**: 现有模型版本号保持不变（不破坏现有推理后端）。
 
@@ -19,7 +20,7 @@
 
 ### Modified Capabilities
 
-- multimodal-inference: 微调后模型可无缝切换到现有 vLLM 服务
+- multimodal-inference: 微调后模型可无缝切换到本机或远程 WSL vLLM 服务
 
 ## Impact
 

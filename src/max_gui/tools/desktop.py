@@ -564,8 +564,8 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
                 image_path=path,
             )
         )
-        if verify_source != "mouse_move":
-            store_locate_hits({})
+        # 新帧与旧帧即使内容接近也不是同一坐标契约；移鼠已在截图前解析 target_id。
+        store_locate_hits({})
         store_cursor_verify(verify_source)
         cursor_vx, cursor_vy = logical_to_view(
             mouse_x,

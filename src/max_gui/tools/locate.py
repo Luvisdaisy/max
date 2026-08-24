@@ -53,6 +53,8 @@ def locate_tool(settings: Settings, runtime: LocateRuntime | None = None) -> Too
             width, height = image.size
         chosen = select_boxes(boxes, width=width, height=height)
         if not chosen:
+            # 空结果不能继续复用上一轮的编号，避免模型把旧框误当作当前观察。
+            store_locate_hits({})
             return LOCATE_EMPTY_MESSAGE
         stamp = path.stem
         out = Path(settings.screenshots_dir) / f"{stamp}-boxes.png"

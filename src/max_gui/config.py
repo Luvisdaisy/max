@@ -9,8 +9,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 DEFAULT_PROVIDER = "local"
-PROVIDERS = frozenset({"local", "modelscope", "dashscope"})
+PROVIDERS = frozenset({"local", "remote", "modelscope", "dashscope"})
 CLOUD_PROVIDERS = frozenset({"modelscope", "dashscope"})
+KEYED_PROVIDERS = CLOUD_PROVIDERS | frozenset({"remote"})
 DEFAULT_LOCAL_MODEL = "qwen3.5-4b"
 DEFAULT_MODELSCOPE_MODEL = "Qwen/Qwen3.8-27B"
 DEFAULT_DASHSCOPE_MODEL = "qwen3.8-27b"
@@ -26,7 +27,7 @@ DEFAULT_OMNIPARSER_BASE_URL = "http://127.0.0.1:8002"
 
 
 class UnknownProviderError(ValueError):
-    """`MAX_PROVIDER` 不是 `local`、`modelscope` 或 `dashscope`。"""
+    """`MAX_PROVIDER` 不是受支持的推理后端。"""
 
     def __init__(self, raw: str) -> None:
         """参数：`raw` 为用户给出的非法值。"""
@@ -39,7 +40,9 @@ class MissingProviderKeyError(ValueError):
 
     def __init__(self, provider: str = "modelscope") -> None:
         """参数：`provider` 为当前云端后端名，用于区分文案。"""
-        if provider == "dashscope":
+        if provider == "remote":
+            detail = "使用 remote 时请在 .env 中填写 WSL vLLM 的 API Key。"
+        elif provider == "dashscope":
             detail = "使用 dashscope 时请在 .env 中填写百炼 API Key。"
         else:
             detail = "使用 modelscope 时请在 .env 中填写魔搭 Access Token。"
@@ -124,7 +127,7 @@ def load_env_file(root: Path) -> None:
 
 
 def parse_provider(raw: str | None) -> str:
-    """把 `MAX_PROVIDER` 规范成 `local`、`modelscope` 或 `dashscope`。
+    """把 `MAX_PROVIDER` 规范成受支持的推理后端。
 
     参数：
         raw: 环境变量原文；空则视为 `local`。
@@ -254,6 +257,12 @@ def load_settings(
             model_name = DEFAULT_DASHSCOPE_MODEL
         base_url = dashscope_base_url(dashscope_workspace) if dashscope_workspace else ""
         api_key = (os.environ.get("MAX_PROVIDER_KEY") or "").strip()
+    elif provider == "remote":
+        model_name = (os.environ.get("MODEL_NAME") or DEFAULT_LOCAL_MODEL).strip()
+        if not model_name:
+            model_name = DEFAULT_LOCAL_MODEL
+        base_url = (os.environ.get("MAX_GUI_BASE_URL") or "").strip()
+        api_key = (os.environ.get("MAX_PROVIDER_KEY") or "").strip()
     else:
         model_name = (os.environ.get("MODEL_NAME") or DEFAULT_LOCAL_MODEL).strip()
         if not model_name:
@@ -297,7 +306,7 @@ def require_provider_key(settings: Settings) -> None:
     异常：
         MissingProviderKeyError: 密钥为空。
     """
-    if settings.provider in CLOUD_PROVIDERS and not has_provider_key(settings.api_key):
+    if settings.provider in KEYED_PROVIDERS and not has_provider_key(settings.api_key):
         raise MissingProviderKeyError(settings.provider)
 
 

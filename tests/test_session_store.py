@@ -156,3 +156,38 @@ def test_task_context_roundtrip_and_legacy_default(settings: Settings) -> None:
     old = store.get("legacy-no-context")
     assert old is not None
     assert old.task_context is None
+
+
+def test_task_context_discards_invalid_grounded_facts(settings: Settings) -> None:
+    """加载会话时只保留完整的短期事实，避免坏数据进入后续模型上下文。"""
+    store = SessionStore(settings.sessions_dir)
+    session = store.create(model="qwen3.5-2b")
+    session.task_context = {
+        "task_id": "task-1",
+        "user_instruction": "打开 Safari",
+        "grounded_facts": [
+            {
+                "kind": "locate",
+                "label": "Safari",
+                "status": "valid",
+                "source_path": "/tmp/current.png",
+                "conclusion": "可移动",
+                "target_id": 1,
+            },
+            {"kind": "locate", "label": "坏项"},
+            {"kind": "unknown", "label": "坏项", "status": "valid"},
+        ],
+    }
+    store.save(session)
+    loaded = store.get(session.id)
+    assert loaded is not None and loaded.task_context is not None
+    assert loaded.task_context["grounded_facts"] == [
+        {
+            "kind": "locate",
+            "label": "Safari",
+            "status": "valid",
+            "source_path": "/tmp/current.png",
+            "conclusion": "可移动",
+            "target_id": 1,
+        }
+    ]

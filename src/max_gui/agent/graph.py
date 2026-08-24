@@ -14,8 +14,12 @@ from langgraph.graph import END, START, StateGraph
 from max_gui.agent.context import (
     TaskContext,
     append_action_summary,
+    clear_grounded_facts,
     latest_observation_path,
+    locate_label,
     new_task_context,
+    record_cursor_verification,
+    replace_locate_facts,
     restore_task_context,
     task_context_message,
     update_task_context,
@@ -355,6 +359,9 @@ class AgentRunner:
             fn = call.get("function") or {}
             name = str(fn.get("name") or "")
             call_id = str(call.get("id") or name)
+            arguments = _tool_arguments(fn.get("arguments"))
+            frame_before = _active_frame_path()
+            target_label = _target_label_for_move(context, name, arguments, frame_before)
             self._emit_event(
                 "tool.started",
                 state,
@@ -407,6 +414,16 @@ class AgentRunner:
                 has_observation=has_image,
                 conclusion=_action_conclusion(name, text),
                 image_path=image_path,
+            )
+            context = _update_grounded_facts_after_tool(
+                context,
+                name=name,
+                arguments=arguments,
+                text=text,
+                error=error,
+                image_path=image_path,
+                frame_before=frame_before,
+                target_label=target_label,
             )
             message_index = self._commit_message(item)
             event_type: RunEventType = "tool.failed" if error else "tool.completed"
@@ -739,7 +756,9 @@ def _task_user_message(messages: list[dict[str, Any]], context: TaskContext) -> 
             break
     content = dict((original or {}).get("content") or {})
     instruction = str(context.get("user_instruction") or content.get("text") or "继续当前任务")
-    content["text"] = f"{instruction}\n\n{task_context_message(context)}"
+    content["text"] = (
+        f"{instruction}\n\n{task_context_message(context, current_frame_path=_active_frame_path())}"
+    )
     return {"role": "user", "content": content}
 
 
@@ -793,6 +812,96 @@ def _action_conclusion(name: str, text: str) -> str:
     if name in {"ocr", "ocr_locate"}:
         return "已完成文字识别"
     return text[:400]
+
+
+def _tool_arguments(arguments: Any) -> dict[str, Any]:
+    """解析工具参数供事实生命周期判断；坏参数只视为空对象。"""
+    if isinstance(arguments, dict):
+        return dict(arguments)
+    if isinstance(arguments, str):
+        try:
+            parsed = json.loads(arguments)
+        except json.JSONDecodeError:
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _active_frame_path() -> str | None:
+    """返回当前活动截图的稳定路径；没有有效帧时返回空。"""
+    frame = active_view_frame()
+    return str(frame.image_path) if frame is not None else None
+
+
+def _target_label_for_move(
+    context: TaskContext, name: str, arguments: dict[str, Any], frame_path: str | None
+) -> str | None:
+    """在移动前按当前帧事实取得定位标签，避免后置截图后读取陈旧编号。"""
+    if name != "mouse_move" or arguments.get("target_id") is None:
+        return None
+    try:
+        return locate_label(context, target_id=int(arguments["target_id"]), source_path=frame_path)
+    except (TypeError, ValueError):
+        return None
+
+
+def _update_grounded_facts_after_tool(
+    context: TaskContext,
+    *,
+    name: str,
+    arguments: dict[str, Any],
+    text: str,
+    error: str | None,
+    image_path: str | None,
+    frame_before: str | None,
+    target_label: str | None,
+) -> TaskContext:
+    """按工具语义维护短期事实，且不让后置截图复活旧定位坐标。"""
+    if error:
+        return clear_grounded_facts(context)
+    if name == "locate":
+        return _record_locate_facts(context, text=text, frame_path=frame_before)
+    if name == "mouse_move":
+        if target_label and image_path:
+            return record_cursor_verification(context, label=target_label, source_path=image_path)
+        return clear_grounded_facts(context)
+    if name == "screenshot" and image_path:
+        return clear_grounded_facts(context)
+    if name in {"mouse_click", "mouse_drag", "mouse_scroll", "keyboard_type", "keyboard_press"}:
+        return clear_grounded_facts(context)
+    return context
+
+
+def _record_locate_facts(context: TaskContext, *, text: str, frame_path: str | None) -> TaskContext:
+    """只接受当前帧可执行 locate JSON，异常、空结果和观察专用输出都会失效旧事实。"""
+    cleared = clear_grounded_facts(context, kinds={"locate"})
+    if not frame_path:
+        return cleared
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return cleared
+    if not isinstance(payload, dict):
+        return cleared
+    if payload.get("coordinate_space") != "view" or payload.get("observation_only") is not False:
+        return cleared
+    raw_items = payload.get("items")
+    if not isinstance(raw_items, list):
+        return cleared
+    items: list[tuple[int, str]] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            target_id = int(item.get("id"))
+        except (TypeError, ValueError):
+            continue
+        label = str(item.get("label") or "").strip()
+        if target_id > 0 and label:
+            items.append((target_id, label))
+    if not items:
+        return cleared
+    return replace_locate_facts(cleared, items=items, source_path=frame_path)
 
 
 def _route_after_think(state: AgentState) -> Literal["act", "__end__"]:

@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from max_gui.agent.context import sanitize_grounded_facts
+
 
 def _optional_dict(value: Any) -> dict[str, Any] | None:
     """非字典视为缺失。"""
@@ -28,6 +30,16 @@ def _string_int_points(value: Any) -> dict[str, list[int]]:
         except (TypeError, ValueError):
             continue
     return hits
+
+
+def _task_context(value: Any) -> dict[str, Any] | None:
+    """恢复任务胶囊并过滤短期事实坏项，旧会话仍保留其余兼容字段。"""
+    context = _optional_dict(value)
+    if context is None:
+        return None
+    if "grounded_facts" in context:
+        context["grounded_facts"] = sanitize_grounded_facts(context["grounded_facts"])
+    return context
 
 
 def _now() -> str:
@@ -111,7 +123,7 @@ class Session:
             checkpoint=data.get("checkpoint"),
             view_frame=_optional_dict(data.get("view_frame")),
             locate_hits=_string_int_points(data.get("locate_hits")),
-            task_context=_optional_dict(data.get("task_context")),
+            task_context=_task_context(data.get("task_context")),
         )
 
 

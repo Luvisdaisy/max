@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 from uuid import uuid4
 
 RECENT_ACTION_LIMIT = 6
+GROUNDED_FACT_LIMIT = 6
+GROUNDED_FACT_TEXT_LIMIT = 120
+GROUNDED_FACT_SUMMARY_LIMIT = 600
 
 
 class ActionSummary(TypedDict):
@@ -20,6 +23,17 @@ class ActionSummary(TypedDict):
     conclusion: str
 
 
+class GroundedFact(TypedDict):
+    """一条绑定截图的短期 GUI 事实，不携带可直接执行的逻辑坐标。"""
+
+    kind: Literal["locate", "cursor_verification"]
+    label: str
+    status: Literal["valid"]
+    source_path: str
+    conclusion: str
+    target_id: int | None
+
+
 class TaskContext(TypedDict, total=False):
     """单个用户任务可恢复且可发送给模型的最小语义状态。"""
 
@@ -30,6 +44,7 @@ class TaskContext(TypedDict, total=False):
     current_subtask: str | None
     latest_observation: dict[str, str]
     action_history: list[ActionSummary]
+    grounded_facts: list[GroundedFact]
 
 
 def new_task_context(user_instruction: str, image_paths: Iterable[str] = ()) -> TaskContext:
@@ -41,6 +56,7 @@ def new_task_context(user_instruction: str, image_paths: Iterable[str] = ()) -> 
         "plan": [],
         "current_subtask": None,
         "action_history": [],
+        "grounded_facts": [],
     }
     paths = list(image_paths)
     if paths:
@@ -70,6 +86,8 @@ def restore_task_context(value: Any, messages: list[dict[str, Any]]) -> TaskCont
                 for item in history[-RECENT_ACTION_LIMIT:]
                 if isinstance(item, dict)
             ]
+        facts = value.get("grounded_facts")
+        context["grounded_facts"] = sanitize_grounded_facts(facts)
         return context
     return new_task_context(_first_user_instruction(messages))
 
@@ -122,7 +140,82 @@ def latest_observation_path(context: TaskContext) -> str | None:
     return str(path) if path else None
 
 
-def task_context_message(context: TaskContext) -> str:
+def replace_locate_facts(
+    context: TaskContext, *, items: list[tuple[int, str]], source_path: str
+) -> TaskContext:
+    """以当前帧成功定位的编号替换旧定位事实。
+
+    参数：
+        context: 当前任务胶囊。
+        items: 已由可信 `locate` 输出解析的 ``(编号, 标签)``。
+        source_path: 当前活动 `ViewFrame` 的截图路径。
+
+    返回：
+        带最新有效定位事实的胶囊副本。逻辑坐标不会写入事实。
+    """
+    facts = [item for item in _grounded_facts(context) if item["kind"] != "locate"]
+    for target_id, label in items:
+        if len(facts) >= GROUNDED_FACT_LIMIT:
+            break
+        facts.append(
+            {
+                "kind": "locate",
+                "label": _short_fact_text(label),
+                "status": "valid",
+                "source_path": source_path,
+                "conclusion": "可用 target_id 调用 mouse_move",
+                "target_id": target_id,
+            }
+        )
+    return _with_grounded_facts(context, facts)
+
+
+def clear_grounded_facts(context: TaskContext, *, kinds: set[str] | None = None) -> TaskContext:
+    """清除全部或指定种类的短期事实，供截图与动作边界失效旧观察。"""
+    if kinds is None:
+        return _with_grounded_facts(context, [])
+    return _with_grounded_facts(
+        context, [item for item in _grounded_facts(context) if item["kind"] not in kinds]
+    )
+
+
+def locate_label(context: TaskContext, *, target_id: int, source_path: str | None) -> str | None:
+    """返回当前帧中某定位编号的标签；非当前帧或无效事实返回空。"""
+    if not source_path:
+        return None
+    for item in _grounded_facts(context):
+        if (
+            item["kind"] == "locate"
+            and item["target_id"] == target_id
+            and item["source_path"] == source_path
+        ):
+            return item["label"]
+    return None
+
+
+def record_cursor_verification(
+    context: TaskContext, *, label: str, source_path: str
+) -> TaskContext:
+    """记录移鼠后截图确认的目标，并使旧定位编号失效。"""
+    facts = [
+        item
+        for item in _grounded_facts(context)
+        if item["kind"] not in {"locate", "cursor_verification"}
+    ]
+    facts.append(
+        {
+            "kind": "cursor_verification",
+            "label": _short_fact_text(label),
+            "status": "valid",
+            "source_path": source_path,
+            "conclusion": "已移动并回注截图；确认红十字在目标上后可调用无参数 mouse_click",
+            "target_id": None,
+        }
+    )
+    return _with_grounded_facts(context, facts)
+
+
+def task_context_message(context: TaskContext, *, current_frame_path: str | None = None) -> str:
     """生成不含敏感正文的简短任务状态文本，供模型理解当前执行位置。"""
     current = context.get("current_subtask") or "未指定"
     plan = "；".join(context.get("plan") or [])[:600] or "未指定"
@@ -133,10 +226,44 @@ def task_context_message(context: TaskContext) -> str:
         )
         or "无"
     )
+    facts = grounded_facts_message(context, current_frame_path=current_frame_path)
     return (
         f"任务状态：{context.get('status') or 'thinking'}。当前子任务：{current}。"
-        f"计划：{plan}。近期动作：{actions}。{latest}。"
+        f"计划：{plan}。近期动作：{actions}。{latest}。当前有效事实：{facts}。"
     )
+
+
+def grounded_facts_message(context: TaskContext, *, current_frame_path: str | None) -> str:
+    """把当前帧仍有效的事实压缩为模型可读文本，不暴露坐标或原始工具结果。"""
+    if not current_frame_path:
+        return "无"
+    fragments: list[str] = []
+    for item in _grounded_facts(context):
+        if item["source_path"] != current_frame_path:
+            continue
+        if item["kind"] == "locate" and item["target_id"] is not None:
+            fragments.append(
+                f"已定位「{item['label']}」，可用 target_id={item['target_id']} 调用 mouse_move"
+            )
+        elif item["kind"] == "cursor_verification":
+            fragments.append(f"「{item['label']}」已移鼠并回注截图，确认后可无参数 mouse_click")
+        if len("；".join(fragments)) >= GROUNDED_FACT_SUMMARY_LIMIT:
+            break
+    return "；".join(fragments)[:GROUNDED_FACT_SUMMARY_LIMIT] or "无"
+
+
+def sanitize_grounded_facts(value: Any) -> list[GroundedFact]:
+    """过滤持久化事实中的未知或不完整条目，供会话加载与任务恢复共用。"""
+    if not isinstance(value, list):
+        return []
+    restored: list[GroundedFact] = []
+    for item in value[-GROUNDED_FACT_LIMIT:]:
+        if not isinstance(item, dict):
+            continue
+        fact = _restore_grounded_fact(item)
+        if fact is not None:
+            restored.append(fact)
+    return restored
 
 
 def _first_user_instruction(messages: list[dict[str, Any]]) -> str:
@@ -161,6 +288,53 @@ def _restore_action(value: dict[str, Any]) -> ActionSummary:
         "has_observation": bool(value.get("has_observation")),
         "conclusion": str(value.get("conclusion") or "")[:400],
     }
+
+
+def _restore_grounded_fact(value: dict[str, Any]) -> GroundedFact | None:
+    """把持久化事实收敛为白名单字段；不从历史消息推断可执行编号。"""
+    kind = value.get("kind")
+    if kind not in {"locate", "cursor_verification"}:
+        return None
+    label = str(value.get("label") or "").strip()
+    source_path = str(value.get("source_path") or "").strip()
+    if not label or not source_path or value.get("status") != "valid":
+        return None
+    target_id: int | None = None
+    if kind == "locate":
+        try:
+            target_id = int(value.get("target_id"))
+        except (TypeError, ValueError):
+            return None
+        if target_id < 1:
+            return None
+    return {
+        "kind": kind,
+        "label": _short_fact_text(label),
+        "status": "valid",
+        "source_path": source_path,
+        "conclusion": _short_fact_text(str(value.get("conclusion") or "")),
+        "target_id": target_id,
+    }
+
+
+def _grounded_facts(context: TaskContext) -> list[GroundedFact]:
+    """返回已恢复的事实副本，避免调用方修改原胶囊。"""
+    facts = context.get("grounded_facts")
+    if not isinstance(facts, list):
+        return []
+    return [dict(item) for item in facts if isinstance(item, dict)][-GROUNDED_FACT_LIMIT:]  # type: ignore[return-value]
+
+
+def _with_grounded_facts(context: TaskContext, facts: list[GroundedFact]) -> TaskContext:
+    """复制胶囊并按事实上限写入，确保旧事实不会无限累积。"""
+    updated = dict(context)
+    updated["grounded_facts"] = facts[-GROUNDED_FACT_LIMIT:]
+    return updated
+
+
+def _short_fact_text(value: str) -> str:
+    """裁剪事实展示文本，避免标签或结论膨胀模型上下文。"""
+    return value.strip()[:GROUNDED_FACT_TEXT_LIMIT]
 
 
 def _safe_arguments(name: str, arguments: Any) -> dict[str, Any]:

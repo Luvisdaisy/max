@@ -12,6 +12,7 @@ from max_gui.agent.prompts import GUI_SYSTEM_PROMPT, os_contract
 from max_gui.config import Settings
 from max_gui.desktop.fake import FakeDesktopBackend
 from max_gui.inference.client import ChatDelta, TokenUsage
+from max_gui.inference.omniparser import DetectedBox, LocateRuntime
 from max_gui.session.store import SessionStore
 from max_gui.tools.desktop import clear_desktop_context
 from max_gui.tools.registry import AutoApproveGate, build_default_registry
@@ -62,6 +63,23 @@ def _runner(settings: Settings, client) -> tuple[AgentRunner, SessionStore]:
     store = SessionStore(settings.sessions_dir)
     registry = build_default_registry(
         settings, gate=AutoApproveGate(), desktop=FakeDesktopBackend()
+    )
+    return AgentRunner(settings, client, registry, store), store
+
+
+async def _locate_safari(_path) -> list[DetectedBox]:
+    """为短期事实测试返回一个带稳定标签的可点击 Dock 图标。"""
+    return [DetectedBox(x1=0, y1=0, x2=20, y2=20, label="Safari", role="icon", score=1.0)]
+
+
+def _runner_with_locate(settings: Settings, client) -> tuple[AgentRunner, SessionStore]:
+    """装配含确定性定位结果的 Runner，验证真实工具到上下文的链路。"""
+    store = SessionStore(settings.sessions_dir)
+    registry = build_default_registry(
+        settings,
+        gate=AutoApproveGate(),
+        desktop=FakeDesktopBackend(),
+        locate=LocateRuntime(settings, parse_fn=_locate_safari),
     )
     return AgentRunner(settings, client, registry, store), store
 
@@ -638,6 +656,51 @@ async def test_task_context_rolls_actions_and_redacts_keyboard_text(settings: Se
     loaded = store.get(session.id)
     assert loaded is not None and loaded.task_context is not None
     assert secret not in json.dumps(loaded.task_context, ensure_ascii=False)
+
+
+async def test_grounded_facts_reuse_target_then_require_click_verification(
+    settings: Settings,
+) -> None:
+    """当前帧定位进入摘要，移鼠后的新帧仅保留无坐标点击核验事实。"""
+    calls = [
+        ("shot", "screenshot", {}),
+        ("locate", "locate", {}),
+        ("move", "mouse_move", {"target_id": 1}),
+    ]
+    client = ScriptedClient(
+        [
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": name, "arguments": json.dumps(arguments)},
+                    }
+                ]
+            )
+            for call_id, name, arguments in calls
+        ]
+        + [ChatDelta(text="完成")]
+    )
+    settings.max_iterations = 4
+    runner, store = _runner_with_locate(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text="打开 Safari")
+    move_request = client.requests[2]
+    move_user = next(item for item in move_request if item.get("role") == "user")
+    assert "Safari" in str(move_user["content"])
+    assert "target_id=1" in str(move_user["content"])
+    click_request = client.requests[3]
+    click_user = next(item for item in click_request if item.get("role") == "user")
+    assert "Safari" in str(click_user["content"])
+    assert "无参数 mouse_click" in str(click_user["content"])
+    facts = state["task_context"]["grounded_facts"]
+    assert len(facts) == 1
+    assert facts[0]["kind"] == "cursor_verification"
+    assert facts[0]["target_id"] is None
+    loaded = store.get(session.id)
+    assert loaded is not None and loaded.task_context is not None
+    assert loaded.task_context["grounded_facts"][0]["label"] == "Safari"
 
 
 async def test_context_diagnostics_count_without_copying_user_text(settings: Settings) -> None:
