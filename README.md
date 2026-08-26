@@ -15,6 +15,7 @@ uv run ruff format src tests scripts   # 格式化
 uv run ruff check src tests scripts    # 静态检查
 uv run pytest                  # 测试
 uv run python scripts/demo_week2_tools.py  # 第二周：打开计算器演示截图/键鼠/画框/OCR
+uv run python scripts/eval_agent.py --port 8765  # 启动本地 Web GUI 评测场
 max-gui              # 启动 Textual REPL（默认）
 max-gui tui --new    # 强制新会话
 max-gui serve        # 仅 local：启动 vLLM（默认加载 model/qwen3.5-4b）
@@ -23,6 +24,13 @@ max-gui serve        # 仅 local：启动 vLLM（默认加载 model/qwen3.5-4b�
 `max-gui serve` 会按顺序找 vLLM：`MAX_GUI_VLLM`、PATH 里的 `vllm`、`~/.venv-vllm-metal/bin/vllm`。未把该环境加入 PATH 时也能启动。Enter 发送，Shift+Enter 换行。
 
 会话记录保存在 `artifacts/sessions/`，每个会话一个以时间戳命名的 JSON 文件。当前推理模型只来自 `.env`，切换会话不会改模型。
+
+## Web GUI 评测场
+
+`artifacts/benchmarks/web-gui-v1.json` 定义 100 条本地 Web GUI 评测任务。测试场只监听
+`127.0.0.1`，Agent 通过真实浏览器截图和键鼠操作表单、文件列表与设置页面；任务是否成功由独立
+业务状态断言判定，不采信 Agent 自述。使用专用浏览器窗口并在每题前调用重置接口，详情见
+[`docs/web-gui-benchmark.md`](docs/web-gui-benchmark.md)。
 
 ## 本地运行日志与敏感信息
 

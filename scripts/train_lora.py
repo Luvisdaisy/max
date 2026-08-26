@@ -288,7 +288,7 @@ def train(args: argparse.Namespace) -> None:
 
 def merge_adapter(adapter: Path, model: Path, output: Path, trust_remote_code: bool) -> None:
     """把 adapter 合并到基础模型，输出供 vLLM 直接加载的完整权重。"""
-    _, _, PeftModel, _, _, _, AutoModelForImageTextToText, AutoProcessor, _, _ = _imports()
+    _, _, PeftModel, _, _, AutoModelForImageTextToText, AutoProcessor, _, _ = _imports()
     base = AutoModelForImageTextToText.from_pretrained(
         model, torch_dtype="auto", trust_remote_code=trust_remote_code
     )

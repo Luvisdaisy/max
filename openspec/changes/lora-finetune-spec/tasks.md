@@ -7,8 +7,8 @@
 ## 2. 训练执行
 
 - [x] 2.1 启动 vLLM 服务
-- [ ] 2.2 运行训练脚本（3-5 epochs）
-- [ ] 2.3 合并 LoRA 权重到 `model/qwen3.5-4b-lora/`
+- [x] 2.2 运行训练脚本（3-5 epochs）
+- [x] 2.3 合并 LoRA 权重到 `model/qwen3.5-4b-lora/`
 
 ## 3. 评估与部署
 
