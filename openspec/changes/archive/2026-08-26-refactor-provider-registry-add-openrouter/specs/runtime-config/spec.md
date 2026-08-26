@@ -1,9 +1,5 @@
-# runtime-config Specification
+## MODIFIED Requirements
 
-## Purpose
-
-仓库根目录 `.env` 作为可调运行参数的单一来源：推理后端、密钥、模型名与既有 `MAX_GUI_*` 字段。
-## Requirements
 ### Requirement: 仓库根目录 .env 为可调配置来源
 
 系统 MUST 在解析运行配置时，于探测到的仓库根目录读取 `.env`（若存在）。载入 MUST 使用不覆盖已有进程环境变量的方式，以便测试与显式 export 优先。根目录无 `.env` 时 MUST 使用代码内缺省值，且 MUST NOT 因此失败。仓库 MUST 提供无密钥的 `.env.example`。`.env` MUST NOT 作为受版本管理的密钥文件提交。主推理 provider 的 `.env` 配置 MUST 只负责选择名称和保存 provider 专属密钥；模型、端点与能力 MUST 由 Python provider 定义提供。
@@ -62,14 +58,7 @@
 - **WHEN** `MAX_PROVIDER=openrouter` 且仅设置 `MAX_PROVIDER_KEY`、未设置 `MAX_OPENROUTER_KEY`
 - **THEN** 系统视为缺少 OpenRouter 密钥
 
-### Requirement: OmniParser 路径 worker 必须为同机地址
-
-当 OmniParser worker 协议使用主进程本地绝对图像路径时，`MAX_GUI_OMNIPARSER_BASE_URL` 的 host MUST 为 loopback 地址。配置为非 loopback 地址时，首次 `locate` MUST 返回中文配置错误，MUST NOT 将本地绝对路径发送到该地址，也 MUST NOT 启动新的 worker。
-
-#### Scenario: 拒绝远端路径 worker
-
-- **WHEN** `MAX_GUI_OMNIPARSER_BASE_URL` 配置为 `http://192.0.2.10:8002`
-- **THEN** `locate` 返回说明仅支持本机 worker 的中文错误，且不会发出 HTTP 请求
+## ADDED Requirements
 
 ### Requirement: Provider 定义集中在 Python 注册表
 
@@ -84,3 +73,11 @@
 
 - **WHEN** `.env` 已同时保存各云端 provider 的专属密钥
 - **THEN** 用户只修改 `MAX_PROVIDER` 即可选择对应模型、端点与密钥
+
+## REMOVED Requirements
+
+### Requirement: dashscope 业务空间
+
+**Reason**：DashScope 北京专属端点已作为非敏感 provider 配置集中到 Python 注册表，不再运行时拼接 Workspace。
+
+**Migration**：删除或忽略 `.env` 中的 `MAX_DASHSCOPE_WORKSPACE`；需要更换业务空间时修改 `provider.py` 中的 DashScope 根端点。

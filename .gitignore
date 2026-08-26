@@ -13,8 +13,13 @@ wheels/
 .env
 
 # Local session transcripts and screenshots
-artifacts/
+artifacts/*
 artifacts/screenshots/
+!artifacts/benchmarks/
+!artifacts/benchmarks/*.json
+
+# Frontend build dependencies and generated assets
+frontend/**/node_modules/
 
 # Local model weights
 model/

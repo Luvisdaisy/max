@@ -15,15 +15,9 @@ from typing import Any
 import httpx
 from PIL import Image
 
-from max_gui.config import (
-    CLOUD_PROVIDERS,
-    KEYED_PROVIDERS,
-    Settings,
-    require_dashscope_workspace,
-    require_provider_key,
-    require_weights,
-)
+from max_gui.config import Settings, require_weights
 from max_gui.inference.images import prepare_image
+from max_gui.provider import get_provider, require_provider_key
 
 
 class ConnectionFailedError(RuntimeError):
@@ -100,11 +94,9 @@ class InferenceClient:
             ConnectionFailedError: 网络层失败。
             RuntimeError: HTTP 非 2xx。
         """
-        if self.settings.provider in KEYED_PROVIDERS:
-            require_provider_key(self.settings)
-            if self.settings.provider in CLOUD_PROVIDERS:
-                require_dashscope_workspace(self.settings)
-        elif self.settings.provider == "local" and self.check_weights:
+        provider = get_provider(self.settings.provider)
+        require_provider_key(provider, self.settings.api_key)
+        if provider.requires_local_weights and self.check_weights:
             require_weights(self.settings)
 
         payload: dict[str, Any] = {
@@ -119,7 +111,7 @@ class InferenceClient:
 
         headers = (
             {"Authorization": f"Bearer {self.settings.api_key}"}
-            if self.settings.provider in KEYED_PROVIDERS
+            if provider.api_key_env is not None
             else {}
         )
         url = self.settings.base_url.rstrip("/") + "/chat/completions"
@@ -170,20 +162,10 @@ class InferenceClient:
             detail = await _http_error_detail(exc)
             raise RuntimeError(f"推理服务返回 {exc.response.status_code}：{detail}") from exc
         except httpx.HTTPError as exc:
-            if self.settings.provider in CLOUD_PROVIDERS:
-                extra = "请检查网络与 MAX_PROVIDER_KEY。"
-                if self.settings.provider == "dashscope":
-                    extra = "请检查网络、MAX_PROVIDER_KEY 与 MAX_DASHSCOPE_WORKSPACE。"
-                raise ConnectionFailedError(
-                    self.settings.base_url,
-                    hint=f"无法连接推理服务（{self.settings.base_url}）。{extra}",
-                ) from exc
-            if self.settings.provider == "remote":
-                raise ConnectionFailedError(
-                    self.settings.base_url,
-                    hint=f"无法连接 WSL 推理服务（{self.settings.base_url}）。请检查局域网、端口转发与 API Key。",
-                ) from exc
-            raise ConnectionFailedError(self.settings.base_url) from exc
+            raise ConnectionFailedError(
+                self.settings.base_url,
+                hint=f"无法连接推理服务（{self.settings.base_url}）。{provider.connection_hint}",
+            ) from exc
 
         assembled.tool_calls = [tool_acc[key] for key in sorted(tool_acc)]
         return assembled
@@ -308,7 +290,8 @@ def to_chat_messages(
 ) -> list[dict[str, Any]]:
     """把任务状态消息转成 OpenAI chat 请求体，并回注选定的最近图像。
 
-    `dashscope` 且助手 content 含思考时，另设 `reasoning_content`，不拼进正文。
+    当前 provider 允许回传思考且助手 content 含思考时，另设
+    `reasoning_content`，不拼进正文。
 
     参数：
         raw_messages: 图状态中的消息。
@@ -321,6 +304,7 @@ def to_chat_messages(
     """
     keep = _recent_image_slots(raw_messages, selected_path=inline_image_path)
     encoded: list[dict[str, Any]] = []
+    replay_reasoning = get_provider(settings.provider).replay_reasoning
     for index, message in enumerate(raw_messages):
         role = message.get("role") or "user"
         item: dict[str, Any] = {"role": role}
@@ -359,7 +343,7 @@ def to_chat_messages(
                 item["content"] = content.get("text") or ""
             else:
                 item["content"] = content
-            if settings.provider == "dashscope" and isinstance(content, dict):
+            if replay_reasoning and isinstance(content, dict):
                 reasoning = str(content.get("reasoning") or "")
                 if reasoning:
                     item["reasoning_content"] = reasoning

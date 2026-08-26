@@ -33,6 +33,8 @@ class BenchmarkController:
             "total": 0,
         }
         self._lock = threading.Lock()
+        self._interrupt_requested = threading.Event()
+        self._runner: AgentRunner | None = None
 
     def progress(self) -> dict[str, Any]:
         """返回首页显示用进度副本。"""
@@ -48,8 +50,9 @@ class BenchmarkController:
         """
         tasks = select_task_batch(self.suite, task_count)
         with self._lock:
-            if self._status["status"] == "running":
+            if self._status["status"] in {"running", "interrupting"}:
                 return False
+            self._interrupt_requested.clear()
             self._status.update(
                 status="running",
                 completed=0,
@@ -58,6 +61,22 @@ class BenchmarkController:
                 report_path=None,
             )
         threading.Thread(target=lambda: asyncio.run(self._run_all(tasks)), daemon=True).start()
+        return True
+
+    def interrupt(self) -> bool:
+        """请求中断当前批次，并将请求转发给正在运行的 Agent。
+
+        返回：运行中的批次成功收到请求时为真；空闲或已结束时为假。
+        副作用：当前题会在 Agent 支持的下一个中断点结束，后续题目不会启动。
+        """
+        with self._lock:
+            if self._status["status"] != "running":
+                return False
+            self._interrupt_requested.set()
+            self._status["status"] = "interrupting"
+            runner = self._runner
+        if runner is not None:
+            runner.interrupt()
         return True
 
     async def _run_all(self, tasks: tuple[BenchmarkTask, ...]) -> None:
@@ -70,12 +89,18 @@ class BenchmarkController:
             build_default_registry(self.settings, gate=AutoApproveGate()),
             sessions,
         )
+        with self._lock:
+            self._runner = runner
+        if self._interrupt_requested.is_set():
+            runner.interrupt()
         try:
             for index, task in enumerate(tasks, start=1):
+                if self._interrupt_requested.is_set():
+                    break
                 self.store.reset(task.id)
                 with self._lock:
                     self._status.update(completed=index - 1, current_task=task.id)
-                open_benchmark_browser(f"{self.base_url}{task.route}")
+                open_benchmark_browser(f"{self.base_url}/arena/home")
                 await asyncio.sleep(1)
                 results.append(
                     await run_task(
@@ -87,6 +112,8 @@ class BenchmarkController:
                         model=self.settings.model_name,
                     )
                 )
+                if self._interrupt_requested.is_set():
+                    break
             task_count = len(tasks)
             report = (
                 self.settings.project_root
@@ -97,11 +124,16 @@ class BenchmarkController:
             write_report(results, report, requested_tasks=task_count)
             with self._lock:
                 self._status.update(
-                    status="completed", completed=len(results), report_path=str(report)
+                    status="interrupted" if self._interrupt_requested.is_set() else "completed",
+                    completed=len(results),
+                    report_path=str(report),
                 )
         except Exception as exc:
             with self._lock:
                 self._status.update(status="failed", error=str(exc))
+        finally:
+            with self._lock:
+                self._runner = None
 
     async def _read_state(self, task: BenchmarkTask) -> dict[str, object]:
         """向评分器提供当前任务的业务状态副本。"""
@@ -115,6 +147,8 @@ def run_benchmark_server(settings: Settings, *, port: int = 8765) -> None:
     controller = BenchmarkController(
         settings, suite, app.state.benchmark_store, f"http://127.0.0.1:{port}"
     )
-    app = create_benchmark_app(suite, start=controller.start, progress=controller.progress)
+    app = create_benchmark_app(
+        suite, start=controller.start, progress=controller.progress, interrupt=controller.interrupt
+    )
     controller.store = app.state.benchmark_store
     uvicorn.run(app, host="127.0.0.1", port=port)

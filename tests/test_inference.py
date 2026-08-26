@@ -9,19 +9,7 @@ import httpx
 import pytest
 from PIL import Image
 
-from max_gui.config import (
-    MODELSCOPE_BASE_URL,
-    MissingDashscopeWorkspaceError,
-    MissingProviderKeyError,
-    Settings,
-    UnknownProviderError,
-    dashscope_base_url,
-    has_provider_key,
-    load_settings,
-    require_dashscope_workspace,
-    require_provider_key,
-    require_weights,
-)
+from max_gui.config import Settings, load_settings, require_weights
 from max_gui.inference.client import (
     ConnectionFailedError,
     InferenceClient,
@@ -29,6 +17,14 @@ from max_gui.inference.client import (
     to_chat_messages,
 )
 from max_gui.inference.images import ImagePrepError, prepare_image
+from max_gui.provider import (
+    PROVIDERS,
+    MissingProviderKeyError,
+    UnknownProviderError,
+    get_provider,
+    has_provider_key,
+    require_provider_key,
+)
 
 
 def _isolate_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -60,14 +56,14 @@ def test_env_file_sets_provider(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     """根目录 `.env` 写入 `MAX_PROVIDER` 后生效。"""
     _isolate_root(monkeypatch, tmp_path)
     (tmp_path / ".env").write_text(
-        "MAX_PROVIDER=modelscope\nMAX_PROVIDER_KEY=tok-from-file\n",
+        "MAX_PROVIDER=modelscope\nMAX_MODELSCOPE_KEY=tok-from-file\n",
         encoding="utf-8",
     )
     settings = load_settings(workspace=tmp_path)
     assert settings.provider == "modelscope"
     assert settings.model_name == "Qwen/Qwen3.8-27B"
     assert settings.api_key == "tok-from-file"
-    assert settings.base_url == MODELSCOPE_BASE_URL
+    assert settings.base_url == PROVIDERS["modelscope"].base_url
 
 
 def test_process_env_overrides_dotenv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -83,17 +79,17 @@ def test_process_env_overrides_dotenv(monkeypatch: pytest.MonkeyPatch, tmp_path:
 def test_remote_uses_lan_endpoint_without_local_weights(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """remote 读取 LAN 网关地址，不读取密钥且不依赖 macOS 模型目录。"""
+    """remote 使用代码内 LAN 配置，不读取密钥或环境覆盖。"""
     _isolate_root(monkeypatch, tmp_path)
     monkeypatch.setenv("MAX_PROVIDER", "remote")
-    monkeypatch.setenv("MAX_GUI_BASE_URL", "http://192.168.1.158:8000/v1")
+    monkeypatch.setenv("MAX_GUI_BASE_URL", "http://203.0.113.10:9999/v1")
     monkeypatch.setenv("MODEL_NAME", "qwen3.5-4b-lora")
     settings = load_settings(workspace=tmp_path)
     assert settings.provider == "remote"
     assert settings.base_url == "http://192.168.1.158:8000/v1"
     assert settings.api_key == "EMPTY"
-    assert settings.model_name == "qwen3.5-4b-lora"
-    require_provider_key(settings)
+    assert settings.model_name == "qwen3.5-4b"
+    require_provider_key(get_provider(settings.provider), settings.api_key)
 
 
 async def test_remote_stream_skips_local_weight_check(
@@ -102,7 +98,6 @@ async def test_remote_stream_skips_local_weight_check(
     """remote 不带认证头，且不因 macOS 没有 LoRA 权重而失败。"""
     _isolate_root(monkeypatch, tmp_path)
     monkeypatch.setenv("MAX_PROVIDER", "remote")
-    monkeypatch.setenv("MAX_GUI_BASE_URL", "http://192.168.1.158:8000/v1")
     settings = load_settings(workspace=tmp_path)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -119,10 +114,10 @@ async def test_remote_stream_skips_local_weight_check(
 
 
 def test_modelscope_default_model_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """`modelscope` 且未写 `MODEL_NAME` 时默认为 Qwen3.8-27B。"""
+    """`modelscope` 使用注册表定义的 Qwen3.8-27B。"""
     _isolate_root(monkeypatch, tmp_path)
     monkeypatch.setenv("MAX_PROVIDER", "modelscope")
-    monkeypatch.setenv("MAX_PROVIDER_KEY", "tok")
+    monkeypatch.setenv("MAX_MODELSCOPE_KEY", "tok")
     settings = load_settings(workspace=tmp_path)
     assert settings.model_name == "Qwen/Qwen3.8-27B"
 
@@ -141,44 +136,40 @@ def test_unknown_provider_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     raise AssertionError("expected UnknownProviderError")
 
 
-def test_dashscope_default_model_and_endpoint(
+def test_dashscope_uses_registered_model_and_endpoint(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """`dashscope` 未写 `MODEL_NAME` 时默认为 `qwen3.8-27b`，端点含 Workspace。"""
+    """`dashscope` 使用注册表中的固定模型与北京专属端点。"""
     _isolate_root(monkeypatch, tmp_path)
     monkeypatch.setenv("MAX_PROVIDER", "dashscope")
-    monkeypatch.setenv("MAX_PROVIDER_KEY", "sk-tok")
-    monkeypatch.setenv("MAX_DASHSCOPE_WORKSPACE", "llm-demo")
+    monkeypatch.setenv("MAX_DASHSCOPE_KEY", "sk-tok")
     settings = load_settings(workspace=tmp_path)
     assert settings.provider == "dashscope"
     assert settings.model_name == "qwen3.8-27b"
-    assert settings.dashscope_workspace == "llm-demo"
-    assert settings.base_url == dashscope_base_url("llm-demo")
+    assert settings.base_url == PROVIDERS["dashscope"].base_url
     assert settings.api_key == "sk-tok"
 
 
-def test_dashscope_uses_model_name_from_env(
+def test_dashscope_ignores_model_name_from_env(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """`dashscope` 已写 `MODEL_NAME` 时请求模型名用该值，不覆盖为缺省。"""
+    """`MODEL_NAME` 不再覆盖 `dashscope` 的代码内模型。"""
     _isolate_root(monkeypatch, tmp_path)
     monkeypatch.setenv("MAX_PROVIDER", "dashscope")
-    monkeypatch.setenv("MAX_PROVIDER_KEY", "sk-tok")
-    monkeypatch.setenv("MAX_DASHSCOPE_WORKSPACE", "llm-demo")
+    monkeypatch.setenv("MAX_DASHSCOPE_KEY", "sk-tok")
     monkeypatch.setenv("MODEL_NAME", "qwen3.5-plus")
     settings = load_settings(workspace=tmp_path)
-    assert settings.model_name == "qwen3.5-plus"
+    assert settings.model_name == "qwen3.8-27b"
 
 
 def test_dashscope_missing_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """`dashscope` 缺 `MAX_PROVIDER_KEY` 时视为缺密钥。"""
+    """`dashscope` 缺 `MAX_DASHSCOPE_KEY` 时视为缺密钥。"""
     _isolate_root(monkeypatch, tmp_path)
     monkeypatch.setenv("MAX_PROVIDER", "dashscope")
-    monkeypatch.setenv("MAX_DASHSCOPE_WORKSPACE", "llm-demo")
     settings = load_settings(workspace=tmp_path)
     assert not has_provider_key(settings.api_key)
     try:
-        require_provider_key(settings)
+        require_provider_key(get_provider(settings.provider), settings.api_key)
     except MissingProviderKeyError as exc:
         assert "max-gui serve" not in str(exc)
         assert "dashscope" in str(exc)
@@ -186,43 +177,18 @@ def test_dashscope_missing_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     raise AssertionError("expected MissingProviderKeyError")
 
 
-def test_dashscope_missing_workspace(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """`dashscope` 缺业务空间 ID 时中文报错。"""
-    _isolate_root(monkeypatch, tmp_path)
-    monkeypatch.setenv("MAX_PROVIDER", "dashscope")
-    monkeypatch.setenv("MAX_PROVIDER_KEY", "sk-tok")
-    settings = load_settings(workspace=tmp_path)
-    assert settings.dashscope_workspace == ""
-    try:
-        require_dashscope_workspace(settings)
-    except MissingDashscopeWorkspaceError as exc:
-        assert "MAX_DASHSCOPE_WORKSPACE" in str(exc)
-        assert "max-gui serve" not in str(exc)
-        return
-    raise AssertionError("expected MissingDashscopeWorkspaceError")
-
-
 def test_dashscope_env_not_used_as_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """仅有 `DASHSCOPE_API_KEY` 时仍视为缺密钥。"""
     _isolate_root(monkeypatch, tmp_path)
     monkeypatch.setenv("MAX_PROVIDER", "dashscope")
     monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-from-dashscope")
-    monkeypatch.setenv("MAX_DASHSCOPE_WORKSPACE", "llm-demo")
     settings = load_settings(workspace=tmp_path)
     assert not has_provider_key(settings.api_key)
     try:
-        require_provider_key(settings)
+        require_provider_key(get_provider(settings.provider), settings.api_key)
     except MissingProviderKeyError:
         return
     raise AssertionError("expected MissingProviderKeyError")
-
-
-def test_local_does_not_require_workspace(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """`local` 不要求 `MAX_DASHSCOPE_WORKSPACE`。"""
-    _isolate_root(monkeypatch, tmp_path)
-    settings = load_settings(workspace=tmp_path)
-    assert settings.provider == "local"
-    require_dashscope_workspace(settings)
 
 
 def test_sdk_token_not_used_as_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -233,10 +199,34 @@ def test_sdk_token_not_used_as_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     settings = load_settings(workspace=tmp_path)
     assert not has_provider_key(settings.api_key)
     try:
-        require_provider_key(settings)
+        require_provider_key(get_provider(settings.provider), settings.api_key)
     except MissingProviderKeyError:
         return
     raise AssertionError("expected MissingProviderKeyError")
+
+
+def test_old_shared_key_not_used(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """旧 `MAX_PROVIDER_KEY` 不会替代 OpenRouter 专属密钥。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", "openrouter")
+    monkeypatch.setenv("MAX_PROVIDER_KEY", "legacy-token")
+    settings = load_settings(workspace=tmp_path)
+    assert not has_provider_key(settings.api_key)
+    with pytest.raises(MissingProviderKeyError, match="MAX_OPENROUTER_KEY"):
+        require_provider_key(get_provider(settings.provider), settings.api_key)
+
+
+def test_openrouter_uses_registered_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """OpenRouter 使用固定模型、端点与自己的密钥环境变量。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", "openrouter")
+    monkeypatch.setenv("MAX_OPENROUTER_KEY", "or-token")
+    monkeypatch.setenv("MODEL_NAME", "ignored-model")
+    settings = load_settings(workspace=tmp_path)
+    assert settings.provider == "openrouter"
+    assert settings.model_name == "qwen/qwen3.5-plus"
+    assert settings.base_url == "https://openrouter.ai/api/v1"
+    assert settings.api_key == "or-token"
 
 
 def test_local_short_name_not_aliased(settings: Settings, tmp_path: Path) -> None:
@@ -634,13 +624,13 @@ async def test_modelscope_connection_omits_serve(settings: Settings) -> None:
         await client.stream([{"role": "user", "content": "hi"}])
     except ConnectionFailedError as exc:
         assert "max-gui serve" not in str(exc)
-        assert "MAX_PROVIDER_KEY" in str(exc)
+        assert "MAX_MODELSCOPE_KEY" in str(exc)
         return
     raise AssertionError("expected ConnectionFailedError")
 
 
 async def test_modelscope_missing_key_skips_http(settings: Settings) -> None:
-    """缺 `MAX_PROVIDER_KEY` 时不发请求。"""
+    """缺 `MAX_MODELSCOPE_KEY` 时不发请求。"""
     settings.provider = "modelscope"
     settings.api_key = ""
     settings.model_name = "Qwen/Qwen3.8-27B"
@@ -687,6 +677,44 @@ async def test_modelscope_skips_local_weights_and_sends_id(
     assert seen["tool_choice"] == "auto"
 
 
+async def test_openrouter_sends_registered_model_key_and_tools(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """OpenRouter 复用统一兼容请求，并发送固定模型、Bearer 密钥和工具。"""
+    definition = PROVIDERS["openrouter"]
+    settings.provider = definition.name
+    settings.base_url = definition.base_url
+    settings.model_name = definition.model_name
+    settings.api_key = "or-token"
+    settings.model_root = tmp_path / "no-weights"
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        seen["url"] = str(request.url)
+        seen["authorization"] = request.headers.get("authorization")
+        seen["model"] = payload["model"]
+        seen["tools"] = payload.get("tools")
+        seen["tool_choice"] = payload.get("tool_choice")
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_sse(["ok"]).encode(),
+        )
+
+    tools = [{"type": "function", "function": {"name": "screenshot", "parameters": {}}}]
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=True)
+    result = await client.stream([{"role": "user", "content": "hi"}], tools=tools)
+    assert result.text == "ok"
+    assert seen == {
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authorization": "Bearer or-token",
+        "model": "qwen/qwen3.5-plus",
+        "tools": tools,
+        "tool_choice": "auto",
+    }
+
+
 def _sse_tool_calls() -> str:
     """两段 `tool_calls` 增量拼成一次调用。"""
     chunks = [
@@ -726,8 +754,7 @@ def _configure_dashscope(settings: Settings, tmp_path: Path) -> None:
     """把夹具改成可用的 `dashscope` 配置，且无本地权重目录。"""
     settings.provider = "dashscope"
     settings.api_key = "sk-tok"
-    settings.dashscope_workspace = "llm-demo"
-    settings.model_name = "qwen3.5-plus"
+    settings.model_name = PROVIDERS["dashscope"].model_name
     settings.model_root = tmp_path / "no-weights"
 
 
@@ -740,8 +767,7 @@ async def test_dashscope_connection_omits_serve(settings: Settings, tmp_path: Pa
     except ConnectionFailedError as exc:
         message = str(exc)
         assert "max-gui serve" not in message
-        assert "MAX_PROVIDER_KEY" in message
-        assert "MAX_DASHSCOPE_WORKSPACE" in message
+        assert "MAX_DASHSCOPE_KEY" in message
         return
     raise AssertionError("expected ConnectionFailedError")
 
@@ -763,29 +789,12 @@ async def test_dashscope_missing_key_skips_http(settings: Settings, tmp_path: Pa
     raise AssertionError("expected MissingProviderKeyError")
 
 
-async def test_dashscope_missing_workspace_skips_http(settings: Settings, tmp_path: Path) -> None:
-    """`dashscope` 缺 Workspace 时不发请求。"""
-    _configure_dashscope(settings, tmp_path)
-    settings.dashscope_workspace = ""
-
-    def handler(_request: httpx.Request) -> httpx.Response:
-        raise AssertionError("must not send HTTP without workspace")
-
-    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=True)
-    try:
-        await client.stream([{"role": "user", "content": "hi"}])
-    except MissingDashscopeWorkspaceError as exc:
-        assert "max-gui serve" not in str(exc)
-        return
-    raise AssertionError("expected MissingDashscopeWorkspaceError")
-
-
 async def test_dashscope_skips_local_weights_and_sends_id(
     settings: Settings, tmp_path: Path
 ) -> None:
-    """DashScope 不检查本地目录，请求打专属域名且 `model` 为当前 `MODEL_NAME`。"""
+    """DashScope 不检查本地目录，请求使用注册表端点与模型。"""
     _configure_dashscope(settings, tmp_path)
-    settings.base_url = dashscope_base_url("llm-demo")
+    settings.base_url = PROVIDERS["dashscope"].base_url
     seen: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -804,18 +813,15 @@ async def test_dashscope_skips_local_weights_and_sends_id(
     tools = [{"type": "function", "function": {"name": "screenshot", "parameters": {}}}]
     result = await client.stream([{"role": "user", "content": "hi"}], tools=tools)
     assert result.text == "ok"
-    assert seen["model"] == "qwen3.5-plus"
+    assert seen["model"] == "qwen3.8-27b"
     assert seen["tools"] == tools
     assert seen["tool_choice"] == "auto"
-    assert seen["url"] == (
-        "https://llm-demo.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
-    )
+    assert seen["url"] == f"{PROVIDERS['dashscope'].base_url}/chat/completions"
 
 
 async def test_dashscope_assembles_tool_calls(settings: Settings, tmp_path: Path) -> None:
     """DashScope 兼容 SSE 的 `tool_calls` 增量拼成完整调用。"""
     _configure_dashscope(settings, tmp_path)
-    settings.base_url = dashscope_base_url("llm-demo")
 
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
