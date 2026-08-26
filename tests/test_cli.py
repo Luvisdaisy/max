@@ -47,6 +47,13 @@ def test_model_flag_removed() -> None:
     raise AssertionError("expected SystemExit for removed --model")
 
 
+def test_benchmark_task_count_is_not_a_cli_argument() -> None:
+    """评测规模仅能从首页选择，CLI 不接受数字位置参数。"""
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--benchmark", "10"])
+
+
 def test_missing_weights_includes_path_not_download(settings: Settings, tmp_path: Path) -> None:
     """缺权重时错误信息包含目录路径，不含 download 命令。"""
     settings.model_name = "qwen3.5-2b"

@@ -13,6 +13,7 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SUITE = PROJECT_ROOT / "artifacts" / "benchmarks" / "web-gui-v1.json"
 REQUIRED_CATEGORIES = {"basic", "single_page", "multi_step", "robustness"}
+SMOKE_DIFFICULTY_QUOTAS = {"easy": 4, "medium": 3, "hard": 3}
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +69,30 @@ def load_task_suite(path: Path = DEFAULT_SUITE) -> TaskSuite:
     if not REQUIRED_CATEGORIES.issubset(categories):
         raise ValueError("任务集必须覆盖四类任务")
     return TaskSuite(version=raw["version"], tasks=tasks)
+
+
+def select_task_batch(suite: TaskSuite, task_count: int) -> tuple[BenchmarkTask, ...]:
+    """从已校验任务集选择固定规模的可复现批次。
+
+    参数：`suite` 为完整版本化任务集；`task_count` 仅支持 10 或 100。
+    返回：100 时返回完整任务序列；10 时返回按原始顺序排列的 4 easy、3 medium、3 hard 任务。
+    异常：任务数量不受支持，或任务集不能满足难度配额时抛出 `ValueError`。
+    """
+    if task_count == 100:
+        return suite.tasks
+    if task_count != 10:
+        raise ValueError("任务数量仅支持 10 或 100")
+    remaining = dict(SMOKE_DIFFICULTY_QUOTAS)
+    selected: list[BenchmarkTask] = []
+    for task in suite.tasks:
+        if remaining.get(task.difficulty, 0) <= 0:
+            continue
+        selected.append(task)
+        remaining[task.difficulty] -= 1
+    if any(remaining.values()):
+        missing = ", ".join(name for name, count in remaining.items() if count)
+        raise ValueError(f"任务集缺少冒烟评测所需难度：{missing}")
+    return tuple(selected)
 
 
 def _task_from_dict(raw: Any) -> BenchmarkTask:

@@ -20,8 +20,9 @@
 - LoRA rank 64，alpha 32，target_modules 覆盖 Qwen 典型注意力和 FFN 层。
 - 使用 Accelerate + bitsandbytes 进行 4/8 位量化加速。
 - 提示词模板已优化为“先截图 + 决策工具调用”格式。
-- macOS 使用 `remote` 后端访问家庭局域网内 WSL 的 vLLM；远端端点必须配置
-  `MAX_GUI_BASE_URL` 与 `MAX_PROVIDER_KEY`，客户端不检查 macOS 本地权重。
+- macOS 使用 `remote` 后端访问家庭局域网内 WSL 的受限网关；远端端点配置
+  `MAX_GUI_BASE_URL`，客户端不检查 macOS 本地权重，也不要求 API Key。网关仅开放
+  `/health`、`/v1/models` 与 `/v1/chat/completions`，Windows 防火墙限制为可信局域网来源。
 
 ## Risks / Trade-offs
 
@@ -31,9 +32,11 @@
 
 ## Migration Plan
 
-- WSL 合并权重后以 `--api-key` 启动 vLLM；Windows 防火墙仅允许 macOS 的保留 LAN IP。
-- macOS 设置 `MAX_PROVIDER=remote`、`MODEL_NAME=qwen3.5-4b-lora`、远程
-  `MAX_GUI_BASE_URL` 与同一 API Key；不运行 `max-gui serve`。
+- WSL 合并权重后由项目网关公开 `8000`，vLLM 后端仅监听 `127.0.0.1:8001`；Windows
+  防火墙仅允许 macOS 的保留 LAN IP 或可信局域网。
+- macOS 设置 `MAX_PROVIDER=remote`、`MODEL_NAME=qwen3.5-4b-lora` 与远程
+  `MAX_GUI_BASE_URL=http://192.168.1.158:8000/v1`；不设置 `MAX_PROVIDER_KEY`，也不运行
+  `max-gui serve`。
 - 保持原有 local、modelscope、dashscope 后端兼容。
 
 ## Open Questions

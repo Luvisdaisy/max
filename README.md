@@ -2,20 +2,22 @@
 
 本地多模态 ReAct GUI Agent CLI。开发测试默认使用已下载的 Qwen3.5-4B（`model/qwen3.5-4b`）。仓库内 Python 代码需按 `AGENTS.md`「中文代码文档」在模块与函数签名处写中文说明。
 
-当前能力：Textual REPL（思考与正文分区流式展示，工具结果在执行当时写入记录区，状态栏显示思考中 / 执行工具 / 观察中；默认打开独立运行监控面板）、LangGraph ReAct（Think / Act / Observe；每次 think 注入中文 GUI 系统契约，不写入会话：标明真实操作系统，桌面任务一律键鼠完成，每一次键鼠动作都要截图核验；轻量计划字段；单回合默认最多 20 轮；think/act 增量写入会话；推理失败写入会话 `error`）、对接独立 vLLM、魔搭 API-Inference 或阿里云百炼 DashScope（请求只编码最近一张仍存在的图；思考字段与正文分通道；三种后端都发送 tools；`dashscope` 把历史思考以 `reasoning_content` 回传）、PyAutoGUI 桌面工具（`screenshot` 图像回注，超界 `region` 夹紧到主屏；`screen_info`；`mouse_move` 成功后回注带光标的截图；`mouse_click` 只点当前位置、不接受坐标；`mouse_drag` 从当前位置拖到终点；`mouse_scroll`、`keyboard_type` / `keyboard_press`；`keyboard_press.keys` 仅接受非空字符串数组；坐标按模型看见的视图像素换算，必须落在当前视图内，出界拒绝；成功摘要只报视图像素；坐标系写入会话；点击/拖拽/滚轮/输入/按键成功后附新截图；工具不弹确认）。整图 `ocr` 用于抄字；`locate` 首次调用再启动独立本机 OmniParser，对当前截图返回可执行的控件编号，历史或外部图片的检测结果仅供观察。会话写在 `artifacts/sessions/`，每次用户任务的结构化运行事件写在 `artifacts/runs/`，截图写在 `artifacts/screenshots/`。助手消息可带思考原文 `reasoning`（回放用；`local` / `modelscope` 不回传，`dashscope` 以独立字段回传）。tool 消息会记下 `exec` 元数据，TUI 记录区只显示工具摘要文本。macOS 上拒绝 `windows` 键，提示改用 `command`；需开启屏幕录制与辅助功能。改本地 `MODEL_NAME` 后需重新执行 `max-gui serve`。
+当前能力：Textual REPL（思考与正文分区流式展示，工具结果在执行当时写入记录区，状态栏显示思考中 / 执行工具 / 观察中；默认打开独立运行监控面板）、LangGraph ReAct（Think / Act / Observe；每次 think 注入中文 GUI 系统契约，不写入会话：标明真实操作系统，桌面任务一律键鼠完成，每一次键鼠动作都要截图核验；轻量计划字段；单回合默认最多 20 轮；think/act 增量写入会话；推理失败写入会话 `error`）、对接独立 vLLM、可信局域网 WSL 网关、魔搭 API-Inference 或阿里云百炼 DashScope（请求只编码最近一张仍存在的图；思考字段与正文分通道；四种后端都发送 tools；`dashscope` 把历史思考以 `reasoning_content` 回传）、PyAutoGUI 桌面工具（`screenshot` 图像回注，超界 `region` 夹紧到主屏；`screen_info`；`mouse_move` 成功后回注带光标的截图；`mouse_click` 只点当前位置、不接受坐标；`mouse_drag` 从当前位置拖到终点；`mouse_scroll`、`keyboard_type` / `keyboard_press`；`keyboard_press.keys` 仅接受非空字符串数组；坐标按模型看见的视图像素换算，必须落在当前视图内，出界拒绝；成功摘要只报视图像素；坐标系写入会话；点击/拖拽/滚轮/输入/按键成功后附新截图；工具不弹确认）。整图 `ocr` 用于抄字；`locate` 首次调用再启动独立本机 OmniParser，对当前截图返回可执行的控件编号，历史或外部图片的检测结果仅供观察。会话写在 `artifacts/sessions/`，每次用户任务的结构化运行事件写在 `artifacts/runs/`，截图写在 `artifacts/screenshots/`。助手消息可带思考原文 `reasoning`（回放用；`local` / `modelscope` 不回传，`dashscope` 以独立字段回传）。tool 消息会记下 `exec` 元数据，TUI 记录区只显示工具摘要文本。macOS 上拒绝 `windows` 键，提示改用 `command`；需开启屏幕录制与辅助功能。改本地 `MODEL_NAME` 后需重新执行 `max-gui serve`。
 
-可调参数写在仓库根目录 `.env`（先复制 `.env.example`）。推理后端由 `MAX_PROVIDER` 选择：`local` 走本机 vLLM（默认 `MODEL_NAME=qwen3.5-4b`，权重放在 `model/<MODEL_NAME>`）；`modelscope` 走魔搭 API-Inference（默认 `Qwen/Qwen3.8-27B`），必须填写 `MAX_PROVIDER_KEY`；`dashscope` 走阿里云百炼北京专属域名（未写 `MODEL_NAME` 时默认 `qwen3.8-27b`，已写则用 `.env` 的 `MODEL_NAME`），必须填写 `MAX_PROVIDER_KEY` 与 `MAX_DASHSCOPE_WORKSPACE`。不要把填了密钥的 `.env` 提交进仓库。
+Agent 会在单个未完成任务内持久化有上限的已落地事实：仅复用绑定当前截图的有效定位编号与光标核验信息；新截图、失败或新任务会使过期事实失效。事实摘要不会保存逻辑坐标、OCR 原文或键盘输入正文。
+
+可调参数写在仓库根目录 `.env`（先复制 `.env.example`）。推理后端由 `MAX_PROVIDER` 选择：`local` 走本机 vLLM（默认 `MODEL_NAME=qwen3.5-4b`，权重放在 `model/<MODEL_NAME>`）；`remote` 走可信局域网 WSL 网关（填写 `MAX_GUI_BASE_URL` 与网关模型名，不配置 API Key，且不检查本机权重）；`modelscope` 走魔搭 API-Inference（默认 `Qwen/Qwen3.8-27B`），必须填写 `MAX_PROVIDER_KEY`；`dashscope` 走阿里云百炼北京专属域名（未写 `MODEL_NAME` 时默认 `qwen3.8-27b`，已写则用 `.env` 的 `MODEL_NAME`），必须填写 `MAX_PROVIDER_KEY` 与 `MAX_DASHSCOPE_WORKSPACE`。不要把填了密钥的 `.env` 提交进仓库。
 
 ## 命令
 
 ```bash
-cp .env.example .env   # 按需填写 MAX_PROVIDER / MAX_PROVIDER_KEY / MAX_DASHSCOPE_WORKSPACE / MODEL_NAME
+cp .env.example .env   # 按需填写 MAX_PROVIDER；remote 填 MAX_GUI_BASE_URL 与 MODEL_NAME，云端后端再填密钥
 uv sync --group dev
 uv run ruff format src tests scripts   # 格式化
 uv run ruff check src tests scripts    # 静态检查
 uv run pytest                  # 测试
 uv run python scripts/demo_week2_tools.py  # 第二周：打开计算器演示截图/键鼠/画框/OCR
-uv run python scripts/eval_agent.py --port 8765  # 启动本地 Web GUI 评测场
+max --benchmark         # 启动本地 Web GUI 评测首页，在页面选择运行 10 或 100 条任务
 max-gui              # 启动 Textual REPL（默认）
 max-gui tui --new    # 强制新会话
 max-gui serve        # 仅 local：启动 vLLM（默认加载 model/qwen3.5-4b）
@@ -27,7 +29,9 @@ max-gui serve        # 仅 local：启动 vLLM（默认加载 model/qwen3.5-4b�
 
 ## Web GUI 评测场
 
-`artifacts/benchmarks/web-gui-v1.json` 定义 100 条本地 Web GUI 评测任务。测试场只监听
+`artifacts/benchmarks/web-gui-v1.json` 定义 100 条本地 Web GUI 评测任务。评测首页提供「运行 10 条」
+和「运行 100 条」按钮；10 条固定覆盖 4 easy、3 medium、3 hard，适合作为冒烟评测，100 条用于完整
+评测。测试场只监听
 `127.0.0.1`，Agent 通过真实浏览器截图和键鼠操作表单、文件列表与设置页面；任务是否成功由独立
 业务状态断言判定，不采信 Agent 自述。使用专用浏览器窗口并在每题前调用重置接口，详情见
 [`docs/web-gui-benchmark.md`](docs/web-gui-benchmark.md)。

@@ -62,11 +62,20 @@ def termination_reason(
     return "completed"
 
 
-def write_report(results: list[TaskResult], path: Path) -> dict[str, object]:
-    """写入逐题 JSON 和同路径 Markdown 汇总，返回汇总对象。"""
+def write_report(
+    results: list[TaskResult], path: Path, *, requested_tasks: int
+) -> dict[str, object]:
+    """写入逐题 JSON 和同路径 Markdown 汇总，保留计划评测规模。
+
+    参数：`results` 为已结束任务的结果；`path` 为 JSON 输出路径；`requested_tasks` 为首页选择的
+        10 或 100 条批次规模。
+    返回：写入文件的汇总字典。
+    异常：目录创建或文件写入失败时透传 `OSError`。
+    """
     measured = [item for item in results if item.termination_reason != "environment_error"]
     total = len(measured)
     summary = {
+        "requested_tasks": requested_tasks,
         "tasks": len(results),
         "measured_tasks": total,
         "task_success_rate": sum(item.strict_success for item in measured) / total

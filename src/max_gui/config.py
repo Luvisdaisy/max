@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 DEFAULT_PROVIDER = "local"
 PROVIDERS = frozenset({"local", "remote", "modelscope", "dashscope"})
 CLOUD_PROVIDERS = frozenset({"modelscope", "dashscope"})
-KEYED_PROVIDERS = CLOUD_PROVIDERS | frozenset({"remote"})
+KEYED_PROVIDERS = CLOUD_PROVIDERS
 DEFAULT_LOCAL_MODEL = "qwen3.5-4b"
 DEFAULT_MODELSCOPE_MODEL = "Qwen/Qwen3.8-27B"
 DEFAULT_DASHSCOPE_MODEL = "qwen3.8-27b"
@@ -36,13 +36,11 @@ class UnknownProviderError(ValueError):
 
 
 class MissingProviderKeyError(ValueError):
-    """云端后端缺少 `MAX_PROVIDER_KEY`。"""
+    """需要认证的云端后端缺少 `MAX_PROVIDER_KEY`。"""
 
     def __init__(self, provider: str = "modelscope") -> None:
         """参数：`provider` 为当前云端后端名，用于区分文案。"""
-        if provider == "remote":
-            detail = "使用 remote 时请在 .env 中填写 WSL vLLM 的 API Key。"
-        elif provider == "dashscope":
+        if provider == "dashscope":
             detail = "使用 dashscope 时请在 .env 中填写百炼 API Key。"
         else:
             detail = "使用 modelscope 时请在 .env 中填写魔搭 Access Token。"
@@ -262,7 +260,8 @@ def load_settings(
         if not model_name:
             model_name = DEFAULT_LOCAL_MODEL
         base_url = (os.environ.get("MAX_GUI_BASE_URL") or "").strip()
-        api_key = (os.environ.get("MAX_PROVIDER_KEY") or "").strip()
+        # WSL 网关仅由可信局域网与 Windows 防火墙隔离，不使用应用层 API Key。
+        api_key = "EMPTY"
     else:
         model_name = (os.environ.get("MODEL_NAME") or DEFAULT_LOCAL_MODEL).strip()
         if not model_name:
@@ -301,7 +300,7 @@ def load_settings(
 
 
 def require_provider_key(settings: Settings) -> None:
-    """`modelscope` 与 `dashscope` 时必须已有 `MAX_PROVIDER_KEY`。
+    """需要认证的云端后端必须已有 `MAX_PROVIDER_KEY`。
 
     异常：
         MissingProviderKeyError: 密钥为空。

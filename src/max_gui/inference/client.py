@@ -104,7 +104,7 @@ class InferenceClient:
             require_provider_key(self.settings)
             if self.settings.provider in CLOUD_PROVIDERS:
                 require_dashscope_workspace(self.settings)
-        elif self.check_weights:
+        elif self.settings.provider == "local" and self.check_weights:
             require_weights(self.settings)
 
         payload: dict[str, Any] = {
@@ -117,7 +117,11 @@ class InferenceClient:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
-        headers = {"Authorization": f"Bearer {self.settings.api_key}"}
+        headers = (
+            {"Authorization": f"Bearer {self.settings.api_key}"}
+            if self.settings.provider in KEYED_PROVIDERS
+            else {}
+        )
         url = self.settings.base_url.rstrip("/") + "/chat/completions"
         assembled = ChatDelta()
         tool_acc: dict[int, dict[str, Any]] = {}

@@ -32,6 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="max-gui", description="本地多模态 ReAct GUI Agent")
     parser.add_argument("--workspace", type=Path, default=None, help="工作区根目录，默认当前目录")
     parser.add_argument("--new", action="store_true", help="强制创建新会话")
+    parser.add_argument("--benchmark", action="store_true", help="启动本地 GUI 评测首页")
     sub = parser.add_subparsers(dest="command")
 
     tui = sub.add_parser("tui", help="启动 Textual REPL（默认）")
@@ -69,6 +70,11 @@ def main(argv: list[str] | None = None) -> None:
         except (MissingWeightsError, MissingVllmError, ServeNotAllowedError) as exc:
             print(str(exc), file=sys.stderr)
             raise SystemExit(1) from exc
+    if args.benchmark:
+        from max_gui.benchmark.service import run_benchmark_server
+
+        run_benchmark_server(settings)
+        return
     try:
         require_provider_key(settings)
         require_dashscope_workspace(settings)

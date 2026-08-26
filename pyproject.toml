@@ -33,6 +33,7 @@ dependencies = [
 
 [project.scripts]
 max-gui = "max_gui:main"
+max = "max_gui:main"
 
 [dependency-groups]
 dev = [

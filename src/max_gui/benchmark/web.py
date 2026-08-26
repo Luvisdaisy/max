@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
@@ -48,11 +49,41 @@ class BenchmarkStore:
         return self.tasks[self.current_id]
 
 
-def create_benchmark_app(suite: TaskSuite) -> FastAPI:
+def create_benchmark_app(
+    suite: TaskSuite,
+    *,
+    start: Callable[[int], bool] | None = None,
+    progress: Callable[[], dict[str, Any]] | None = None,
+) -> FastAPI:
     """创建只供本地评测启动的 FastAPI 应用。"""
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     store = BenchmarkStore(suite)
     app.state.benchmark_store = store
+
+    @app.get("/", response_class=HTMLResponse)
+    async def home() -> str:
+        """渲染人工确认后才开始真实控制的评测首页。"""
+        return _page("GUI Agent 评测", _home_body(progress() if progress else {}))
+
+    @app.post("/api/start")
+    async def start_run(task_count: int = Form(...)) -> dict[str, Any]:
+        """由首页按钮选择 10 或 100 条任务后启动后台评测。"""
+        if start is None:
+            raise HTTPException(status_code=409, detail="当前服务未配置自动评测器")
+        if task_count not in {10, 100}:
+            raise HTTPException(status_code=422, detail="任务数量仅支持 10 或 100")
+        try:
+            started = start(task_count)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if not started:
+            raise HTTPException(status_code=409, detail="评测正在运行")
+        return {"started": True, "task_count": task_count}
+
+    @app.get("/api/progress")
+    async def get_progress() -> dict[str, Any]:
+        """返回首页轮询所需的非敏感进度。"""
+        return progress() if progress else {"status": "ready", "completed": 0, "total": 0}
 
     @app.post("/api/reset")
     async def reset(payload: dict[str, str]) -> dict[str, Any]:
@@ -123,6 +154,22 @@ def _page(title: str, body: str) -> str:
     """返回固定尺寸、可供截图识别的中文页面壳。"""
     return f"""<!doctype html><html lang='zh-CN'><meta charset='utf-8'><title>{title}</title>
 <style>body{{font:18px -apple-system;margin:48px;max-width:900px}}input,select,button{{font:18px;padding:10px;margin:8px 0}}button{{cursor:pointer}}.error{{color:#b42318}}</style><main><h1>{title}</h1>{body}</main></html>"""
+
+
+def _home_body(status: dict[str, Any]) -> str:
+    """构造包含 10/100 条启动按钮与轮询进度的首页，不泄露任务答案。"""
+    current = str(status.get("current_task") or "尚未开始")
+    completed = int(status.get("completed") or 0)
+    total = int(status.get("total") or 0)
+    state = str(status.get("status") or "ready")
+    controls = (
+        "<form method='post' action='/api/start'><input type='hidden' name='task_count' value='10'>"
+        "<button>运行 10 条</button></form>"
+        "<form method='post' action='/api/start'><input type='hidden' name='task_count' value='100'>"
+        "<button>运行 100 条</button></form>"
+    )
+    progress = f"{completed}/{total}" if total else "尚未选择"
+    return f"""<p>请选择本次评测规模。10 条覆盖 easy、medium、hard 三种难度，适合冒烟验证。</p>{controls}<p>状态：{state}</p><p>进度：{progress}</p><p>当前任务：{current}</p><script>setTimeout(()=>location.reload(),2000)</script>"""
 
 
 def _form_body(state: dict[str, Any]) -> str:
