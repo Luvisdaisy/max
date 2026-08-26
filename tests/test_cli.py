@@ -7,15 +7,15 @@ from pathlib import Path
 
 import pytest
 
-from max_gui.cli import build_parser
+from max_gui.cli import _run_cleanup, build_parser
 from max_gui.config import (
     MissingVllmError,
     MissingWeightsError,
-    ServeNotAllowedError,
     Settings,
     require_weights,
 )
 from max_gui.lifecycle import _serve_command, resolve_vllm_bin, serve_model
+from max_gui.provider import ServeNotAllowedError
 
 
 def test_parser_default_and_subcommands() -> None:
@@ -25,6 +25,42 @@ def test_parser_default_and_subcommands() -> None:
     assert parser.parse_args(["tui", "--new"]).new is True
     serve = parser.parse_args(["serve"])
     assert serve.command == "serve"
+    cleanup = parser.parse_args(["cleanup"])
+    assert cleanup.command == "cleanup"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["cleanup", "--yes"])
+
+
+def test_cleanup_removes_records_and_keeps_directories(settings: Settings, monkeypatch) -> None:
+    """清理命令无需交互即可删除三类记录内容并保留目录。"""
+    runs = settings.project_root / "artifacts" / "runs"
+    directories = (settings.screenshots_dir, runs, settings.sessions_dir)
+    for directory in directories:
+        directory.mkdir(parents=True)
+        (directory / "record.json").write_text("x", encoding="utf-8")
+        (directory / "nested").mkdir()
+        (directory / "nested" / "detail.json").write_text("x", encoding="utf-8")
+    monkeypatch.setattr("builtins.input", lambda _prompt: pytest.fail("cleanup 不应读取输入"))
+
+    assert _run_cleanup(settings) == 0
+    assert all(directory.is_dir() and not any(directory.iterdir()) for directory in directories)
+
+
+def test_cleanup_failure_returns_nonzero(settings: Settings, monkeypatch) -> None:
+    """单个条目删除失败时返回非零，同时继续处理其他目录。"""
+    target = settings.sessions_dir / "blocked.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("x", encoding="utf-8")
+    original_unlink = Path.unlink
+
+    def fail_one(path: Path, *args, **kwargs):
+        if path == target:
+            raise OSError("blocked")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_one)
+    assert _run_cleanup(settings) == 1
+    assert target.is_file()
 
 
 def test_download_subcommand_removed() -> None:
@@ -45,6 +81,20 @@ def test_model_flag_removed() -> None:
     except SystemExit:
         return
     raise AssertionError("expected SystemExit for removed --model")
+
+
+def test_benchmark_task_count_is_not_a_cli_argument() -> None:
+    """评测规模仅能从首页选择，CLI 不接受数字位置参数。"""
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--benchmark", "10"])
+
+
+def test_benchmark_flag_remains_available_from_max_gui_entrypoint() -> None:
+    """原有 `max-gui --benchmark` 参数组合仍由顶层解析器接受。"""
+    parser = build_parser()
+    args = parser.parse_args(["--benchmark"])
+    assert args.benchmark is True and args.command is None
 
 
 def test_missing_weights_includes_path_not_download(settings: Settings, tmp_path: Path) -> None:
@@ -79,7 +129,6 @@ def test_serve_rejected_for_dashscope(settings: Settings) -> None:
     """`dashscope` 下 `serve_model` 拒绝启动。"""
     settings.provider = "dashscope"
     settings.model_name = "qwen3.5-plus"
-    settings.dashscope_workspace = "llm-demo"
     try:
         serve_model(settings)
     except ServeNotAllowedError as exc:

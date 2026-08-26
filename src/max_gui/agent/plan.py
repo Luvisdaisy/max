@@ -66,8 +66,14 @@ def advance_subtask_after_tools(
     plan = list(plan)
     if tool_failed or not plan:
         return plan, current_subtask
+
+    # 支持结构化 JSON 输出中的 status 和 reason
+    if "status" in assistant_text and "error" in assistant_text.lower():
+        return plan, current_subtask
+
     if "子任务完成" not in assistant_text and "下一子任务" not in assistant_text:
         return plan, current_subtask
+
     if current_subtask in plan:
         index = plan.index(current_subtask)
     else:

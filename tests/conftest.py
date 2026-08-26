@@ -15,7 +15,12 @@ def _clear_provider_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in (
         "MAX_PROVIDER",
         "MAX_PROVIDER_KEY",
+        "MAX_MODELSCOPE_KEY",
+        "MAX_DASHSCOPE_KEY",
+        "MAX_OPENROUTER_KEY",
+        "OPENROUTER_API_KEY",
         "MODEL_NAME",
+        "MAX_GUI_BASE_URL",
         "MAX_DASHSCOPE_WORKSPACE",
         "MAX_BAILIAN_WORKSPACE",
         "MAX_GUI_MODEL",

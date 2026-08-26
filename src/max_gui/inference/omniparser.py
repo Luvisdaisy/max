@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import ipaddress
 import os
 import subprocess
 import sys
@@ -35,6 +36,25 @@ _OWNED: list[Any] = []
 
 class LocateUnavailable(RuntimeError):
     """检测进程不可用或返回无法使用的结果。"""
+
+
+def omniparser_base_url_is_local(settings: Settings) -> bool:
+    """判断路径协议的 OmniParser 地址是否为本机 loopback。
+
+    worker 当前接收主进程文件系统中的绝对图像路径，因此不能连接到远端主机。
+    """
+    try:
+        host = urlparse(settings.omniparser_base_url).hostname
+    except ValueError:
+        return False
+    if not host:
+        return False
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +176,8 @@ class LocateRuntime:
         异常：
             LocateUnavailable: 启动或推理失败。
         """
+        if not omniparser_base_url_is_local(self.settings):
+            raise LocateUnavailable("OmniParser 仅支持本机 loopback 地址，无法传递本地图片路径")
         if self._parse_fn is not None:
             try:
                 return await self._parse_fn(path)

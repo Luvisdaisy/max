@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw, ImageFont
 from max_gui.config import Settings
 from max_gui.inference.images import prepare_image
 from max_gui.inference.omniparser import DetectedBox
-from max_gui.tools.desktop import ViewFrame, active_view_frame
+from max_gui.tools.desktop import ViewFrame
 
 LOCATE_MAX_BOXES = 40
 LOCATE_NMS_IOU = 0.5
@@ -25,8 +25,8 @@ class ProjectedItem:
     label: str
     role: str
     view: dict[str, int]
-    logical: dict[str, int]
-    logical_center: tuple[int, int]
+    logical: dict[str, int] | None
+    logical_center: tuple[int, int] | None
 
 
 def select_boxes(boxes: list[DetectedBox], *, width: int, height: int) -> list[DetectedBox]:
@@ -67,6 +67,9 @@ def project_and_draw(
     boxes: list[DetectedBox],
     *,
     settings: Settings,
+    frame: ViewFrame | None = None,
+    include_logical: bool = True,
+    view_size: tuple[int, int] | None = None,
 ) -> tuple[list[ProjectedItem], dict[int, tuple[int, int]], Image.Image]:
     """把框映到当前视图，画编号，并给出逻辑中心表。
 
@@ -74,6 +77,9 @@ def project_and_draw(
         source_path: 原截图。
         boxes: 已截断的检测框。
         settings: 图像预处理上限，无视图帧时用来估视图尺寸。
+        frame: 与源图绑定的截图坐标帧；`None` 表示仅供观察的图像。
+        include_logical: 是否返回并保存可供桌面使用的逻辑中心。
+        view_size: 已确定的最终模型视图尺寸；给出时优先用于画框。
 
     返回：
         `(JSON 项, id→逻辑中心, 叠加图)`。
@@ -81,10 +87,12 @@ def project_and_draw(
     with Image.open(source_path) as image:
         source = image.convert("RGB")
     src_w, src_h = source.size
-    frame = active_view_frame()
+    frame = frame if frame is not None else None
     view_w, view_h, origin_x, origin_y, logical_w, logical_h = _frame_or_source(
         source_path, source.size, frame, settings
     )
+    if view_size is not None:
+        view_w, view_h = view_size
     overlay = source.resize((max(1, view_w), max(1, view_h)), Image.Resampling.LANCZOS)
     draw = ImageDraw.Draw(overlay)
     font = ImageFont.load_default()
@@ -102,16 +110,19 @@ def project_and_draw(
         ly2 = origin_y + sy2 / src_h * logical_h if src_h else sy2
         vcx, vcy = (vx1 + vx2) / 2, (vy1 + vy2) / 2
         lcx, lcy = (lx1 + lx2) / 2, (ly1 + ly2) / 2
+        logical = _rect(lx1, ly1, lx2, ly2, lcx, lcy) if include_logical else None
+        logical_center = (round(lcx), round(lcy)) if include_logical else None
         item = ProjectedItem(
             id=index,
             label=box.label,
             role=box.role,
             view=_rect(vx1, vy1, vx2, vy2, vcx, vcy),
-            logical=_rect(lx1, ly1, lx2, ly2, lcx, lcy),
-            logical_center=(round(lcx), round(lcy)),
+            logical=logical,
+            logical_center=logical_center,
         )
         items.append(item)
-        hits[index] = item.logical_center
+        if item.logical_center is not None:
+            hits[index] = item.logical_center
         draw.rectangle((vx1, vy1, vx2, vy2), outline=(255, 220, 40), width=2)
         label = str(index)
         tx, ty = int(vx1) + 2, max(0, int(vy1) - 12)

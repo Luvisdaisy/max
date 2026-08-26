@@ -1,0 +1,3464 @@
+{
+  "version": "web-gui-v2",
+  "tasks": [
+    {
+      "id": "arena-001",
+      "route": "/arena/home",
+      "instruction": "从工作台打开“收件箱”页面并停留在那里。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_inbox": true
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "navigation",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click"
+      ],
+      "expected_steps": 1,
+      "required_checkpoints": [
+        "visited_inbox"
+      ],
+      "smoke": true
+    },
+    {
+      "id": "arena-002",
+      "route": "/arena/home",
+      "instruction": "从工作台打开“项目”页面并停留在那里。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_projects": true
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "navigation",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click"
+      ],
+      "expected_steps": 1,
+      "required_checkpoints": [
+        "visited_projects"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-003",
+      "route": "/arena/home",
+      "instruction": "打开任务页面，并将任务列表翻到第二页。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "current_page": 2
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "navigation",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "pagination"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": true
+    },
+    {
+      "id": "arena-004",
+      "route": "/arena/home",
+      "instruction": "从工作台打开“日历”页面并停留在那里。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_calendar": true
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "navigation",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click"
+      ],
+      "expected_steps": 1,
+      "required_checkpoints": [
+        "visited_calendar"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-005",
+      "route": "/arena/home",
+      "instruction": "从工作台打开“自动化”页面并停留在那里。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_automation": true
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "navigation",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click"
+      ],
+      "expected_steps": 1,
+      "required_checkpoints": [
+        "visited_automation"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-006",
+      "route": "/arena/home",
+      "instruction": "从工作台打开“团队”页面并停留在那里。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_team": true
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "navigation",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click"
+      ],
+      "expected_steps": 1,
+      "required_checkpoints": [
+        "visited_team"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-007",
+      "route": "/arena/home",
+      "instruction": "从工作台打开“报表”页面并停留在那里。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "navigation",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click"
+      ],
+      "expected_steps": 1,
+      "required_checkpoints": [
+        "visited_reports"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-008",
+      "route": "/arena/home",
+      "instruction": "从工作台打开“设置”页面并停留在那里。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_settings": true
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "navigation",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click"
+      ],
+      "expected_steps": 1,
+      "required_checkpoints": [
+        "visited_settings"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-009",
+      "route": "/arena/home",
+      "instruction": "进入收件箱，打开“支付接口偶发超时”并查看它的详情。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_inbox": true,
+        "viewed_item": "支付接口偶发超时"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "observe",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "observe"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_inbox"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-010",
+      "route": "/arena/home",
+      "instruction": "进入收件箱，打开“移动端登录优化”并查看它的详情。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_inbox": true,
+        "viewed_item": "移动端登录优化"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "observe",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "observe"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_inbox"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-011",
+      "route": "/arena/home",
+      "instruction": "进入收件箱，打开“准备灰度发布”并查看它的详情。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_inbox": true,
+        "viewed_item": "准备灰度发布"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "observe",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "observe"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_inbox"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-012",
+      "route": "/arena/home",
+      "instruction": "进入收件箱，打开“设计评审”并查看它的详情。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_inbox": true,
+        "viewed_item": "设计评审"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "observe",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "observe"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_inbox"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-013",
+      "route": "/arena/home",
+      "instruction": "进入收件箱，打开“补充接口文档”并查看它的详情。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_inbox": true,
+        "viewed_item": "补充接口文档"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "observe",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "observe"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_inbox"
+      ],
+      "smoke": true
+    },
+    {
+      "id": "arena-014",
+      "route": "/arena/home",
+      "instruction": "进入收件箱，打开“核对埋点数据”并查看它的详情。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_inbox": true,
+        "viewed_item": "核对埋点数据"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "observe",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "observe"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_inbox"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-015",
+      "route": "/arena/home",
+      "instruction": "进入收件箱，打开“客户反馈归档”并查看它的详情。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_inbox": true,
+        "viewed_item": "客户反馈归档"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "observe",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "observe"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_inbox"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-016",
+      "route": "/arena/home",
+      "instruction": "进入收件箱，打开“更新隐私说明”并查看它的详情。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_inbox": true,
+        "viewed_item": "更新隐私说明"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "observe",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "observe"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_inbox"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-017",
+      "route": "/arena/home",
+      "instruction": "进入收件箱，打开“回归搜索功能”并查看它的详情。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_inbox": true,
+        "viewed_item": "回归搜索功能"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "observe",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "observe"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_inbox"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-018",
+      "route": "/arena/home",
+      "instruction": "进入收件箱，打开“整理季度目标”并查看它的详情。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_inbox": true,
+        "viewed_item": "整理季度目标"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "observe",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "observe"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_inbox"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-019",
+      "route": "/arena/home",
+      "instruction": "进入收件箱，打开“清理无效邀请”并查看它的详情。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_inbox": true,
+        "viewed_item": "清理无效邀请"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "observe",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "observe"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_inbox"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-020",
+      "route": "/arena/home",
+      "instruction": "进入收件箱，打开“配置异常提醒”并查看它的详情。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_inbox": true,
+        "viewed_item": "配置异常提醒"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "observe",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "observe"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_inbox"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-021",
+      "route": "/arena/home",
+      "instruction": "打开任务页面，在列表中查看“支付接口偶发超时”的详细信息。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "viewed_item": "支付接口偶发超时"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "observe",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "observe"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-022",
+      "route": "/arena/home",
+      "instruction": "打开任务页面，在列表中查看“移动端登录优化”的详细信息。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "viewed_item": "移动端登录优化"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "observe",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "observe"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-023",
+      "route": "/arena/home",
+      "instruction": "打开任务页面，在列表中查看“准备灰度发布”的详细信息。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "viewed_item": "准备灰度发布"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "observe",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "observe"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-024",
+      "route": "/arena/home",
+      "instruction": "打开任务页面，在列表中查看“设计评审”的详细信息。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "viewed_item": "设计评审"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "observe",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "observe"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-025",
+      "route": "/arena/home",
+      "instruction": "打开任务页面，在列表中查看“补充接口文档”的详细信息。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "viewed_item": "补充接口文档"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "observe",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "observe"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-026",
+      "route": "/arena/home",
+      "instruction": "打开任务页面，在列表中查看“核对埋点数据”的详细信息。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "viewed_item": "核对埋点数据"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "observe",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "observe"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-027",
+      "route": "/arena/home",
+      "instruction": "进入自动化页面，启用“逾期任务提醒”。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_automation": true,
+        "automation_overdue-reminder": true
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "automation",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "selection"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_automation"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-028",
+      "route": "/arena/home",
+      "instruction": "进入自动化页面，启用“高优先级变更通知”。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_automation": true,
+        "automation_high-priority-notice": true
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "automation",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "selection"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_automation"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-029",
+      "route": "/arena/home",
+      "instruction": "进入自动化页面，启用“每日进度摘要”。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_automation": true,
+        "automation_daily-summary": true
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "automation",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "click",
+        "selection"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_automation"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-030",
+      "route": "/arena/home",
+      "instruction": "进入设置，将界面主题切换为深色。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_settings": true,
+        "theme": "深色"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 10,
+      "timeout_seconds": 90,
+      "category": "settings",
+      "difficulty": "easy",
+      "capabilities": [
+        "navigation",
+        "selection"
+      ],
+      "expected_steps": 2,
+      "required_checkpoints": [
+        "visited_settings"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-031",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，打开“支付接口偶发超时”，将负责人改为赵敏、状态改为“进行中”、优先级改为“高”，然后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "updated_item": "支付接口偶发超时",
+        "updated_owner": "赵敏",
+        "updated_status": "进行中",
+        "updated_priority": "high"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "edit",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "edit",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": true
+    },
+    {
+      "id": "arena-032",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，打开“移动端登录优化”，将负责人改为王晨、状态改为“已完成”、优先级改为“普通”，然后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "updated_item": "移动端登录优化",
+        "updated_owner": "王晨",
+        "updated_status": "已完成",
+        "updated_priority": "normal"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "edit",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "edit",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-033",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，打开“准备灰度发布”，将负责人改为李雪、状态改为“待处理”、优先级改为“低”，然后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "updated_item": "准备灰度发布",
+        "updated_owner": "李雪",
+        "updated_status": "待处理",
+        "updated_priority": "low"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "edit",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "edit",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-034",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，打开“设计评审”，将负责人改为张三、状态改为“已逾期”、优先级改为“高”，然后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "updated_item": "设计评审",
+        "updated_owner": "张三",
+        "updated_status": "已逾期",
+        "updated_priority": "high"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "edit",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "edit",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-035",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，打开“补充接口文档”，将负责人改为赵敏、状态改为“进行中”、优先级改为“普通”，然后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "updated_item": "补充接口文档",
+        "updated_owner": "赵敏",
+        "updated_status": "进行中",
+        "updated_priority": "normal"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "edit",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "edit",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-036",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，打开“核对埋点数据”，将负责人改为王晨、状态改为“已完成”、优先级改为“低”，然后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "updated_item": "核对埋点数据",
+        "updated_owner": "王晨",
+        "updated_status": "已完成",
+        "updated_priority": "low"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "edit",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "edit",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-037",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，打开“客户反馈归档”，将负责人改为李雪、状态改为“待处理”、优先级改为“高”，然后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "updated_item": "客户反馈归档",
+        "updated_owner": "李雪",
+        "updated_status": "待处理",
+        "updated_priority": "high"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "edit",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "edit",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-038",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，打开“更新隐私说明”，将负责人改为张三、状态改为“已逾期”、优先级改为“普通”，然后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "updated_item": "更新隐私说明",
+        "updated_owner": "张三",
+        "updated_status": "已逾期",
+        "updated_priority": "normal"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "edit",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "edit",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-039",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，打开“回归搜索功能”，将负责人改为赵敏、状态改为“进行中”、优先级改为“低”，然后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "updated_item": "回归搜索功能",
+        "updated_owner": "赵敏",
+        "updated_status": "进行中",
+        "updated_priority": "low"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "edit",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "edit",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-040",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，打开“整理季度目标”，将负责人改为王晨、状态改为“已完成”、优先级改为“高”，然后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "updated_item": "整理季度目标",
+        "updated_owner": "王晨",
+        "updated_status": "已完成",
+        "updated_priority": "high"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "edit",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "edit",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-041",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，打开“清理无效邀请”，将负责人改为李雪、状态改为“待处理”、优先级改为“普通”，然后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "updated_item": "清理无效邀请",
+        "updated_owner": "李雪",
+        "updated_status": "待处理",
+        "updated_priority": "normal"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "edit",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "edit",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-042",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，打开“配置异常提醒”，将负责人改为张三、状态改为“已逾期”、优先级改为“低”，然后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "updated_item": "配置异常提醒",
+        "updated_owner": "张三",
+        "updated_status": "已逾期",
+        "updated_priority": "low"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "edit",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "edit",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-043",
+      "route": "/arena/home",
+      "instruction": "进入任务页面，新建“整理发布公告”，负责人选择赵敏，优先级设为“高”，状态设为“进行中”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "created_name": "整理发布公告",
+        "created_owner": "赵敏",
+        "created_priority": "high",
+        "created_status": "进行中"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "create",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "text_input",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": true
+    },
+    {
+      "id": "arena-044",
+      "route": "/arena/home",
+      "instruction": "进入任务页面，新建“复核权限矩阵”，负责人选择王晨，优先级设为“普通”，状态设为“已完成”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "created_name": "复核权限矩阵",
+        "created_owner": "王晨",
+        "created_priority": "normal",
+        "created_status": "已完成"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "create",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "text_input",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-045",
+      "route": "/arena/home",
+      "instruction": "进入任务页面，新建“制作培训材料”，负责人选择李雪，优先级设为“低”，状态设为“待处理”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "created_name": "制作培训材料",
+        "created_owner": "李雪",
+        "created_priority": "low",
+        "created_status": "待处理"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "create",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "text_input",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-046",
+      "route": "/arena/home",
+      "instruction": "进入任务页面，新建“验证退款流程”，负责人选择张三，优先级设为“高”，状态设为“进行中”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "created_name": "验证退款流程",
+        "created_owner": "张三",
+        "created_priority": "high",
+        "created_status": "进行中"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "create",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "text_input",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-047",
+      "route": "/arena/home",
+      "instruction": "进入任务页面，新建“更新品牌素材”，负责人选择赵敏，优先级设为“普通”，状态设为“已完成”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "created_name": "更新品牌素材",
+        "created_owner": "赵敏",
+        "created_priority": "normal",
+        "created_status": "已完成"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "create",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "text_input",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-048",
+      "route": "/arena/home",
+      "instruction": "进入任务页面，新建“梳理告警规则”，负责人选择王晨，优先级设为“低”，状态设为“待处理”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "created_name": "梳理告警规则",
+        "created_owner": "王晨",
+        "created_priority": "low",
+        "created_status": "待处理"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "create",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "text_input",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-049",
+      "route": "/arena/home",
+      "instruction": "进入任务页面，新建“排查慢查询”，负责人选择李雪，优先级设为“高”，状态设为“进行中”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "created_name": "排查慢查询",
+        "created_owner": "李雪",
+        "created_priority": "high",
+        "created_status": "进行中"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "create",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "text_input",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-050",
+      "route": "/arena/home",
+      "instruction": "进入任务页面，新建“准备客户回访”，负责人选择张三，优先级设为“普通”，状态设为“已完成”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "created_name": "准备客户回访",
+        "created_owner": "张三",
+        "created_priority": "normal",
+        "created_status": "已完成"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "create",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "text_input",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-051",
+      "route": "/arena/home",
+      "instruction": "进入任务页面，新建“补充验收清单”，负责人选择赵敏，优先级设为“低”，状态设为“待处理”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "created_name": "补充验收清单",
+        "created_owner": "赵敏",
+        "created_priority": "low",
+        "created_status": "待处理"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "create",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "text_input",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-052",
+      "route": "/arena/home",
+      "instruction": "进入任务页面，新建“评估容量水位”，负责人选择王晨，优先级设为“高”，状态设为“进行中”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "created_name": "评估容量水位",
+        "created_owner": "王晨",
+        "created_priority": "high",
+        "created_status": "进行中"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "create",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "text_input",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-053",
+      "route": "/arena/home",
+      "instruction": "进入任务页面，新建“整理会议纪要”，负责人选择李雪，优先级设为“普通”，状态设为“已完成”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "created_name": "整理会议纪要",
+        "created_owner": "李雪",
+        "created_priority": "normal",
+        "created_status": "已完成"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "create",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "text_input",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-054",
+      "route": "/arena/home",
+      "instruction": "进入任务页面，新建“检查备份恢复”，负责人选择张三，优先级设为“低”，状态设为“待处理”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "created_name": "检查备份恢复",
+        "created_owner": "张三",
+        "created_priority": "low",
+        "created_status": "待处理"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "create",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "text_input",
+        "selection"
+      ],
+      "expected_steps": 6,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-055",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，按名称排序，选中“支付接口偶发超时”和“移动端登录优化”，再批量设为高优先级。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "current_sort": "name",
+        "selected_ids": [
+          "1",
+          "2"
+        ],
+        "batch_action": "priority",
+        "batch_count": 2
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "batch",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "sort",
+        "selection",
+        "batch"
+      ],
+      "expected_steps": 5,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-056",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，按名称排序，选中“准备灰度发布”和“设计评审”，再批量设为高优先级。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "current_sort": "name",
+        "selected_ids": [
+          "3",
+          "4"
+        ],
+        "batch_action": "priority",
+        "batch_count": 2
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "batch",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "sort",
+        "selection",
+        "batch"
+      ],
+      "expected_steps": 5,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-057",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，按名称排序，选中“补充接口文档”和“核对埋点数据”，再批量设为高优先级。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "current_sort": "name",
+        "selected_ids": [
+          "5",
+          "6"
+        ],
+        "batch_action": "priority",
+        "batch_count": 2
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "batch",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "sort",
+        "selection",
+        "batch"
+      ],
+      "expected_steps": 5,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-058",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，按名称排序，选中“客户反馈归档”和“更新隐私说明”，再批量设为高优先级。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "current_sort": "name",
+        "selected_ids": [
+          "7",
+          "8"
+        ],
+        "batch_action": "priority",
+        "batch_count": 2
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "batch",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "sort",
+        "selection",
+        "batch"
+      ],
+      "expected_steps": 5,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-059",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，按名称排序，选中“回归搜索功能”和“整理季度目标”，再批量设为高优先级。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "current_sort": "name",
+        "selected_ids": [
+          "9",
+          "10"
+        ],
+        "batch_action": "priority",
+        "batch_count": 2
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "batch",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "sort",
+        "selection",
+        "batch"
+      ],
+      "expected_steps": 5,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-060",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，按名称排序，选中“移动端登录优化”和“准备灰度发布”，再批量设为高优先级。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "current_sort": "name",
+        "selected_ids": [
+          "2",
+          "3"
+        ],
+        "batch_action": "priority",
+        "batch_count": 2
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "batch",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "sort",
+        "selection",
+        "batch"
+      ],
+      "expected_steps": 5,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-061",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，按名称排序，选中“设计评审”和“补充接口文档”，再批量设为高优先级。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "current_sort": "name",
+        "selected_ids": [
+          "4",
+          "5"
+        ],
+        "batch_action": "priority",
+        "batch_count": 2
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "batch",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "sort",
+        "selection",
+        "batch"
+      ],
+      "expected_steps": 5,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-062",
+      "route": "/arena/home",
+      "instruction": "进入任务列表，按名称排序，选中“核对埋点数据”和“客户反馈归档”，再批量设为高优先级。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_tasks": true,
+        "current_sort": "name",
+        "selected_ids": [
+          "6",
+          "7"
+        ],
+        "batch_action": "priority",
+        "batch_count": 2
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "batch",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "sort",
+        "selection",
+        "batch"
+      ],
+      "expected_steps": 5,
+      "required_checkpoints": [
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-063",
+      "route": "/arena/home",
+      "instruction": "先在自动化页面启用“逾期任务提醒”，再进入设置，将主题设为深色并开启紧凑布局。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_automation": true,
+        "visited_settings": true,
+        "automation_overdue-reminder": true,
+        "theme": "深色",
+        "compact": true
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "workflow",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 5,
+      "required_checkpoints": [
+        "visited_automation",
+        "visited_settings"
+      ],
+      "smoke": true
+    },
+    {
+      "id": "arena-064",
+      "route": "/arena/home",
+      "instruction": "先在自动化页面启用“高优先级变更通知”，再进入设置，将主题设为深色并关闭紧凑布局。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_automation": true,
+        "visited_settings": true,
+        "automation_high-priority-notice": true,
+        "theme": "深色",
+        "compact": false
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "workflow",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 5,
+      "required_checkpoints": [
+        "visited_automation",
+        "visited_settings"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-065",
+      "route": "/arena/home",
+      "instruction": "先在自动化页面启用“每日进度摘要”，再进入设置，将主题设为深色并开启紧凑布局。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_automation": true,
+        "visited_settings": true,
+        "automation_daily-summary": true,
+        "theme": "深色",
+        "compact": true
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "workflow",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 5,
+      "required_checkpoints": [
+        "visited_automation",
+        "visited_settings"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-066",
+      "route": "/arena/home",
+      "instruction": "先在自动化页面启用“逾期任务提醒”，再进入设置，将主题设为浅色并开启紧凑布局。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_automation": true,
+        "visited_settings": true,
+        "automation_overdue-reminder": true,
+        "theme": "浅色",
+        "compact": true
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "workflow",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 5,
+      "required_checkpoints": [
+        "visited_automation",
+        "visited_settings"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-067",
+      "route": "/arena/home",
+      "instruction": "先在自动化页面启用“高优先级变更通知”，再进入设置，将主题设为浅色并开启紧凑布局。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_automation": true,
+        "visited_settings": true,
+        "automation_high-priority-notice": true,
+        "theme": "浅色",
+        "compact": true
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "workflow",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 5,
+      "required_checkpoints": [
+        "visited_automation",
+        "visited_settings"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-068",
+      "route": "/arena/home",
+      "instruction": "先在自动化页面启用“每日进度摘要”，再进入设置，将主题设为浅色并开启紧凑布局。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_automation": true,
+        "visited_settings": true,
+        "automation_daily-summary": true,
+        "theme": "浅色",
+        "compact": true
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "workflow",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 5,
+      "required_checkpoints": [
+        "visited_automation",
+        "visited_settings"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-069",
+      "route": "/arena/home",
+      "instruction": "先在自动化页面启用“逾期任务提醒”，再进入设置，将主题设为深色并关闭紧凑布局。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_automation": true,
+        "visited_settings": true,
+        "automation_overdue-reminder": true,
+        "theme": "深色",
+        "compact": false
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "workflow",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 5,
+      "required_checkpoints": [
+        "visited_automation",
+        "visited_settings"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-070",
+      "route": "/arena/home",
+      "instruction": "先在自动化页面启用“每日进度摘要”，再进入设置，将主题设为深色并关闭紧凑布局。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_automation": true,
+        "visited_settings": true,
+        "automation_daily-summary": true,
+        "theme": "深色",
+        "compact": false
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 18,
+      "timeout_seconds": 120,
+      "category": "workflow",
+      "difficulty": "medium",
+      "capabilities": [
+        "navigation",
+        "click",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 5,
+      "required_checkpoints": [
+        "visited_automation",
+        "visited_settings"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-071",
+      "route": "/arena/home",
+      "instruction": "先到报表确认哪个项目的逾期任务最多，再进入任务列表找到“支付接口偶发超时”，把负责人改为王晨、状态改为“已完成”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "updated_item": "支付接口偶发超时",
+        "updated_owner": "王晨",
+        "updated_status": "已完成"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_edit",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "filter",
+        "click",
+        "edit",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": true
+    },
+    {
+      "id": "arena-072",
+      "route": "/arena/home",
+      "instruction": "先到报表确认哪个项目的逾期任务最多，再进入任务列表找到“移动端登录优化”，把负责人改为李雪、状态改为“待处理”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "updated_item": "移动端登录优化",
+        "updated_owner": "李雪",
+        "updated_status": "待处理"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_edit",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "filter",
+        "click",
+        "edit",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-073",
+      "route": "/arena/home",
+      "instruction": "先到报表确认哪个项目的逾期任务最多，再进入任务列表找到“准备灰度发布”，把负责人改为张三、状态改为“已逾期”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "updated_item": "准备灰度发布",
+        "updated_owner": "张三",
+        "updated_status": "已逾期"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_edit",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "filter",
+        "click",
+        "edit",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-074",
+      "route": "/arena/home",
+      "instruction": "先到报表确认哪个项目的逾期任务最多，再进入任务列表找到“设计评审”，把负责人改为赵敏、状态改为“进行中”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "updated_item": "设计评审",
+        "updated_owner": "赵敏",
+        "updated_status": "进行中"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_edit",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "filter",
+        "click",
+        "edit",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-075",
+      "route": "/arena/home",
+      "instruction": "先到报表确认哪个项目的逾期任务最多，再进入任务列表找到“补充接口文档”，把负责人改为王晨、状态改为“已完成”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "updated_item": "补充接口文档",
+        "updated_owner": "王晨",
+        "updated_status": "已完成"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_edit",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "filter",
+        "click",
+        "edit",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-076",
+      "route": "/arena/home",
+      "instruction": "先到报表确认哪个项目的逾期任务最多，再进入任务列表找到“核对埋点数据”，把负责人改为李雪、状态改为“待处理”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "updated_item": "核对埋点数据",
+        "updated_owner": "李雪",
+        "updated_status": "待处理"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_edit",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "filter",
+        "click",
+        "edit",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-077",
+      "route": "/arena/home",
+      "instruction": "先到报表确认哪个项目的逾期任务最多，再进入任务列表找到“客户反馈归档”，把负责人改为张三、状态改为“已逾期”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "updated_item": "客户反馈归档",
+        "updated_owner": "张三",
+        "updated_status": "已逾期"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_edit",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "filter",
+        "click",
+        "edit",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-078",
+      "route": "/arena/home",
+      "instruction": "先到报表确认哪个项目的逾期任务最多，再进入任务列表找到“更新隐私说明”，把负责人改为赵敏、状态改为“进行中”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "updated_item": "更新隐私说明",
+        "updated_owner": "赵敏",
+        "updated_status": "进行中"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_edit",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "filter",
+        "click",
+        "edit",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-079",
+      "route": "/arena/home",
+      "instruction": "先到报表确认哪个项目的逾期任务最多，再进入任务列表找到“回归搜索功能”，把负责人改为王晨、状态改为“已完成”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "updated_item": "回归搜索功能",
+        "updated_owner": "王晨",
+        "updated_status": "已完成"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_edit",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "filter",
+        "click",
+        "edit",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-080",
+      "route": "/arena/home",
+      "instruction": "先到报表确认哪个项目的逾期任务最多，再进入任务列表找到“整理季度目标”，把负责人改为李雪、状态改为“待处理”并保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "updated_item": "整理季度目标",
+        "updated_owner": "李雪",
+        "updated_status": "待处理"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_edit",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "filter",
+        "click",
+        "edit",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-081",
+      "route": "/arena/home",
+      "instruction": "先打开项目页面查看北极星的进度，再从项目进入任务列表。新建“准备北极星复盘”时先留空负责人尝试保存，看到校验提示后选择赵敏，设为高优先级和“进行中”并重新保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_projects": true,
+        "visited_tasks": true,
+        "created_name": "准备北极星复盘",
+        "created_owner": "赵敏",
+        "created_priority": "high",
+        "created_status": "进行中",
+        "validation_error": true
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_create",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "click",
+        "text_input",
+        "selection",
+        "workflow",
+        "validation"
+      ],
+      "expected_steps": 10,
+      "required_checkpoints": [
+        "visited_projects",
+        "visited_tasks"
+      ],
+      "smoke": true
+    },
+    {
+      "id": "arena-082",
+      "route": "/arena/home",
+      "instruction": "先打开项目页面查看各项目进度，再从项目进入任务列表，新建“建立曙光风险台账”，分配给王晨，设为普通优先级和“进行中”后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_projects": true,
+        "visited_tasks": true,
+        "created_name": "建立曙光风险台账",
+        "created_owner": "王晨",
+        "created_priority": "normal",
+        "created_status": "进行中"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_create",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "click",
+        "text_input",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_projects",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-083",
+      "route": "/arena/home",
+      "instruction": "先打开项目页面查看各项目进度，再从项目进入任务列表，新建“跟进远航交付”，分配给李雪，设为低优先级和“进行中”后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_projects": true,
+        "visited_tasks": true,
+        "created_name": "跟进远航交付",
+        "created_owner": "李雪",
+        "created_priority": "low",
+        "created_status": "进行中"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_create",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "click",
+        "text_input",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_projects",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-084",
+      "route": "/arena/home",
+      "instruction": "先打开项目页面查看各项目进度，再从项目进入任务列表，新建“整理云图发布记录”，分配给张三，设为高优先级和“进行中”后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_projects": true,
+        "visited_tasks": true,
+        "created_name": "整理云图发布记录",
+        "created_owner": "张三",
+        "created_priority": "high",
+        "created_status": "进行中"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_create",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "click",
+        "text_input",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_projects",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-085",
+      "route": "/arena/home",
+      "instruction": "先打开项目页面查看各项目进度，再从项目进入任务列表，新建“核验北极星预算”，分配给赵敏，设为普通优先级和“进行中”后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_projects": true,
+        "visited_tasks": true,
+        "created_name": "核验北极星预算",
+        "created_owner": "赵敏",
+        "created_priority": "normal",
+        "created_status": "进行中"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_create",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "click",
+        "text_input",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_projects",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-086",
+      "route": "/arena/home",
+      "instruction": "先打开项目页面查看各项目进度，再从项目进入任务列表，新建“补充曙光里程碑”，分配给王晨，设为低优先级和“进行中”后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_projects": true,
+        "visited_tasks": true,
+        "created_name": "补充曙光里程碑",
+        "created_owner": "王晨",
+        "created_priority": "low",
+        "created_status": "进行中"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_create",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "click",
+        "text_input",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_projects",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-087",
+      "route": "/arena/home",
+      "instruction": "先打开项目页面查看各项目进度，再从项目进入任务列表，新建“排查远航阻塞项”，分配给李雪，设为高优先级和“进行中”后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_projects": true,
+        "visited_tasks": true,
+        "created_name": "排查远航阻塞项",
+        "created_owner": "李雪",
+        "created_priority": "high",
+        "created_status": "进行中"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_create",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "click",
+        "text_input",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_projects",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-088",
+      "route": "/arena/home",
+      "instruction": "先打开项目页面查看各项目进度，再从项目进入任务列表，新建“确认云图验收范围”，分配给张三，设为普通优先级和“进行中”后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_projects": true,
+        "visited_tasks": true,
+        "created_name": "确认云图验收范围",
+        "created_owner": "张三",
+        "created_priority": "normal",
+        "created_status": "进行中"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_create",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "click",
+        "text_input",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_projects",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-089",
+      "route": "/arena/home",
+      "instruction": "先打开项目页面查看各项目进度，再从项目进入任务列表，新建“制定北极星回滚计划”，分配给赵敏，设为低优先级和“进行中”后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_projects": true,
+        "visited_tasks": true,
+        "created_name": "制定北极星回滚计划",
+        "created_owner": "赵敏",
+        "created_priority": "low",
+        "created_status": "进行中"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_create",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "click",
+        "text_input",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_projects",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-090",
+      "route": "/arena/home",
+      "instruction": "先打开项目页面查看各项目进度，再从项目进入任务列表，新建“准备曙光周报”，分配给王晨，设为高优先级和“进行中”后保存。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_projects": true,
+        "visited_tasks": true,
+        "created_name": "准备曙光周报",
+        "created_owner": "王晨",
+        "created_priority": "high",
+        "created_status": "进行中"
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_create",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "click",
+        "text_input",
+        "selection",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_projects",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-091",
+      "route": "/arena/home",
+      "instruction": "先查看报表中的完成趋势，再进入任务列表按名称排序，选中“支付接口偶发超时”和“核对埋点数据”，将它们批量标记为已完成。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "current_sort": "name",
+        "selected_ids": [
+          "1",
+          "6"
+        ],
+        "batch_action": "complete",
+        "batch_count": 2
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_batch",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "sort",
+        "selection",
+        "batch",
+        "confirmation",
+        "workflow"
+      ],
+      "expected_steps": 7,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": true
+    },
+    {
+      "id": "arena-092",
+      "route": "/arena/home",
+      "instruction": "先查看报表中的完成趋势，再进入任务列表按名称排序，选中“移动端登录优化”和“客户反馈归档”，将它们批量设为高优先级。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "current_sort": "name",
+        "selected_ids": [
+          "2",
+          "7"
+        ],
+        "batch_action": "priority",
+        "batch_count": 2
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_batch",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "sort",
+        "selection",
+        "batch",
+        "confirmation",
+        "workflow"
+      ],
+      "expected_steps": 7,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-093",
+      "route": "/arena/home",
+      "instruction": "先查看报表中的完成趋势，再进入任务列表按名称排序，选中“准备灰度发布”和“更新隐私说明”，将它们批量删除并在弹窗中确认。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "current_sort": "name",
+        "selected_ids": [
+          "3",
+          "8"
+        ],
+        "batch_action": "delete",
+        "batch_count": 2
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_batch",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "sort",
+        "selection",
+        "batch",
+        "confirmation",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-094",
+      "route": "/arena/home",
+      "instruction": "先查看报表中的完成趋势，再进入任务列表按名称排序，选中“设计评审”和“回归搜索功能”，将它们批量标记为已完成。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "current_sort": "name",
+        "selected_ids": [
+          "4",
+          "9"
+        ],
+        "batch_action": "complete",
+        "batch_count": 2
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_batch",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "sort",
+        "selection",
+        "batch",
+        "confirmation",
+        "workflow"
+      ],
+      "expected_steps": 7,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-095",
+      "route": "/arena/home",
+      "instruction": "先查看报表中的完成趋势，再进入任务列表按名称排序，选中“补充接口文档”和“整理季度目标”，将它们批量设为高优先级。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "current_sort": "name",
+        "selected_ids": [
+          "5",
+          "10"
+        ],
+        "batch_action": "priority",
+        "batch_count": 2
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_batch",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "sort",
+        "selection",
+        "batch",
+        "confirmation",
+        "workflow"
+      ],
+      "expected_steps": 7,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-096",
+      "route": "/arena/home",
+      "instruction": "先查看报表中的完成趋势，再进入任务列表按名称排序，选中“支付接口偶发超时”和“清理无效邀请”，将它们批量删除并在弹窗中确认。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "current_sort": "name",
+        "selected_ids": [
+          "1",
+          "11"
+        ],
+        "batch_action": "delete",
+        "batch_count": 2
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_batch",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "sort",
+        "selection",
+        "batch",
+        "confirmation",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-097",
+      "route": "/arena/home",
+      "instruction": "先查看报表中的完成趋势，再进入任务列表按名称排序，选中“移动端登录优化”和“配置异常提醒”，将它们批量标记为已完成。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "current_sort": "name",
+        "selected_ids": [
+          "2",
+          "12"
+        ],
+        "batch_action": "complete",
+        "batch_count": 2
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_batch",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "sort",
+        "selection",
+        "batch",
+        "confirmation",
+        "workflow"
+      ],
+      "expected_steps": 7,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-098",
+      "route": "/arena/home",
+      "instruction": "先查看报表中的完成趋势，再进入任务列表按名称排序，选中“准备灰度发布”和“核对埋点数据”，将它们批量设为高优先级。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "current_sort": "name",
+        "selected_ids": [
+          "3",
+          "6"
+        ],
+        "batch_action": "priority",
+        "batch_count": 2
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_batch",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "sort",
+        "selection",
+        "batch",
+        "confirmation",
+        "workflow"
+      ],
+      "expected_steps": 7,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": false
+    },
+    {
+      "id": "arena-099",
+      "route": "/arena/home",
+      "instruction": "先查看报表中的完成趋势，再进入任务列表按名称排序，选中“设计评审”和“客户反馈归档”，将它们批量删除并在弹窗中确认。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "current_sort": "name",
+        "selected_ids": [
+          "4",
+          "7"
+        ],
+        "batch_action": "delete",
+        "batch_count": 2
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_batch",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "sort",
+        "selection",
+        "batch",
+        "confirmation",
+        "workflow"
+      ],
+      "expected_steps": 8,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": true
+    },
+    {
+      "id": "arena-100",
+      "route": "/arena/home",
+      "instruction": "先查看报表中的完成趋势，再进入任务列表按名称排序，选中“补充接口文档”和“更新隐私说明”，将它们批量标记为已完成。",
+      "initial_state": {
+        "theme": "浅色",
+        "compact": false
+      },
+      "success": {
+        "visited_reports": true,
+        "visited_tasks": true,
+        "current_sort": "name",
+        "selected_ids": [
+          "5",
+          "8"
+        ],
+        "batch_action": "complete",
+        "batch_count": 2
+      },
+      "forbidden_actions": [
+        "address_bar_navigation"
+      ],
+      "max_tool_calls": 30,
+      "timeout_seconds": 180,
+      "category": "cross_page_batch",
+      "difficulty": "hard",
+      "capabilities": [
+        "navigation",
+        "observe",
+        "sort",
+        "selection",
+        "batch",
+        "confirmation",
+        "workflow"
+      ],
+      "expected_steps": 7,
+      "required_checkpoints": [
+        "visited_reports",
+        "visited_tasks"
+      ],
+      "smoke": false
+    }
+  ]
+}

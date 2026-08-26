@@ -413,18 +413,10 @@ def _allowed_key(key: str) -> bool:
 
 
 def _parse_keys(raw: Any) -> list[str]:
-    """解析 `keys` 字符串或列表，拒绝未知键与危险热键。"""
-    if raw is None:
-        raise ToolError("keyboard_press 需要 keys")
-    if isinstance(raw, str):
-        parts = [item for item in raw.replace("+", " ").split() if item]
-    elif isinstance(raw, list):
-        parts = [str(item) for item in raw]
-    else:
-        raise ToolError("keys 必须是字符串或字符串数组")
-    keys = [_normalize_key(item) for item in parts]
-    if not keys:
-        raise ToolError("keys 不能为空")
+    """校验唯一的字符串数组格式，并拒绝未知键与危险热键。"""
+    if not isinstance(raw, list) or not raw or not all(isinstance(item, str) for item in raw):
+        raise ToolError('keys 必须是非空字符串数组，例如 ["command", "tab"]')
+    keys = [_normalize_key(item) for item in raw]
     if sys.platform == "darwin" and "windows" in keys:
         raise ToolError("本机是 macOS，请使用 command，不要使用 windows")
     unknown = [key for key in keys if not _allowed_key(key)]
@@ -572,8 +564,8 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
                 image_path=path,
             )
         )
-        if verify_source != "mouse_move":
-            store_locate_hits({})
+        # 新帧与旧帧即使内容接近也不是同一坐标契约；移鼠已在截图前解析 target_id。
+        store_locate_hits({})
         store_cursor_verify(verify_source)
         cursor_vx, cursor_vy = logical_to_view(
             mouse_x,
@@ -714,7 +706,7 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
         return await _attach_new_frame(action)
 
     async def keyboard_press(args: dict) -> ToolResult:
-        """按白名单单键或组合键；成功后附新截图。"""
+        """按白名单字符串数组表示的单键或组合键；成功后附新截图。"""
         _require_screen_seen()
         keys = _parse_keys(args.get("keys"))
         interval = float(args.get("interval") or 0)
@@ -840,15 +832,17 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
         ),
         Tool(
             name="keyboard_press",
-            description="按下白名单中的单个键或组合键，例如 enter 或 [command, space]。不要传自由文本。",
+            description=(
+                "按下白名单中的单个键或组合键。keys 必须是非空字符串数组，例如 "
+                '["enter"] 或 ["command", "tab"]；不要传字符串或自由文本。'
+            ),
             parameters={
                 "type": "object",
                 "properties": {
                     "keys": {
-                        "oneOf": [
-                            {"type": "string"},
-                            {"type": "array", "items": {"type": "string"}},
-                        ]
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
                     },
                     "interval": {"type": "number"},
                     "delay_ms": {"type": "integer"},

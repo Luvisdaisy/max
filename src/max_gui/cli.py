@@ -6,18 +6,20 @@ import argparse
 import sys
 from pathlib import Path
 
+from max_gui.cleanup import cleanup_record_directories
 from max_gui.config import (
-    MissingDashscopeWorkspaceError,
-    MissingProviderKeyError,
     MissingVllmError,
     MissingWeightsError,
-    ServeNotAllowedError,
-    UnknownProviderError,
     load_settings,
-    require_dashscope_workspace,
-    require_provider_key,
 )
 from max_gui.lifecycle import serve_model
+from max_gui.provider import (
+    MissingProviderKeyError,
+    ServeNotAllowedError,
+    UnknownProviderError,
+    get_provider,
+    require_provider_key,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -32,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="max-gui", description="本地多模态 ReAct GUI Agent")
     parser.add_argument("--workspace", type=Path, default=None, help="工作区根目录，默认当前目录")
     parser.add_argument("--new", action="store_true", help="强制创建新会话")
+    parser.add_argument("--benchmark", action="store_true", help="启动本地 GUI 评测首页")
     sub = parser.add_subparsers(dest="command")
 
     tui = sub.add_parser("tui", help="启动 Textual REPL（默认）")
@@ -40,6 +43,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve = sub.add_parser("serve", help="启动本地 vLLM OpenAI 兼容服务")
     serve.add_argument("--workspace", type=Path, default=None)
+
+    cleanup = sub.add_parser("cleanup", help="清除截图、运行和会话记录")
+    cleanup.add_argument("--workspace", type=Path, default=None)
     return parser
 
 
@@ -63,19 +69,50 @@ def main(argv: list[str] | None = None) -> None:
         print(str(exc), file=sys.stderr)
         raise SystemExit(2) from exc
 
+    if command == "cleanup":
+        raise SystemExit(_run_cleanup(settings))
     if command == "serve":
         try:
             raise SystemExit(serve_model(settings))
         except (MissingWeightsError, MissingVllmError, ServeNotAllowedError) as exc:
             print(str(exc), file=sys.stderr)
             raise SystemExit(1) from exc
+    if args.benchmark:
+        from max_gui.benchmark.service import run_benchmark_server
+
+        run_benchmark_server(settings)
+        return
     try:
-        require_provider_key(settings)
-        require_dashscope_workspace(settings)
-    except (MissingProviderKeyError, MissingDashscopeWorkspaceError) as exc:
+        require_provider_key(get_provider(settings.provider), settings.api_key)
+    except MissingProviderKeyError as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(1) from exc
     from max_gui.app import run_app
 
     force_new = bool(getattr(args, "new", False))
     run_app(settings, force_new=force_new)
+
+
+def _run_cleanup(settings) -> int:
+    """直接清理当前项目的截图、运行与会话记录。
+
+    参数：
+        settings: 已解析的运行配置，用于确定项目根与会话、截图目录。
+
+    返回：
+        清理成功或用户取消时为 0；发生文件系统错误时为 1。
+
+    异常：
+        ValueError: 配置中的清理目标逃出项目根目录。
+    """
+    directories = {
+        "截图": settings.screenshots_dir,
+        "运行": settings.project_root / "artifacts" / "runs",
+        "会话": settings.sessions_dir,
+    }
+    report = cleanup_record_directories(settings.project_root, directories)
+    for label, count in report.removed.items():
+        print(f"{label}记录：已清理 {count} 项。")
+    for error in report.errors:
+        print(f"清理失败：{error}", file=sys.stderr)
+    return 0 if report.succeeded else 1

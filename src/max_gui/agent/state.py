@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Literal, TypedDict
 
+from max_gui.agent.context import TaskContext
+
 AgentStatus = Literal["thinking", "acting", "observing", "done", "error", "interrupted"]
 
 
@@ -21,6 +23,8 @@ class AgentState(TypedDict, total=False):
         error: 失败时的人类可读说明。
         plan: 编号子任务列表；旧检查点可缺省。
         current_subtask: 当前子任务文案；无计划时为空。
+        task_context: 当前用户任务的最小推理上下文；不重放全量会话历史。
+        history_message_count: 任务开始前会话的消息数，只供上下文裁剪诊断。
     """
 
     session_id: str
@@ -33,3 +37,5 @@ class AgentState(TypedDict, total=False):
     error: str | None
     plan: list[str]
     current_subtask: str | None
+    task_context: TaskContext
+    history_message_count: int

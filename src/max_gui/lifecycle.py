@@ -7,13 +7,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from max_gui.config import (
-    DEFAULT_VLLM_BIN,
-    MissingVllmError,
-    ServeNotAllowedError,
-    Settings,
-    require_weights,
-)
+from max_gui.config import DEFAULT_VLLM_BIN, MissingVllmError, Settings, require_weights
+from max_gui.provider import ServeNotAllowedError, get_provider
 
 
 def resolve_vllm_bin(*, default: Path | None = None) -> Path:
@@ -63,7 +58,7 @@ def serve_model(settings: Settings) -> int:
         MissingWeightsError: 权重目录不完整。
         MissingVllmError: 找不到 vLLM 二进制。
     """
-    if settings.provider != "local":
+    if not get_provider(settings.provider).allows_serve:
         raise ServeNotAllowedError()
     model_path = require_weights(settings)
     command = _serve_command(settings, model_path)

@@ -14,12 +14,13 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Label, RichLog, Static
 
 from max_gui.agent.graph import AgentRunner
-from max_gui.config import MissingProviderKeyError, Settings, load_settings
+from max_gui.config import Settings, load_settings
 from max_gui.inference.client import ConnectionFailedError, InferenceClient
 from max_gui.inference.images import SUPPORTED_SUFFIXES, ImagePrepError
 from max_gui.inference.ocr import shutdown_owned_ocr
 from max_gui.inference.omniparser import shutdown_owned_locate
 from max_gui.observability import RunEvent, usage_from_data
+from max_gui.provider import MissingProviderKeyError
 from max_gui.session.store import Session, SessionStore
 from max_gui.tools.protocol import ConfirmationGate, ConfirmationScope
 from max_gui.tools.registry import ToolRegistry, build_default_registry

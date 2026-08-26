@@ -70,7 +70,7 @@ async def test_tools_run_without_auto_approve(settings: Settings) -> None:
         gate=SessionScopedGate(auto_approve=False, auto_approve_desktop=False),
     )
     await registry.invoke("screenshot", {})
-    pressed = await registry.invoke("keyboard_press", {"keys": "enter"})
+    pressed = await registry.invoke("keyboard_press", {"keys": ["enter"]})
     assert "已按下 enter" in _text(pressed)
     assert isinstance(pressed, ToolResult) and pressed.images
     await registry.invoke("mouse_move", {"x": 10, "y": 10})
@@ -83,7 +83,7 @@ async def test_keyboard_press_after_screenshot(settings: Settings) -> None:
     """有截图后 `keyboard_press` 直接执行。"""
     registry, backend = _desktop_registry(settings, gate=DenyGate())
     await registry.invoke("screenshot", {})
-    result = await registry.invoke("keyboard_press", {"keys": "enter"})
+    result = await registry.invoke("keyboard_press", {"keys": ["enter"]})
     assert "已按下 enter" in _text(result)
     assert ("press", {"key": "enter"}) in backend.calls
 
@@ -117,11 +117,32 @@ async def test_keyboard_rejects_unknown_and_dangerous(settings: Settings) -> Non
     registry, backend = _desktop_registry(settings)
     await registry.invoke("screenshot", {})
     before = list(backend.calls)
-    unknown = await registry.invoke("keyboard_press", {"keys": "launch_missiles"})
+    unknown = await registry.invoke("keyboard_press", {"keys": ["launch_missiles"]})
     assert "未知键名" in unknown
     danger = await registry.invoke("keyboard_press", {"keys": ["command", "q"]})
     assert "危险热键" in danger
     assert backend.calls == before
+
+
+async def test_keyboard_requires_key_array_and_sends_command_tab(settings: Settings) -> None:
+    """仅接受非空字符串数组；Command+Tab 作为一个热键发送。"""
+    registry, backend = _desktop_registry(settings)
+    await registry.invoke("screenshot", {})
+    before = list(backend.calls)
+    invalid_values = (
+        "command+tab",
+        '["command", "tab"]',
+        [],
+        ["command", 1],
+    )
+    for keys in invalid_values:
+        result = await registry.invoke("keyboard_press", {"keys": keys})
+        assert "非空字符串数组" in result
+    assert backend.calls == before
+
+    result = await registry.invoke("keyboard_press", {"keys": ["command", "tab"]})
+    assert "已按下 command+tab" in _text(result)
+    assert ("hotkey", {"keys": ["command", "tab"]}) in backend.calls
 
 
 async def test_keyboard_type_ascii_and_paste(settings: Settings) -> None:
@@ -148,7 +169,7 @@ async def test_desktop_closed_loop_fake_backend(settings: Settings) -> None:
     )
     click = await registry.invoke("mouse_click", {})
     typed = await registry.invoke("keyboard_type", {"text": "1+1"})
-    pressed = await registry.invoke("keyboard_press", {"keys": "enter"})
+    pressed = await registry.invoke("keyboard_press", {"keys": ["enter"]})
     shot2 = await registry.invoke("screenshot", {})
     assert isinstance(shot1, ToolResult) and isinstance(shot2, ToolResult)
     assert "单击" in _text(click) and "write" in _text(typed) and "enter" in _text(pressed)
