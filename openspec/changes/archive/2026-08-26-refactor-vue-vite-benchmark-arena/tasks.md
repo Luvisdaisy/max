@@ -39,7 +39,7 @@
 - [x] 6.1 删除旧版服务端 HTML 页面、旧业务路由、`web-gui-v1.json`、复制展开逻辑及其失效测试，不保留兼容层。
 - [x] 6.2 更新 README、Web GUI 评测文档和开发说明，写明 Node/Vite 构建要求、单进程运行方式、v2 任务分层与旧版移除。
 - [x] 6.3 运行前端构建、`uv run ruff format src tests scripts`、`uv run ruff check src tests scripts`、相关 pytest 和 OpenSpec 严格校验。
-- [ ] 6.4 在专用浏览器环境实际执行至少一次 10 条批次，保存报告并将真实浏览器/Agent 结果与离线合同测试分开记录。
+- [x] 6.4 在专用浏览器环境实际执行至少一次 10 条批次，保存报告并将真实浏览器/Agent 结果与离线合同测试分开记录。
 
 ## 7. 完整网站、真实导航与任务质量重构
 
