@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import AsyncIterator, Callable
+import random
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -15,18 +17,43 @@ from typing import Any
 import httpx
 from PIL import Image
 
-from max_gui.config import Settings, require_weights
+from max_gui.config import Settings
 from max_gui.inference.images import prepare_image
+from max_gui.inference.retry import (
+    RetryDecision,
+    RetryMetadata,
+    RetryNotice,
+    classify_http_failure,
+    classify_transport_failure,
+    retry_delay_seconds,
+    safe_retry_detail,
+)
 from max_gui.provider import get_provider, require_provider_key
 
 
 class ConnectionFailedError(RuntimeError):
-    """连不上 `base_url`。本地提示 `serve`，云端提示检查网络与密钥。"""
+    """连不上 `base_url`，由当前 provider 提示检查相应服务。"""
 
-    def __init__(self, base_url: str, *, hint: str | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        hint: str | None = None,
+        metadata: RetryMetadata | None = None,
+    ) -> None:
         """参数：`base_url` 为尝试连接的端点；`hint` 覆盖默认文案。"""
         self.base_url = base_url
-        super().__init__(hint or f"无法连接推理服务（{base_url}）。请先运行：max-gui serve")
+        self.metadata = metadata or RetryMetadata()
+        super().__init__(hint or f"无法连接推理服务（{base_url}）。请检查 provider 配置与网络。")
+
+
+class InferenceRequestError(RuntimeError):
+    """主推理 HTTP 失败、重试耗尽或流式输出后的传输失败。"""
+
+    def __init__(self, message: str, *, metadata: RetryMetadata) -> None:
+        """保存可读文案与不含载荷的尝试统计。"""
+        self.metadata = metadata
+        super().__init__(message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +75,8 @@ class ChatDelta:
         tool_calls: OpenAI 风格工具调用（流式时按 index 拼装）。
         finish_reason: `stop` / `interrupted` 等。
         usage: 接口回传的用量；未回传时为 `None`，不得写成全 0。
+        attempt_count: 当前逻辑调用实际发起的网络请求数。
+        retry_count: 首次请求之外实际发起的重试数。
     """
 
     text: str = ""
@@ -55,6 +84,8 @@ class ChatDelta:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     finish_reason: str | None = None
     usage: TokenUsage | None = None
+    attempt_count: int = 1
+    retry_count: int = 0
 
 
 class InferenceClient:
@@ -65,12 +96,14 @@ class InferenceClient:
         settings: Settings,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
-        check_weights: bool = True,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        random_value: Callable[[], float] = random.random,
     ) -> None:
-        """参数：`transport` 供测试注入；`check_weights` 为假时跳过本地权重检查。"""
+        """参数：`transport`、`sleep` 与 `random_value` 供测试注入。"""
         self.settings = settings
         self._transport = transport
-        self.check_weights = check_weights
+        self._sleep = sleep
+        self._random_value = random_value
 
     async def stream(
         self,
@@ -80,6 +113,7 @@ class InferenceClient:
         on_token: Callable[[str], None] | None = None,
         on_reasoning: Callable[[str], None] | None = None,
         should_stop: Callable[[], bool] | None = None,
+        on_retry: Callable[[RetryNotice], None] | None = None,
     ) -> ChatDelta:
         """流式补全并拼成一条 `ChatDelta`。
 
@@ -89,21 +123,20 @@ class InferenceClient:
             on_token: 每段正文增量回调。
             on_reasoning: 每段思考增量回调；不触发 `on_token`。
             should_stop: 返回真则中止并标 `interrupted`。
+            on_retry: 每次退避前回调安全重试通知；回调异常不影响推理。
 
         异常：
             ConnectionFailedError: 网络层失败。
-            RuntimeError: HTTP 非 2xx。
+            InferenceRequestError: HTTP 非 2xx、重试耗尽或流式输出后断流。
         """
         provider = get_provider(self.settings.provider)
         require_provider_key(provider, self.settings.api_key)
-        if provider.requires_local_weights and self.check_weights:
-            require_weights(self.settings)
-
         payload: dict[str, Any] = {
             "model": self.settings.model_name,
             "messages": messages,
             "stream": True,
             "stream_options": {"include_usage": True},
+            "max_tokens": self.settings.max_output_tokens,
         }
         if tools:
             payload["tools"] = tools
@@ -115,72 +148,221 @@ class InferenceClient:
             else {}
         )
         url = self.settings.base_url.rstrip("/") + "/chat/completions"
-        assembled = ChatDelta()
-        tool_acc: dict[int, dict[str, Any]] = {}
-
-        try:
-            async with httpx.AsyncClient(timeout=120.0, transport=self._transport) as client:
-                async with client.stream("POST", url, json=payload, headers=headers) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        if should_stop and should_stop():
-                            assembled.finish_reason = "interrupted"
-                            break
-                        delta = _parse_sse_line(line)
-                        if delta is None:
-                            continue
-                        if delta.reasoning:
-                            assembled.reasoning += delta.reasoning
-                            if on_reasoning:
-                                on_reasoning(delta.reasoning)
-                        if delta.text:
-                            assembled.text += delta.text
-                            if on_token:
-                                on_token(delta.text)
-                        for call in delta.tool_calls:
-                            index = int(call.get("index") or 0)
-                            slot = tool_acc.setdefault(
-                                index,
-                                {
-                                    "id": "",
-                                    "type": "function",
-                                    "function": {"name": "", "arguments": ""},
-                                },
+        max_attempts = self.settings.inference_max_retries + 1
+        async with httpx.AsyncClient(timeout=120.0, transport=self._transport) as client:
+            for attempt in range(1, max_attempts + 1):
+                if should_stop and should_stop():
+                    return ChatDelta(
+                        finish_reason="interrupted",
+                        attempt_count=max(0, attempt - 1),
+                        retry_count=max(0, attempt - 2),
+                    )
+                assembled = ChatDelta(attempt_count=attempt, retry_count=attempt - 1)
+                tool_acc: dict[int, dict[str, Any]] = {}
+                emitted_delta = False
+                retry_after: str | None = None
+                source_error: BaseException
+                try:
+                    async with client.stream(
+                        "POST", url, json=payload, headers=headers
+                    ) as response:
+                        if response.is_error:
+                            detail, opaque = await _http_error_detail(response)
+                            decision = classify_http_failure(
+                                response.status_code,
+                                detail,
+                                opaque=opaque,
                             )
-                            if call.get("id"):
-                                slot["id"] = call["id"]
-                            fn = call.get("function") or {}
-                            if fn.get("name"):
-                                slot["function"]["name"] += fn["name"]
-                            if fn.get("arguments"):
-                                slot["function"]["arguments"] += fn["arguments"]
-                        if delta.finish_reason:
-                            assembled.finish_reason = delta.finish_reason
-                        if delta.usage is not None:
-                            assembled.usage = delta.usage
-        except httpx.HTTPStatusError as exc:
-            detail = await _http_error_detail(exc)
-            raise RuntimeError(f"推理服务返回 {exc.response.status_code}：{detail}") from exc
-        except httpx.HTTPError as exc:
-            raise ConnectionFailedError(
-                self.settings.base_url,
-                hint=f"无法连接推理服务（{self.settings.base_url}）。{provider.connection_hint}",
-            ) from exc
+                            retry_after = response.headers.get("retry-after")
+                            source_error = httpx.HTTPStatusError(
+                                f"HTTP {response.status_code}",
+                                request=response.request,
+                                response=response,
+                            )
+                            raise _AttemptFailed(decision, source_error)
+                        async for line in response.aiter_lines():
+                            if should_stop and should_stop():
+                                assembled.finish_reason = "interrupted"
+                                break
+                            delta = _parse_sse_line(line)
+                            if delta is None:
+                                continue
+                            if _is_effective_delta(delta):
+                                emitted_delta = True
+                            if delta.reasoning:
+                                assembled.reasoning += delta.reasoning
+                                if on_reasoning:
+                                    on_reasoning(delta.reasoning)
+                            if delta.text:
+                                assembled.text += delta.text
+                                if on_token:
+                                    on_token(delta.text)
+                            _merge_tool_calls(tool_acc, delta.tool_calls)
+                            if delta.finish_reason:
+                                assembled.finish_reason = delta.finish_reason
+                            if delta.usage is not None:
+                                assembled.usage = delta.usage
+                    assembled.tool_calls = [tool_acc[key] for key in sorted(tool_acc)]
+                    return assembled
+                except _AttemptFailed as failure:
+                    decision = failure.decision
+                    source_error = failure.source
+                except httpx.HTTPError as exc:
+                    decision = classify_transport_failure(exc)
+                    source_error = exc
 
-        assembled.tool_calls = [tool_acc[key] for key in sorted(tool_acc)]
-        return assembled
+                metadata = RetryMetadata(
+                    attempt_count=attempt,
+                    retry_count=attempt - 1,
+                    reason_code=decision.reason_code,
+                    status_code=decision.status_code,
+                )
+                if emitted_delta:
+                    raise InferenceRequestError(
+                        "推理流已产生输出后中断，未自动重试："
+                        f"{decision.detail}（共尝试 {attempt} 次）",
+                        metadata=metadata,
+                    ) from source_error
+                if not decision.retryable or attempt >= max_attempts:
+                    raise _final_inference_error(
+                        decision,
+                        metadata,
+                        base_url=self.settings.base_url,
+                        connection_hint=provider.connection_hint,
+                    ) from source_error
+                delay = retry_delay_seconds(
+                    attempt,
+                    random_value=self._random_value(),
+                    retry_after=retry_after,
+                )
+                _notify_retry(
+                    on_retry,
+                    RetryNotice(
+                        attempt=attempt + 1,
+                        max_attempts=max_attempts,
+                        reason_code=decision.reason_code,
+                        status_code=decision.status_code,
+                        delay_ms=int(delay * 1000),
+                        error=decision.detail,
+                    ),
+                )
+                if await self._wait_before_retry(delay, should_stop=should_stop):
+                    return ChatDelta(
+                        finish_reason="interrupted",
+                        attempt_count=attempt,
+                        retry_count=attempt - 1,
+                    )
+        raise AssertionError("推理重试循环未返回结果")
+
+    async def _wait_before_retry(
+        self,
+        delay: float,
+        *,
+        should_stop: Callable[[], bool] | None,
+    ) -> bool:
+        """等待下一次尝试；返回真表示等待期间收到中断。"""
+        if should_stop is None:
+            await self._sleep(delay)
+            return False
+        remaining = delay
+        while remaining > 0:
+            if should_stop():
+                return True
+            chunk = min(0.1, remaining)
+            await self._sleep(chunk)
+            remaining -= chunk
+        return should_stop()
 
 
-async def _http_error_detail(exc: httpx.HTTPStatusError) -> str:
-    """读取流式响应正文；失败则退回异常字符串。"""
+class _AttemptFailed(Exception):
+    """携带一次 HTTP 状态失败的分类和原始异常。"""
+
+    def __init__(self, decision: RetryDecision, source: BaseException) -> None:
+        """保存分类与原始异常，供外层决定重试或终止。"""
+        self.decision = decision
+        self.source = source
+        super().__init__(decision.reason_code)
+
+
+async def _http_error_detail(response: httpx.Response) -> tuple[str, bool]:
+    """读取流式错误响应；返回安全摘要及其是否不透明。"""
     try:
-        raw = await exc.response.aread()
-        text = raw.decode("utf-8", errors="replace").strip()
-        if text:
-            return text[:400]
+        raw = await response.aread()
     except Exception:
-        pass
-    return str(exc)[:400]
+        return response.reason_phrase or f"HTTP {response.status_code}", True
+    text = raw.decode("utf-8", errors="replace").strip()
+    if not text:
+        return response.reason_phrase or f"HTTP {response.status_code}", True
+    return safe_retry_detail(text), False
+
+
+def _is_effective_delta(delta: ChatDelta) -> bool:
+    """判断增量是否已越过安全重放边界。"""
+    return bool(
+        delta.text
+        or delta.reasoning
+        or delta.tool_calls
+        or delta.finish_reason is not None
+        or delta.usage is not None
+    )
+
+
+def _merge_tool_calls(
+    tool_acc: dict[int, dict[str, Any]],
+    tool_calls: list[dict[str, Any]],
+) -> None:
+    """把一批 OpenAI 工具调用分片合并进当前尝试的局部累加器。"""
+    for call in tool_calls:
+        index = int(call.get("index") or 0)
+        slot = tool_acc.setdefault(
+            index,
+            {
+                "id": "",
+                "type": "function",
+                "function": {"name": "", "arguments": ""},
+            },
+        )
+        if call.get("id"):
+            slot["id"] = call["id"]
+        fn = call.get("function") or {}
+        if fn.get("name"):
+            slot["function"]["name"] += fn["name"]
+        if fn.get("arguments"):
+            slot["function"]["arguments"] += fn["arguments"]
+
+
+def _notify_retry(
+    callback: Callable[[RetryNotice], None] | None,
+    notice: RetryNotice,
+) -> None:
+    """隔离重试观察者异常，避免诊断回调改变推理控制流。"""
+    if callback is None:
+        return
+    try:
+        callback(notice)
+    except Exception:
+        return
+
+
+def _final_inference_error(
+    decision: RetryDecision,
+    metadata: RetryMetadata,
+    *,
+    base_url: str,
+    connection_hint: str,
+) -> RuntimeError:
+    """按最后一次分类构造带尝试统计的用户可读异常。"""
+    suffix = f"已重试 {metadata.retry_count} 次，共尝试 {metadata.attempt_count} 次。"
+    if decision.status_code is not None:
+        return InferenceRequestError(
+            f"推理服务返回 {decision.status_code}：{decision.detail}（{suffix}）",
+            metadata=metadata,
+        )
+    return ConnectionFailedError(
+        base_url,
+        hint=f"无法连接推理服务（{base_url}）。{connection_hint}{suffix}",
+        metadata=metadata,
+    )
 
 
 def encode_user_content(

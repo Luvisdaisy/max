@@ -9,14 +9,22 @@ import httpx
 import pytest
 from PIL import Image
 
-from max_gui.config import Settings, load_settings, require_weights
+from max_gui.config import (
+    ContextBudgetConfigError,
+    InferenceRetryConfigError,
+    Settings,
+    load_settings,
+)
+from max_gui.inference.budget import ContextBudgetExceededError, select_context_chains
 from max_gui.inference.client import (
     ConnectionFailedError,
     InferenceClient,
+    InferenceRequestError,
     encode_user_content,
     to_chat_messages,
 )
 from max_gui.inference.images import ImagePrepError, prepare_image
+from max_gui.inference.retry import retry_delay_seconds, safe_retry_detail
 from max_gui.provider import (
     PROVIDERS,
     MissingProviderKeyError,
@@ -34,12 +42,127 @@ def _isolate_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text("", encoding="utf-8")
 
 
-def test_load_settings_defaults_to_4b(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """未覆盖模型时默认名是 `qwen3.5-4b`。"""
+def test_load_settings_defaults_to_ollama(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """未覆盖 provider 时默认使用固定的 Ollama 配置。"""
     _isolate_root(monkeypatch, tmp_path)
     settings = load_settings(workspace=tmp_path)
-    assert settings.provider == "local"
-    assert settings.model_name == "qwen3.5-4b"
+    assert settings.provider == "ollama"
+    assert settings.model_name == "qwen3.5:9b"
+    assert settings.inference_max_retries == 5
+
+
+@pytest.mark.parametrize("value", [0, 5])
+def test_load_settings_accepts_retry_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    value: int,
+) -> None:
+    """主推理重试次数允许关闭或取到上界。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_GUI_INFERENCE_MAX_RETRIES", str(value))
+    assert load_settings(workspace=tmp_path).inference_max_retries == value
+
+
+@pytest.mark.parametrize("value", ["-1", "6", "abc"])
+def test_load_settings_rejects_invalid_retry_count(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    value: str,
+) -> None:
+    """越界或非整数的主推理重试配置在启动阶段失败。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_GUI_INFERENCE_MAX_RETRIES", value)
+    with pytest.raises(InferenceRetryConfigError, match="0–5"):
+        load_settings(workspace=tmp_path)
+
+
+def test_ollama_context_window_is_256k_and_independent_from_ocr(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Ollama 固定使用 256K 主上下文，OCR 的长度变量不会覆盖它。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", "ollama")
+    monkeypatch.setenv("MAX_GUI_MAX_MODEL_LEN", "4096")
+    settings = load_settings(workspace=tmp_path)
+    assert settings.context_window == 262_144
+    assert settings.max_model_len == 4096
+    assert settings.max_output_tokens == 8192
+    assert settings.context_safety_margin == 4096
+
+
+def test_cloud_provider_uses_conservative_context_window(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """非 Ollama provider 使用注册表中的保守上下文容量。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", "modelscope")
+    monkeypatch.setenv("MAX_MODELSCOPE_KEY", "tok")
+    settings = load_settings(workspace=tmp_path)
+    assert settings.context_window == 32_768
+
+
+def test_invalid_context_reserves_fail_during_settings_load(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """输出和安全预留耗尽 provider 容量时在启动阶段失败。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", "modelscope")
+    monkeypatch.setenv("MAX_GUI_MAX_OUTPUT_TOKENS", "30000")
+    monkeypatch.setenv("MAX_GUI_CONTEXT_SAFETY_MARGIN", "4096")
+    with pytest.raises(ContextBudgetConfigError):
+        load_settings(workspace=tmp_path)
+
+
+def test_context_budget_keeps_complete_recent_tool_chains(settings: Settings) -> None:
+    """预算裁剪从最近链向前选择，绝不留下孤立 tool 消息。"""
+    settings.context_window = 700
+    settings.max_output_tokens = 100
+    settings.context_safety_margin = 100
+    settings.image_token_reserve = 0
+    old_chain = [
+        {
+            "role": "assistant",
+            "content": "旧链" * 500,
+            "tool_calls": [{"id": "old", "function": {"name": "screen_info"}}],
+        },
+        {"role": "tool", "tool_call_id": "old", "content": "旧结果"},
+    ]
+    recent_chain = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "new", "function": {"name": "screen_info"}}],
+        },
+        {"role": "tool", "tool_call_id": "new", "content": "新结果"},
+    ]
+    selected = select_context_chains(
+        user_message={"role": "user", "content": "当前任务"},
+        chains=[old_chain, recent_chain],
+        system="系统契约",
+        tools=[],
+        has_inline_image=False,
+        settings=settings,
+    )
+    assert selected.messages[1:] == recent_chain
+    assert selected.included_chain_count == 1
+    assert selected.excluded_chain_count == 1
+
+
+def test_context_budget_rejects_base_request_before_network(settings: Settings) -> None:
+    """基础消息、schema 与图片预留已经超限时直接抛出预算错误。"""
+    settings.context_window = 100
+    settings.max_output_tokens = 40
+    settings.context_safety_margin = 30
+    settings.image_token_reserve = 50
+    with pytest.raises(ContextBudgetExceededError):
+        select_context_chains(
+            user_message={"role": "user", "content": "任务"},
+            chains=[],
+            system="系统契约",
+            tools=[],
+            has_inline_image=True,
+            settings=settings,
+        )
 
 
 def test_load_settings_default_max_iterations(
@@ -69,39 +192,47 @@ def test_env_file_sets_provider(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 def test_process_env_overrides_dotenv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """进程里已有 `MAX_PROVIDER` 时不被 `.env` 覆盖。"""
     _isolate_root(monkeypatch, tmp_path)
-    monkeypatch.setenv("MAX_PROVIDER", "local")
+    monkeypatch.setenv("MAX_PROVIDER", "ollama")
     (tmp_path / ".env").write_text("MAX_PROVIDER=modelscope\n", encoding="utf-8")
     settings = load_settings(workspace=tmp_path)
-    assert settings.provider == "local"
-    assert settings.model_name == "qwen3.5-4b"
+    assert settings.provider == "ollama"
+    assert settings.model_name == "qwen3.5:9b"
 
 
-def test_remote_uses_lan_endpoint_without_local_weights(
+@pytest.mark.parametrize("provider", ["local", "remote"])
+def test_removed_provider_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, provider: str
+) -> None:
+    """已移除的 provider 在配置加载阶段以中文错误拒绝。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", provider)
+    with pytest.raises(UnknownProviderError) as exc:
+        load_settings(workspace=tmp_path)
+    assert provider in str(exc.value)
+    assert "ollama" in str(exc.value)
+    assert "local" not in str(exc.value).split("可用：", maxsplit=1)[-1]
+    assert "remote" not in str(exc.value).split("可用：", maxsplit=1)[-1]
+
+
+async def test_ollama_uses_registered_config_without_auth_and_with_tools(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """remote 使用代码内 LAN 配置，不读取密钥或环境覆盖。"""
+    """Ollama 不查本地权重，且复用无认证的 OpenAI 工具调用请求。"""
     _isolate_root(monkeypatch, tmp_path)
-    monkeypatch.setenv("MAX_PROVIDER", "remote")
-    monkeypatch.setenv("MAX_GUI_BASE_URL", "http://203.0.113.10:9999/v1")
-    monkeypatch.setenv("MODEL_NAME", "qwen3.5-4b-lora")
+    monkeypatch.setenv("MAX_PROVIDER", "ollama")
     settings = load_settings(workspace=tmp_path)
-    assert settings.provider == "remote"
-    assert settings.base_url == "http://192.168.1.158:8000/v1"
-    assert settings.api_key == "EMPTY"
-    assert settings.model_name == "qwen3.5-4b"
-    require_provider_key(get_provider(settings.provider), settings.api_key)
-
-
-async def test_remote_stream_skips_local_weight_check(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """remote 不带认证头，且不因 macOS 没有 LoRA 权重而失败。"""
-    _isolate_root(monkeypatch, tmp_path)
-    monkeypatch.setenv("MAX_PROVIDER", "remote")
-    settings = load_settings(workspace=tmp_path)
+    settings.inference_max_retries = 0
+    tools = [{"type": "function", "function": {"name": "screenshot", "parameters": {}}}]
+    seen: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert "authorization" not in request.headers
+        seen["url"] = str(request.url)
+        seen["authorization"] = request.headers.get("authorization")
+        payload = json.loads(request.content)
+        seen["model"] = payload["model"]
+        seen["tools"] = payload.get("tools")
+        seen["tool_choice"] = payload.get("tool_choice")
+        seen["max_tokens"] = payload.get("max_tokens")
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -109,8 +240,41 @@ async def test_remote_stream_skips_local_weight_check(
         )
 
     client = InferenceClient(settings, transport=httpx.MockTransport(handler))
-    result = await client.stream([{"role": "user", "content": "hi"}])
+    result = await client.stream([{"role": "user", "content": "hi"}], tools=tools)
     assert result.text == "ok"
+    assert seen == {
+        "url": "http://192.168.1.158:11434/v1/chat/completions",
+        "authorization": None,
+        "model": "qwen3.5:9b",
+        "tools": tools,
+        "tool_choice": "auto",
+        "max_tokens": 8192,
+    }
+
+
+async def test_ollama_connection_error_has_lan_hint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Ollama 连不上时提示 WSL、防火墙和局域网端口，不提示本机 serve。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", "ollama")
+    settings = load_settings(workspace=tmp_path)
+    settings.inference_max_retries = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
+    try:
+        await client.stream([{"role": "user", "content": "hi"}])
+    except ConnectionFailedError as exc:
+        message = str(exc)
+        assert "WSL Ollama" in message
+        assert "Windows 防火墙" in message
+        assert "局域网端口" in message
+        assert "max-gui serve" not in message
+        return
+    raise AssertionError("expected ConnectionFailedError")
 
 
 def test_modelscope_default_model_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -227,21 +391,6 @@ def test_openrouter_uses_registered_config(monkeypatch: pytest.MonkeyPatch, tmp_
     assert settings.model_name == "qwen/qwen3.5-plus"
     assert settings.base_url == "https://openrouter.ai/api/v1"
     assert settings.api_key == "or-token"
-
-
-def test_local_short_name_not_aliased(settings: Settings, tmp_path: Path) -> None:
-    """短名 `4b` 不会映射到 `qwen3.5-4b`。"""
-    settings.provider = "local"
-    settings.model_name = "4b"
-    settings.model_root = tmp_path / "model"
-    try:
-        require_weights(settings)
-    except Exception as exc:
-        assert "4b" in str(exc)
-        assert "qwen3.5-4b" not in str(exc)
-        assert "download" not in str(exc)
-        return
-    raise AssertionError("expected missing weights for model/4b")
 
 
 def test_prepare_oversized_image(tmp_path: Path, settings: Settings) -> None:
@@ -412,6 +561,295 @@ def _sse(chunks: list[str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+class _FailingStream(httpx.AsyncByteStream):
+    """可在可选首段之后抛出读取错误的测试流。"""
+
+    def __init__(self, first_chunk: bytes | None = None) -> None:
+        """参数：`first_chunk` 为断流前可选发送的原始 SSE 字节。"""
+        self.first_chunk = first_chunk
+
+    async def __aiter__(self):
+        """先发送首段，再模拟服务端提前断流。"""
+        if self.first_chunk is not None:
+            yield self.first_chunk
+        raise httpx.ReadError("stream closed")
+
+
+async def test_retry_recovers_from_transport_errors(settings: Settings) -> None:
+    """两次连接失败后第三次成功，并保留一次逻辑调用的尝试统计。"""
+    settings.inference_max_retries = 5
+    attempts = 0
+    waits: list[float] = []
+    notices = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise httpx.ConnectError("refused", request=request)
+        return httpx.Response(200, content=_sse(["ok"]).encode())
+
+    async def fake_sleep(delay: float) -> None:
+        waits.append(delay)
+
+    client = InferenceClient(
+        settings,
+        transport=httpx.MockTransport(handler),
+        sleep=fake_sleep,
+        random_value=lambda: 0.0,
+    )
+    result = await client.stream(
+        [{"role": "user", "content": "hi"}],
+        on_retry=notices.append,
+    )
+    assert result.text == "ok"
+    assert result.attempt_count == 3
+    assert result.retry_count == 2
+    assert attempts == 3
+    assert waits == [0.5, 1.0]
+    assert [notice.attempt for notice in notices] == [2, 3]
+
+
+@pytest.mark.parametrize("status", [408, 425, 429, 500, 502, 503, 504])
+async def test_retryable_http_status_recovers(settings: Settings, status: int) -> None:
+    """规范列出的瞬时 HTTP 状态在下一次请求恢复。"""
+    settings.inference_max_retries = 1
+    attempts = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(status, text="temporary")
+        return httpx.Response(200, content=_sse(["ok"]).encode())
+
+    async def fake_sleep(_delay: float) -> None:
+        return None
+
+    client = InferenceClient(
+        settings,
+        transport=httpx.MockTransport(handler),
+        sleep=fake_sleep,
+        random_value=lambda: 0.0,
+    )
+    result = await client.stream([{"role": "user", "content": "hi"}])
+    assert result.text == "ok"
+    assert attempts == 2
+
+
+async def test_retry_exhaustion_stops_after_six_attempts(settings: Settings) -> None:
+    """默认五次重试耗尽后停止，并把次数写进连接错误。"""
+    settings.inference_max_retries = 5
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ConnectError("refused", request=request)
+
+    async def fake_sleep(_delay: float) -> None:
+        return None
+
+    client = InferenceClient(
+        settings,
+        transport=httpx.MockTransport(handler),
+        sleep=fake_sleep,
+        random_value=lambda: 0.0,
+    )
+    with pytest.raises(ConnectionFailedError) as caught:
+        await client.stream([{"role": "user", "content": "hi"}])
+    assert attempts == 6
+    assert caught.value.metadata.attempt_count == 6
+    assert caught.value.metadata.retry_count == 5
+    assert "已重试 5 次" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("body", "expected_reason"),
+    [
+        (b"", "http_400_opaque"),
+        (b"Client error '400 Bad Request' for url", "http_400_opaque"),
+        (b'{"code":"server_busy"}', "http_400_transient"),
+    ],
+)
+async def test_retryable_http_400_recovers(
+    settings: Settings,
+    body: bytes,
+    expected_reason: str,
+) -> None:
+    """无正文或明确瞬时原因的 HTTP 400 可重试。"""
+    settings.inference_max_retries = 1
+    attempts = 0
+    notices = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(400, content=body)
+        return httpx.Response(200, content=_sse(["ok"]).encode())
+
+    async def fake_sleep(_delay: float) -> None:
+        return None
+
+    client = InferenceClient(
+        settings,
+        transport=httpx.MockTransport(handler),
+        sleep=fake_sleep,
+        random_value=lambda: 0.0,
+    )
+    result = await client.stream(
+        [{"role": "user", "content": "hi"}],
+        on_retry=notices.append,
+    )
+    assert result.text == "ok"
+    assert notices[0].reason_code == expected_reason
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"code": "model_not_found"},
+        {"error": "maximum context length exceeded"},
+        {"error": "invalid tool schema"},
+    ],
+)
+async def test_permanent_http_400_is_not_retried(settings: Settings, body: dict) -> None:
+    """模型、上下文和工具 schema 等永久 400 立即失败。"""
+    settings.inference_max_retries = 5
+    attempts = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(400, json=body)
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
+    with pytest.raises(InferenceRequestError) as caught:
+        await client.stream([{"role": "user", "content": "hi"}])
+    assert attempts == 1
+    assert caught.value.metadata.retry_count == 0
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 413, 422])
+async def test_permanent_http_status_is_not_retried(settings: Settings, status: int) -> None:
+    """鉴权、模型、请求体和语义错误不进入重试。"""
+    settings.inference_max_retries = 5
+    attempts = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(status, text="permanent")
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
+    with pytest.raises(InferenceRequestError):
+        await client.stream([{"role": "user", "content": "hi"}])
+    assert attempts == 1
+
+
+def test_retry_delay_uses_jitter_retry_after_and_cap() -> None:
+    """退避采用指数基础、最多 20% 抖动，并限制服务端等待上限。"""
+    assert retry_delay_seconds(1, random_value=0.0) == 0.5
+    assert retry_delay_seconds(2, random_value=1.0) == 1.2
+    assert retry_delay_seconds(5, random_value=0.0) == 8.0
+    assert retry_delay_seconds(1, random_value=0.0, retry_after="3") == 3.0
+    assert retry_delay_seconds(1, random_value=0.0, retry_after="90") == 30.0
+
+
+def test_retry_detail_redacts_plain_and_json_credentials() -> None:
+    """重试错误摘要会遮蔽普通文本和 JSON 中的认证值。"""
+    detail = safe_retry_detail(
+        'Authorization: Bearer secret-a, "api_key":"secret-b", "token":"secret-c"'
+    )
+    assert "secret-a" not in detail
+    assert "secret-b" not in detail
+    assert "secret-c" not in detail
+
+
+async def test_retry_wait_can_be_interrupted(settings: Settings) -> None:
+    """退避期间中断会阻止下一次网络请求。"""
+    settings.inference_max_retries = 5
+    attempts = 0
+    stopped = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ConnectError("refused", request=request)
+
+    async def fake_sleep(_delay: float) -> None:
+        nonlocal stopped
+        stopped = True
+
+    client = InferenceClient(
+        settings,
+        transport=httpx.MockTransport(handler),
+        sleep=fake_sleep,
+        random_value=lambda: 0.0,
+    )
+    result = await client.stream(
+        [{"role": "user", "content": "hi"}],
+        should_stop=lambda: stopped,
+    )
+    assert result.finish_reason == "interrupted"
+    assert attempts == 1
+
+
+async def test_disconnect_before_first_delta_is_retried(settings: Settings) -> None:
+    """首个有效 SSE 增量前断流可以安全重放。"""
+    settings.inference_max_retries = 1
+    attempts = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(200, stream=_FailingStream())
+        return httpx.Response(200, content=_sse(["ok"]).encode())
+
+    async def fake_sleep(_delay: float) -> None:
+        return None
+
+    client = InferenceClient(
+        settings,
+        transport=httpx.MockTransport(handler),
+        sleep=fake_sleep,
+        random_value=lambda: 0.0,
+    )
+    result = await client.stream([{"role": "user", "content": "hi"}])
+    assert result.text == "ok"
+    assert result.attempt_count == 2
+
+
+@pytest.mark.parametrize(
+    "chunk",
+    [
+        b'data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}\n\n',
+        b'data: {"choices":[{"delta":{"reasoning":"thinking"},"finish_reason":null}]}\n\n',
+        b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1",'
+        b'"function":{"name":"screenshot","arguments":""}}]},"finish_reason":null}]}\n\n',
+    ],
+)
+async def test_disconnect_after_effective_delta_is_not_retried(
+    settings: Settings,
+    chunk: bytes,
+) -> None:
+    """正文、思考或工具分片输出后断流不会重放请求。"""
+    settings.inference_max_retries = 5
+    attempts = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(200, stream=_FailingStream(chunk))
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
+    with pytest.raises(InferenceRequestError, match="已产生输出后中断"):
+        await client.stream([{"role": "user", "content": "hi"}])
+    assert attempts == 1
+
+
 async def test_stream_tokens(settings: Settings) -> None:
     """Mock 传输下逐 token 回调并拼出完整文本。"""
     body = _sse(["你", "好"])
@@ -424,7 +862,7 @@ async def test_stream_tokens(settings: Settings) -> None:
             200, headers={"content-type": "text/event-stream"}, content=body.encode()
         )
 
-    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=False)
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
     tokens: list[str] = []
     result = await client.stream([{"role": "user", "content": "hi"}], on_token=tokens.append)
     assert result.text == "你好"
@@ -460,7 +898,7 @@ async def test_stream_requests_include_usage_and_parses_empty_choices(
             200, headers={"content-type": "text/event-stream"}, content=body.encode()
         )
 
-    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=False)
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
     tokens: list[str] = []
     result = await client.stream([{"role": "user", "content": "hi"}], on_token=tokens.append)
     assert captured["stream"] is True
@@ -482,7 +920,7 @@ async def test_stream_usage_total_falls_back_to_sum(settings: Settings) -> None:
             200, headers={"content-type": "text/event-stream"}, content=body.encode()
         )
 
-    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=False)
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
     result = await client.stream([{"role": "user", "content": "hi"}])
     assert result.usage is not None
     assert result.usage.total_tokens == 7
@@ -497,7 +935,7 @@ async def test_stream_without_usage_stays_unknown(settings: Settings) -> None:
             200, headers={"content-type": "text/event-stream"}, content=body.encode()
         )
 
-    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=False)
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
     result = await client.stream([{"role": "user", "content": "hi"}])
     assert result.text == "只有正文"
     assert result.usage is None
@@ -526,7 +964,7 @@ async def test_stream_reasoning_separate_from_content(settings: Settings) -> Non
             content=_sse_mixed().encode(),
         )
 
-    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=False)
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
     tokens: list[str] = []
     thoughts: list[str] = []
     result = await client.stream(
@@ -591,7 +1029,7 @@ async def test_stream_http_error_includes_status(settings: Settings) -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(400, json={"error": "payload too large"})
 
-    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=False)
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
     try:
         await client.stream([{"role": "user", "content": "hi"}])
     except RuntimeError as exc:
@@ -603,23 +1041,12 @@ async def test_stream_http_error_includes_status(settings: Settings) -> None:
     raise AssertionError("expected RuntimeError")
 
 
-async def test_connection_error_mentions_serve(settings: Settings) -> None:
-    """本地后端连不上时提示 `max-gui serve`。"""
-    client = InferenceClient(settings, check_weights=False)
-    try:
-        await client.stream([{"role": "user", "content": "hi"}])
-    except ConnectionFailedError as exc:
-        assert "max-gui serve" in str(exc)
-        return
-    raise AssertionError("expected ConnectionFailedError")
-
-
 async def test_modelscope_connection_omits_serve(settings: Settings) -> None:
     """魔搭后端连不上时不提示 `max-gui serve`。"""
     settings.provider = "modelscope"
     settings.api_key = "tok"
     settings.model_name = "Qwen/Qwen3.8-27B"
-    client = InferenceClient(settings, check_weights=True)
+    client = InferenceClient(settings)
     try:
         await client.stream([{"role": "user", "content": "hi"}])
     except ConnectionFailedError as exc:
@@ -638,7 +1065,7 @@ async def test_modelscope_missing_key_skips_http(settings: Settings) -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         raise AssertionError("must not send HTTP without key")
 
-    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=True)
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
     try:
         await client.stream([{"role": "user", "content": "hi"}])
     except MissingProviderKeyError as exc:
@@ -647,14 +1074,11 @@ async def test_modelscope_missing_key_skips_http(settings: Settings) -> None:
     raise AssertionError("expected MissingProviderKeyError")
 
 
-async def test_modelscope_skips_local_weights_and_sends_id(
-    settings: Settings, tmp_path: Path
-) -> None:
-    """云端不检查本地目录，请求 `model` 为 Model Id。"""
+async def test_modelscope_sends_registered_model_id(settings: Settings, tmp_path: Path) -> None:
+    """魔搭请求使用注册表中的模型标识。"""
     settings.provider = "modelscope"
     settings.api_key = "tok"
     settings.model_name = "Qwen/Qwen3.8-27B"
-    settings.model_root = tmp_path / "no-weights"
     seen: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -668,7 +1092,7 @@ async def test_modelscope_skips_local_weights_and_sends_id(
             content=_sse(["ok"]).encode(),
         )
 
-    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=True)
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
     tools = [{"type": "function", "function": {"name": "screenshot", "parameters": {}}}]
     result = await client.stream([{"role": "user", "content": "hi"}], tools=tools)
     assert result.text == "ok"
@@ -686,7 +1110,6 @@ async def test_openrouter_sends_registered_model_key_and_tools(
     settings.base_url = definition.base_url
     settings.model_name = definition.model_name
     settings.api_key = "or-token"
-    settings.model_root = tmp_path / "no-weights"
     seen: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -703,7 +1126,7 @@ async def test_openrouter_sends_registered_model_key_and_tools(
         )
 
     tools = [{"type": "function", "function": {"name": "screenshot", "parameters": {}}}]
-    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=True)
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
     result = await client.stream([{"role": "user", "content": "hi"}], tools=tools)
     assert result.text == "ok"
     assert seen == {
@@ -751,17 +1174,16 @@ def _sse_tool_calls() -> str:
 
 
 def _configure_dashscope(settings: Settings, tmp_path: Path) -> None:
-    """把夹具改成可用的 `dashscope` 配置，且无本地权重目录。"""
+    """把夹具改成可用的 `dashscope` 配置。"""
     settings.provider = "dashscope"
     settings.api_key = "sk-tok"
     settings.model_name = PROVIDERS["dashscope"].model_name
-    settings.model_root = tmp_path / "no-weights"
 
 
 async def test_dashscope_connection_omits_serve(settings: Settings, tmp_path: Path) -> None:
     """DashScope 后端连不上时不提示 `max-gui serve`。"""
     _configure_dashscope(settings, tmp_path)
-    client = InferenceClient(settings, check_weights=True)
+    client = InferenceClient(settings)
     try:
         await client.stream([{"role": "user", "content": "hi"}])
     except ConnectionFailedError as exc:
@@ -780,7 +1202,7 @@ async def test_dashscope_missing_key_skips_http(settings: Settings, tmp_path: Pa
     def handler(_request: httpx.Request) -> httpx.Response:
         raise AssertionError("must not send HTTP without key")
 
-    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=True)
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
     try:
         await client.stream([{"role": "user", "content": "hi"}])
     except MissingProviderKeyError as exc:
@@ -789,10 +1211,8 @@ async def test_dashscope_missing_key_skips_http(settings: Settings, tmp_path: Pa
     raise AssertionError("expected MissingProviderKeyError")
 
 
-async def test_dashscope_skips_local_weights_and_sends_id(
-    settings: Settings, tmp_path: Path
-) -> None:
-    """DashScope 不检查本地目录，请求使用注册表端点与模型。"""
+async def test_dashscope_sends_registered_model_id(settings: Settings, tmp_path: Path) -> None:
+    """DashScope 请求使用注册表端点与模型。"""
     _configure_dashscope(settings, tmp_path)
     settings.base_url = PROVIDERS["dashscope"].base_url
     seen: dict[str, object] = {}
@@ -809,7 +1229,7 @@ async def test_dashscope_skips_local_weights_and_sends_id(
             content=_sse(["ok"]).encode(),
         )
 
-    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=True)
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
     tools = [{"type": "function", "function": {"name": "screenshot", "parameters": {}}}]
     result = await client.stream([{"role": "user", "content": "hi"}], tools=tools)
     assert result.text == "ok"
@@ -830,7 +1250,7 @@ async def test_dashscope_assembles_tool_calls(settings: Settings, tmp_path: Path
             content=_sse_tool_calls().encode(),
         )
 
-    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=True)
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
     result = await client.stream(
         [{"role": "user", "content": "hi"}],
         tools=[{"type": "function", "function": {"name": "screenshot"}}],
@@ -853,7 +1273,7 @@ async def test_modelscope_assembles_tool_calls(settings: Settings) -> None:
             content=_sse_tool_calls().encode(),
         )
 
-    client = InferenceClient(settings, transport=httpx.MockTransport(handler), check_weights=True)
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
     result = await client.stream(
         [{"role": "user", "content": "hi"}],
         tools=[{"type": "function", "function": {"name": "screenshot"}}],

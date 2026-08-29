@@ -1,4 +1,4 @@
-"""CLI 与 vLLM 启动：参数解析、缺权重提示、二进制查找顺序。"""
+"""CLI 与 vLLM 二进制定位：子命令解析、记录清理与查找顺序。"""
 
 from __future__ import annotations
 
@@ -8,25 +8,19 @@ from pathlib import Path
 import pytest
 
 from max_gui.cli import _run_cleanup, build_parser
-from max_gui.config import (
-    MissingVllmError,
-    MissingWeightsError,
-    Settings,
-    require_weights,
-)
-from max_gui.lifecycle import _serve_command, resolve_vllm_bin, serve_model
-from max_gui.provider import ServeNotAllowedError
+from max_gui.config import MissingVllmError, Settings
+from max_gui.lifecycle import resolve_vllm_bin
 
 
 def test_parser_default_and_subcommands() -> None:
-    """无子命令、`tui --new`、`serve` 能解析；无 `--model`。"""
+    """无子命令、`tui --new` 与 `cleanup` 能解析；无 `--model` 或 `serve`。"""
     parser = build_parser()
     assert parser.parse_args([]).command is None
     assert parser.parse_args(["tui", "--new"]).new is True
-    serve = parser.parse_args(["serve"])
-    assert serve.command == "serve"
     cleanup = parser.parse_args(["cleanup"])
     assert cleanup.command == "cleanup"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["serve"])
     with pytest.raises(SystemExit):
         parser.parse_args(["cleanup", "--yes"])
 
@@ -95,64 +89,6 @@ def test_benchmark_flag_remains_available_from_max_gui_entrypoint() -> None:
     parser = build_parser()
     args = parser.parse_args(["--benchmark"])
     assert args.benchmark is True and args.command is None
-
-
-def test_missing_weights_includes_path_not_download(settings: Settings, tmp_path: Path) -> None:
-    """缺权重时错误信息包含目录路径，不含 download 命令。"""
-    settings.model_name = "qwen3.5-2b"
-    settings.model_root = tmp_path / "empty-models"
-    settings.model_root.mkdir()
-    try:
-        require_weights(settings)
-    except MissingWeightsError as exc:
-        message = str(exc)
-        assert "qwen3.5-2b" in message
-        assert "download" not in message
-        return
-    raise AssertionError("expected MissingWeightsError")
-
-
-def test_serve_rejected_for_modelscope(settings: Settings) -> None:
-    """`modelscope` 下 `serve_model` 拒绝启动。"""
-    settings.provider = "modelscope"
-    settings.model_name = "Qwen/Qwen3.8-27B"
-    try:
-        serve_model(settings)
-    except ServeNotAllowedError as exc:
-        assert "local" in str(exc)
-        assert ".env" in str(exc)
-        return
-    raise AssertionError("expected ServeNotAllowedError")
-
-
-def test_serve_rejected_for_dashscope(settings: Settings) -> None:
-    """`dashscope` 下 `serve_model` 拒绝启动。"""
-    settings.provider = "dashscope"
-    settings.model_name = "qwen3.5-plus"
-    try:
-        serve_model(settings)
-    except ServeNotAllowedError as exc:
-        assert "local" in str(exc)
-        assert ".env" in str(exc)
-        return
-    raise AssertionError("expected ServeNotAllowedError")
-
-
-def test_serve_command_uses_resolved_binary(settings: Settings, tmp_path: Path) -> None:
-    """`vllm serve` 使用指定二进制，不含 `python -m`。"""
-    binary = tmp_path / "vllm"
-    binary.write_text("#!/bin/sh\n", encoding="utf-8")
-    binary.chmod(0o755)
-    command = _serve_command(settings, settings.model_path, vllm_bin=binary)
-    assert command[0] == str(binary)
-    assert command[1] == "serve"
-    assert str(settings.model_path) in command
-    assert "--max-model-len" in command
-    assert "--enable-auto-tool-choice" in command
-    assert "--tool-call-parser" in command
-    assert settings.model_name in command
-    assert "python" not in Path(command[0]).name
-    assert "-m" not in command
 
 
 def test_resolve_vllm_from_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

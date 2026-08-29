@@ -1,4 +1,4 @@
-"""运行时配置：`.env` 载入、provider 快照、路径探测与权重校验。"""
+"""运行时配置：`.env` 载入、provider 快照与 OCR / OmniParser 路径探测。"""
 
 from __future__ import annotations
 
@@ -15,16 +15,29 @@ DEFAULT_OCR_MODEL = "paddleocr-vl-1.5"
 DEFAULT_OCR_BASE_URL = "http://127.0.0.1:8001/v1"
 DEFAULT_OMNIPARSER_DIR = "omniparserv2"
 DEFAULT_OMNIPARSER_BASE_URL = "http://127.0.0.1:8002"
+DEFAULT_MAX_OUTPUT_TOKENS = 8192
+DEFAULT_CONTEXT_SAFETY_MARGIN = 4096
+DEFAULT_IMAGE_TOKEN_RESERVE = 8192
+DEFAULT_INFERENCE_MAX_RETRIES = 5
 
 
-class MissingWeightsError(FileNotFoundError):
-    """本地权重目录不完整。"""
+class InferenceRetryConfigError(ValueError):
+    """主推理最大重试次数不是 0–5 的整数。"""
 
-    def __init__(self, model_name: str, path: Path) -> None:
-        """参数：`model_name` 为 provider 模型名；`path` 为缺失的权重目录。"""
-        self.model_name = model_name
-        self.path = path
-        super().__init__(f"模型权重缺失：{path}")
+    def __init__(self, raw: object) -> None:
+        """用非法配置原文构造不包含敏感信息的中文错误。"""
+        super().__init__(f"MAX_GUI_INFERENCE_MAX_RETRIES 必须是 0–5 的整数，当前值：{raw!s}")
+
+
+class ContextBudgetConfigError(ValueError):
+    """主推理上下文容量与预留配置无法形成正的输入预算。"""
+
+    def __init__(self, context_window: int, max_output_tokens: int, safety_margin: int) -> None:
+        """用容量和两项预留构造不包含敏感内容的中文错误。"""
+        super().__init__(
+            "主推理上下文预算无效："
+            f"容量 {context_window}，输出预留 {max_output_tokens}，安全余量 {safety_margin}。"
+        )
 
 
 class MissingVllmError(FileNotFoundError):
@@ -95,7 +108,11 @@ class Settings:
     max_image_bytes: int = 2_000_000
     tool_timeout: float = 30.0
     max_model_len: int = 8192
-    gpu_memory_utilization: float = 0.85
+    context_window: int = 262_144
+    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
+    context_safety_margin: int = DEFAULT_CONTEXT_SAFETY_MARGIN
+    image_token_reserve: int = DEFAULT_IMAGE_TOKEN_RESERVE
+    inference_max_retries: int = DEFAULT_INFERENCE_MAX_RETRIES
     dtype: str = "auto"
     ocr_base_url: str = DEFAULT_OCR_BASE_URL
     ocr_start_timeout: float = 180.0
@@ -105,11 +122,6 @@ class Settings:
     omniparser_base_url: str = DEFAULT_OMNIPARSER_BASE_URL
     omniparser_start_timeout: float = 180.0
     omniparser_timeout: float = 120.0
-
-    @property
-    def model_path(self) -> Path:
-        """本地权重目录：`model_root / model_name`。仅 `local` 后端使用。"""
-        return self.model_root / self.model_name
 
     @property
     def ocr_model_path(self) -> Path:
@@ -133,7 +145,9 @@ def load_settings(
     环境变量：`MAX_PROVIDER`、`MAX_MODELSCOPE_KEY`、`MAX_DASHSCOPE_KEY`、
     `MAX_OPENROUTER_KEY`、`MAX_GUI_WORKSPACE`、
     `MAX_GUI_MAX_ITERATIONS`、`MAX_GUI_MAX_IMAGE_*`、`MAX_GUI_TOOL_TIMEOUT`、
-    `MAX_GUI_MAX_MODEL_LEN`、`MAX_GUI_GPU_MEM`、`MAX_GUI_DTYPE`、`MAX_GUI_OCR_*`、
+    `MAX_GUI_MAX_MODEL_LEN`、`MAX_GUI_MAX_OUTPUT_TOKENS`、
+    `MAX_GUI_CONTEXT_SAFETY_MARGIN`、`MAX_GUI_INFERENCE_MAX_RETRIES`、
+    `MAX_GUI_DTYPE`、`MAX_GUI_OCR_*`、
     `MAX_GUI_OMNIPARSER_*`。
     provider 的模型、端点与能力来自 `max_gui.provider`；不读取旧共享键、
     `MODEL_NAME` 或 provider 专属 SDK 键。
@@ -147,10 +161,36 @@ def load_settings(
 
     异常：
         UnknownProviderError: `MAX_PROVIDER` 非法，由 provider 模块抛出。
+        InferenceRetryConfigError: 主推理重试次数不是 0–5 的整数。
+        ContextBudgetConfigError: 主推理上下文预留无法形成正的输入预算。
     """
     root = detect_project_root()
     load_env_file(root)
     provider = resolve_provider(os.environ.get("MAX_PROVIDER"))
+    max_model_len = int(os.environ.get("MAX_GUI_MAX_MODEL_LEN") or 8192)
+    context_window = provider.context_window
+    max_output_tokens = int(
+        os.environ.get("MAX_GUI_MAX_OUTPUT_TOKENS") or DEFAULT_MAX_OUTPUT_TOKENS
+    )
+    retry_raw = os.environ.get("MAX_GUI_INFERENCE_MAX_RETRIES")
+    try:
+        inference_max_retries = (
+            DEFAULT_INFERENCE_MAX_RETRIES if retry_raw is None else int(retry_raw)
+        )
+    except ValueError as exc:
+        raise InferenceRetryConfigError(retry_raw) from exc
+    if not 0 <= inference_max_retries <= 5:
+        raise InferenceRetryConfigError(retry_raw)
+    context_safety_margin = int(
+        os.environ.get("MAX_GUI_CONTEXT_SAFETY_MARGIN") or DEFAULT_CONTEXT_SAFETY_MARGIN
+    )
+    if (
+        context_window <= 0
+        or max_output_tokens <= 0
+        or context_safety_margin <= 0
+        or max_output_tokens + context_safety_margin >= context_window
+    ):
+        raise ContextBudgetConfigError(context_window, max_output_tokens, context_safety_margin)
     api_key = (
         (os.environ.get(provider.api_key_env) or "").strip()
         if provider.api_key_env is not None
@@ -170,8 +210,11 @@ def load_settings(
         max_image_edge=int(os.environ.get("MAX_GUI_MAX_IMAGE_EDGE") or 1536),
         max_image_bytes=int(os.environ.get("MAX_GUI_MAX_IMAGE_BYTES") or 2_000_000),
         tool_timeout=float(os.environ.get("MAX_GUI_TOOL_TIMEOUT") or 30),
-        max_model_len=int(os.environ.get("MAX_GUI_MAX_MODEL_LEN") or 8192),
-        gpu_memory_utilization=float(os.environ.get("MAX_GUI_GPU_MEM") or 0.85),
+        max_model_len=max_model_len,
+        context_window=context_window,
+        max_output_tokens=max_output_tokens,
+        context_safety_margin=context_safety_margin,
+        inference_max_retries=inference_max_retries,
         dtype=os.environ.get("MAX_GUI_DTYPE") or "auto",
         ocr_base_url=os.environ.get("MAX_GUI_OCR_BASE_URL") or DEFAULT_OCR_BASE_URL,
         ocr_start_timeout=float(os.environ.get("MAX_GUI_OCR_START_TIMEOUT") or 180),
@@ -196,18 +239,3 @@ def weights_ready(path: Path) -> bool:
     return not any(
         p.suffix == ".incomplete" or p.name.endswith(".incomplete") for p in path.iterdir()
     )
-
-
-def require_weights(settings: Settings) -> Path:
-    """确认当前本地模型权重可用。
-
-    返回：
-        权重目录。
-
-    异常：
-        MissingWeightsError: 目录缺失或不完整。
-    """
-    path = settings.model_path
-    if not weights_ready(path):
-        raise MissingWeightsError(settings.model_name, path)
-    return path

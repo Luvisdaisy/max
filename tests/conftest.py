@@ -25,6 +25,7 @@ def _clear_provider_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "MAX_BAILIAN_WORKSPACE",
         "MAX_GUI_MODEL",
         "MAX_GUI_API_KEY",
+        "MAX_GUI_INFERENCE_MAX_RETRIES",
         "MODELSCOPE_SDK_TOKEN",
         "DASHSCOPE_API_KEY",
     ):
@@ -52,4 +53,5 @@ def settings(tmp_path: Path) -> Settings:
         max_image_edge=64,
         max_image_bytes=20_000,
         tool_timeout=1.0,
+        inference_max_retries=0,
     )

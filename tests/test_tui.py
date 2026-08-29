@@ -439,3 +439,31 @@ async def test_monitor_unknown_usage_is_not_zero(settings: Settings) -> None:
         assert "输入 0 / 输出 0" not in rendered
         assert "用量未知" in rendered
         await pilot.pause()
+
+
+async def test_monitor_shows_model_retry_without_conversation_message(
+    settings: Settings,
+) -> None:
+    """模型重试次数、等待和安全原因只显示在运行监控。"""
+    app = MaxGuiApp(settings, force_new=True)
+    async with app.run_test() as pilot:
+        app._handle_run_event(_event("run.started"))
+        app._handle_run_event(
+            _event(
+                "model.retrying",
+                data={
+                    "attempt": 3,
+                    "max_attempts": 6,
+                    "reason_code": "http_503",
+                    "status_code": 503,
+                    "delay_ms": 1000,
+                    "error": "service unavailable",
+                },
+            )
+        )
+        rendered = str(app.query_one("#monitor", Static).content)
+        assert "模型重试 3/6" in rendered
+        assert "等待 1000ms" in rendered
+        assert "service unavailable" in rendered
+        assert "模型重试" not in _transcript(app)
+        await pilot.pause()

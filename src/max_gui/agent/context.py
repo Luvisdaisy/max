@@ -45,9 +45,18 @@ class TaskContext(TypedDict, total=False):
     latest_observation: dict[str, str]
     action_history: list[ActionSummary]
     grounded_facts: list[GroundedFact]
+    completion_required: bool
+    completion_verified: bool
+    completion_summary: str
+    conversation_observation: dict[str, str]
+    conversation_dialogue: list[str]
 
 
-def new_task_context(user_instruction: str, image_paths: Iterable[str] = ()) -> TaskContext:
+def new_task_context(
+    user_instruction: str,
+    image_paths: Iterable[str] = (),
+    conversation_context: dict[str, Any] | None = None,
+) -> TaskContext:
     """创建一个新任务的初始胶囊。"""
     context: TaskContext = {
         "task_id": f"task-{uuid4().hex}",
@@ -57,10 +66,22 @@ def new_task_context(user_instruction: str, image_paths: Iterable[str] = ()) -> 
         "current_subtask": None,
         "action_history": [],
         "grounded_facts": [],
+        "completion_required": False,
+        "completion_verified": False,
+        "completion_summary": "",
     }
     paths = list(image_paths)
     if paths:
         context["latest_observation"] = {"path": paths[-1], "source": "user_attachment"}
+    observation = (conversation_context or {}).get("observation")
+    if isinstance(observation, dict) and observation.get("path"):
+        context["conversation_observation"] = {
+            "path": str(observation["path"]),
+            "source": str(observation.get("source") or "tool"),
+        }
+    dialogue = (conversation_context or {}).get("dialogue")
+    if isinstance(dialogue, list):
+        context["conversation_dialogue"] = [str(item)[:240] for item in dialogue][-2:]
     return context
 
 
@@ -88,6 +109,18 @@ def restore_task_context(value: Any, messages: list[dict[str, Any]]) -> TaskCont
             ]
         facts = value.get("grounded_facts")
         context["grounded_facts"] = sanitize_grounded_facts(facts)
+        context["completion_required"] = bool(value.get("completion_required"))
+        context["completion_verified"] = bool(value.get("completion_verified"))
+        context["completion_summary"] = str(value.get("completion_summary") or "")[:400]
+        observation = value.get("conversation_observation")
+        if isinstance(observation, dict) and observation.get("path"):
+            context["conversation_observation"] = {
+                "path": str(observation["path"]),
+                "source": str(observation.get("source") or "tool"),
+            }
+        dialogue = value.get("conversation_dialogue")
+        if isinstance(dialogue, list):
+            context["conversation_dialogue"] = [str(item)[:240] for item in dialogue][-2:]
         return context
     return new_task_context(_first_user_instruction(messages))
 
@@ -138,6 +171,33 @@ def latest_observation_path(context: TaskContext) -> str | None:
         return None
     path = observation.get("path")
     return str(path) if path else None
+
+
+def conversation_observation_path(context: TaskContext) -> str | None:
+    """返回只读历史观察路径；它绝不代表当前可执行截图。"""
+    observation = context.get("conversation_observation")
+    if not isinstance(observation, dict):
+        return None
+    path = observation.get("path")
+    return str(path) if path else None
+
+
+def require_completion(context: TaskContext) -> TaskContext:
+    """标记副作用任务需要显式完成声明，并清除旧的通过状态。"""
+    updated = dict(context)
+    updated["completion_required"] = True
+    updated["completion_verified"] = False
+    updated["completion_summary"] = ""
+    return updated
+
+
+def verify_completion(context: TaskContext, *, summary: str) -> TaskContext:
+    """记录通过完成门的短摘要；证据原文不写入任务胶囊。"""
+    updated = dict(context)
+    updated["completion_required"] = True
+    updated["completion_verified"] = True
+    updated["completion_summary"] = summary.strip()[:400]
+    return updated
 
 
 def replace_locate_facts(
@@ -220,6 +280,10 @@ def task_context_message(context: TaskContext, *, current_frame_path: str | None
     current = context.get("current_subtask") or "未指定"
     plan = "；".join(context.get("plan") or [])[:600] or "未指定"
     latest = "有最新观察" if latest_observation_path(context) else "尚无有效观察"
+    history_path = conversation_observation_path(context)
+    history = "无"
+    if history_path:
+        history = "有一张仅供理解的历史观察；不得用它的坐标、编号或界面状态执行桌面动作"
     actions = (
         "；".join(
             f"{item['name']}（{item['outcome']}）" for item in context.get("action_history") or []
@@ -227,9 +291,18 @@ def task_context_message(context: TaskContext, *, current_frame_path: str | None
         or "无"
     )
     facts = grounded_facts_message(context, current_frame_path=current_frame_path)
+    if context.get("completion_verified"):
+        completion = "已通过 task_complete 完成验证"
+    elif context.get("completion_required"):
+        completion = (
+            "副作用后仍需完成验证；确认最新截图达到目标后调用 task_complete，不要只返回正文"
+        )
+    else:
+        completion = "当前未要求副作用完成声明"
     return (
         f"任务状态：{context.get('status') or 'thinking'}。当前子任务：{current}。"
-        f"计划：{plan}。近期动作：{actions}。{latest}。当前有效事实：{facts}。"
+        f"计划：{plan}。近期动作：{actions}。{latest}。历史观察：{history}。当前有效事实：{facts}。"
+        f"完成门：{completion}。"
     )
 
 

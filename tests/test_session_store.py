@@ -79,6 +79,24 @@ def test_view_frame_and_locate_hits_roundtrip(settings: Settings) -> None:
     assert loaded.locate_hits == {"1": [220, 80]}
 
 
+def test_conversation_context_roundtrip_and_legacy_default(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """只读历史观察可恢复，旧会话与非法字段安全降级。"""
+    store = SessionStore(settings.sessions_dir)
+    session = store.create(model="qwen3.5-2b")
+    image = tmp_path / "observed.png"
+    image.write_bytes(b"png")
+    session.conversation_context = {
+        "observation": {"path": str(image), "source": "tool", "captured_at": "now"},
+        "dialogue": ["上一句", "不应太长"],
+    }
+    store.save(session)
+    loaded = store.get(session.id)
+    assert loaded is not None and loaded.conversation_context is not None
+    assert loaded.conversation_context["observation"]["path"] == str(image)
+
+
 def test_assistant_reasoning_roundtrip(settings: Settings) -> None:
     """助手 `reasoning` 落盘后能读回；缺字段的旧消息仍可加载。"""
     store = SessionStore(settings.sessions_dir)

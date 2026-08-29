@@ -42,6 +42,26 @@ def _task_context(value: Any) -> dict[str, Any] | None:
     return context
 
 
+def _conversation_context(value: Any) -> dict[str, Any] | None:
+    """恢复只读会话视觉上下文，拒绝可执行坐标与长正文。"""
+    context = _optional_dict(value)
+    if context is None:
+        return None
+    observation = context.get("observation")
+    if not isinstance(observation, dict) or not observation.get("path"):
+        return None
+    return {
+        "observation": {
+            "path": str(observation["path"]),
+            "source": str(observation.get("source") or "tool"),
+            "captured_at": str(observation.get("captured_at") or ""),
+        },
+        "dialogue": [
+            str(item)[:240] for item in context.get("dialogue") or [] if isinstance(item, str)
+        ][-2:],
+    }
+
+
 def _now() -> str:
     """当前本地时区 ISO 时间，精确到秒。"""
     return datetime.now().astimezone().isoformat(timespec="seconds")
@@ -100,6 +120,7 @@ class Session:
     view_frame: dict[str, Any] | None = None
     locate_hits: dict[str, list[int]] = field(default_factory=dict)
     task_context: dict[str, Any] | None = None
+    conversation_context: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """转为可 JSON 序列化的字典。"""
@@ -124,6 +145,7 @@ class Session:
             view_frame=_optional_dict(data.get("view_frame")),
             locate_hits=_string_int_points(data.get("locate_hits")),
             task_context=_task_context(data.get("task_context")),
+            conversation_context=_conversation_context(data.get("conversation_context")),
         )
 
 

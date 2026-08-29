@@ -15,24 +15,30 @@ from max_gui.agent.context import (
     TaskContext,
     append_action_summary,
     clear_grounded_facts,
+    conversation_observation_path,
     latest_observation_path,
     locate_label,
     new_task_context,
     record_cursor_verification,
     replace_locate_facts,
+    require_completion,
     restore_task_context,
     task_context_message,
     update_task_context,
+    verify_completion,
 )
 from max_gui.agent.plan import advance_subtask_after_tools, ingest_assistant_plan
 from max_gui.agent.prompts import compose_gui_system_prompt
 from max_gui.agent.state import AgentState
 from max_gui.config import Settings
+from max_gui.inference.budget import ContextSelection, select_context_chains
 from max_gui.inference.client import ChatDelta, InferenceClient, to_chat_messages
+from max_gui.inference.retry import RetryNotice
 from max_gui.observability import RunEvent, RunEventType, RunRecorder, safe_error_summary
 from max_gui.session.store import Session, SessionMessage, SessionStore
 from max_gui.tools.desktop import (
     active_view_frame,
+    clear_desktop_context,
     current_session_id,
     restore_desktop_context,
     snapshot_desktop_context,
@@ -144,6 +150,11 @@ class AgentRunner:
                     list(state.get("messages") or []),
                 )
             else:
+                if user_text is not None:
+                    _capture_conversation_context(session)
+                    clear_desktop_context()
+                    session.view_frame = None
+                    session.locate_hits = {}
                 messages: list[dict[str, Any]] = []
                 history_message_count = len(session.messages)
                 if user_text is not None:
@@ -165,8 +176,12 @@ class AgentRunner:
                     "error": None,
                     "plan": [],
                     "current_subtask": None,
-                    "task_context": new_task_context(user_text or "", image_paths or []),
+                    "task_context": new_task_context(
+                        user_text or "", image_paths or [], session.conversation_context
+                    ),
                     "history_message_count": history_message_count,
+                    "allowed_tools": [],
+                    "context_diagnostics": {},
                 }
 
             unfinished = self._recorder.unfinished_tools
@@ -240,39 +255,85 @@ class AgentRunner:
             plan=list(state.get("plan") or []),
             current_subtask=state.get("current_subtask"),
         )
-        state = {**state, "task_context": context}
-        model_messages = _model_messages(state)
-        inline_image = latest_observation_path(context)
+        inline_image = latest_observation_path(context) or conversation_observation_path(context)
+        system_prompt = compose_gui_system_prompt(frame=active_view_frame())
+        allowed_tools = _allowed_tool_names(context, self.registry)
+        tool_schemas = self.registry.schemas(allowed_tools)
         model_started = time.perf_counter()
+        try:
+            selection = _select_model_context(
+                state,
+                context=context,
+                system=system_prompt,
+                tools=tool_schemas,
+                inline_image=inline_image,
+                settings=self.settings,
+            )
+        except Exception as exc:
+            failed_state: AgentState = {
+                **state,
+                "task_context": context,
+                "allowed_tools": sorted(allowed_tools),
+            }
+            self._emit_event(
+                "model.failed",
+                failed_state,
+                {
+                    "provider": self.settings.provider,
+                    "model": self.settings.model_name,
+                    "duration_ms": int((time.perf_counter() - model_started) * 1000),
+                    "error": safe_error_summary(exc),
+                    "error_type": type(exc).__name__,
+                    "attempt_count": 0,
+                    "retry_count": 0,
+                },
+            )
+            return {
+                **failed_state,
+                "status": "error",
+                "error": str(exc),
+                "pending_tool_calls": [],
+            }
+        context_diagnostics = _selection_diagnostics(
+            state,
+            context=context,
+            selection=selection,
+            inline_image=inline_image,
+            tool_count=len(tool_schemas),
+            settings=self.settings,
+        )
+        state = {
+            **state,
+            "task_context": context,
+            "allowed_tools": sorted(allowed_tools),
+            "context_diagnostics": context_diagnostics,
+        }
         self._emit_event(
             "model.started",
             state,
             {
                 "provider": self.settings.provider,
                 "model": self.settings.model_name,
-                **_context_diagnostics(
-                    state,
-                    model_messages,
-                    inline_image,
-                    historical_message_count=self._historical_message_count(state),
-                ),
+                **context_diagnostics,
             },
         )
         try:
             encoded = to_chat_messages(
-                model_messages,
+                selection.messages,
                 settings=self.settings,
-                system=compose_gui_system_prompt(frame=active_view_frame()),
+                system=system_prompt,
                 inline_image_path=inline_image,
             )
             delta: ChatDelta = await self.client.stream(
                 encoded,
-                tools=self.registry.schemas(),
+                tools=tool_schemas,
                 on_token=self._on_token,
                 on_reasoning=self._on_reasoning,
                 should_stop=self._interrupt.is_set,
+                on_retry=lambda notice: self._emit_model_retry(state, notice),
             )
         except Exception as exc:
+            metadata = getattr(exc, "metadata", None)
             self._emit_event(
                 "model.failed",
                 state,
@@ -282,6 +343,8 @@ class AgentRunner:
                     "duration_ms": int((time.perf_counter() - model_started) * 1000),
                     "error": safe_error_summary(exc),
                     "error_type": type(exc).__name__,
+                    "attempt_count": metadata.attempt_count if metadata else 0,
+                    "retry_count": metadata.retry_count if metadata else 0,
                 },
             )
             return {
@@ -334,6 +397,19 @@ class AgentRunner:
                     context, status="acting", plan=plan, current_subtask=current
                 ),
             }
+        if context.get("completion_required") and not context.get("completion_verified"):
+            return {
+                **state,
+                "messages": messages,
+                "pending_tool_calls": [],
+                "iteration": int(state.get("iteration") or 0) + 1,
+                "status": "thinking",
+                "plan": plan,
+                "current_subtask": current,
+                "task_context": update_task_context(
+                    context, status="thinking", plan=plan, current_subtask=current
+                ),
+            }
         return {
             **state,
             "messages": messages,
@@ -353,6 +429,8 @@ class AgentRunner:
         self._emit_status("acting", state)
         results: list[dict[str, Any]] = []
         context = _task_context(state)
+        allowed_tools = set(state.get("allowed_tools") or [])
+        side_effect_seen = False
         for call in state.get("pending_tool_calls") or []:
             if self._interrupt.is_set():
                 return {**state, "status": "interrupted"}
@@ -362,6 +440,7 @@ class AgentRunner:
             arguments = _tool_arguments(fn.get("arguments"))
             frame_before = _active_frame_path()
             target_label = _target_label_for_move(context, name, arguments, frame_before)
+            side_effect = self.registry.is_side_effect(name)
             self._emit_event(
                 "tool.started",
                 state,
@@ -372,19 +451,44 @@ class AgentRunner:
                 },
             )
             started = time.perf_counter()
-            output = await self.registry.invoke(name, fn.get("arguments"))
+            if side_effect_seen:
+                output: str | ToolResult = ToolResult(
+                    text="本轮已有副作用工具；后续调用已阻断，请先观察最新截图再继续。",
+                    ok=False,
+                    code="action_batch_blocked",
+                )
+            elif name not in allowed_tools:
+                output = ToolResult(
+                    text=f"当前 Agent 阶段未开放工具：{name}",
+                    ok=False,
+                    code="tool_not_available",
+                )
+            else:
+                output = await self.registry.invoke(name, fn.get("arguments"))
+            if side_effect:
+                side_effect_seen = True
             duration_ms = int((time.perf_counter() - started) * 1000)
             has_image = False
             error: str | None = None
+            result_code = "ok"
             if isinstance(output, ToolResult):
                 text = output.text
                 images = [{"path": str(path)} for path in output.images]
                 has_image = bool(output.images)
+                result_code = output.code
+                if not output.ok:
+                    error = output.text
             else:
                 text = str(output)
                 images = []
                 if _tool_output_failed(output):
                     error = str(output)
+                    result_code = "tool_error"
+            if name == "task_complete" and error is None:
+                if not _completion_evidence_ready(context):
+                    text = "任务完成验证失败：最近成功副作用没有可用的后置截图。"
+                    error = text
+                    result_code = "completion_not_ready"
             content: dict[str, Any] = {
                 "text": text,
                 "images": images,
@@ -395,6 +499,8 @@ class AgentRunner:
                     "arguments": _short_args(fn.get("arguments")),
                     "duration_ms": duration_ms,
                     "error": error,
+                    "ok": error is None,
+                    "code": result_code,
                     "has_image": has_image,
                 },
             }
@@ -425,6 +531,10 @@ class AgentRunner:
                 frame_before=frame_before,
                 target_label=target_label,
             )
+            if side_effect and error is None:
+                context = require_completion(context)
+            if name == "task_complete" and error is None:
+                context = verify_completion(context, summary=str(arguments.get("summary") or ""))
             message_index = self._commit_message(item)
             event_type: RunEventType = "tool.failed" if error else "tool.completed"
             event_data: dict[str, Any] = {
@@ -435,6 +545,7 @@ class AgentRunner:
                 "has_image": has_image,
                 "image_count": len(images),
                 "outcome": "failed" if error else "success",
+                "code": result_code,
             }
             if error:
                 event_data["error"] = safe_error_summary(error)
@@ -465,16 +576,21 @@ class AgentRunner:
             tool_failed=failed,
         )
         messages.extend(tool_messages)
+        context = _task_context(state)
+        completion_verified = bool(context.get("completion_verified"))
         next_state: AgentState = {
             **state,
             "messages": messages,
             "pending_tool_calls": [],
             "iteration": int(state.get("iteration") or 0) + 1,
-            "status": "thinking",
+            "status": "done" if completion_verified else "thinking",
             "plan": plan,
             "current_subtask": current,
             "task_context": update_task_context(
-                _task_context(state), status="thinking", plan=plan, current_subtask=current
+                context,
+                status="done" if completion_verified else "thinking",
+                plan=plan,
+                current_subtask=current,
             ),
         }
         captured_images = 0
@@ -490,7 +606,9 @@ class AgentRunner:
                 "tool_failed": failed,
                 "post_action_observation_captured": captured_images > 0,
                 "image_count": captured_images,
-                "business_verified": False,
+                "business_verified": completion_verified,
+                "completion_required": bool(context.get("completion_required")),
+                "completion_verified": completion_verified,
             },
         )
         return next_state
@@ -503,8 +621,7 @@ class AgentRunner:
         frame, hits = snapshot_desktop_context()
         if frame is not None:
             session.view_frame = frame
-        if hits:
-            session.locate_hits = hits
+        session.locate_hits = hits
         self.store.save(session)
 
     def _emit_status(self, status: str, state: AgentState) -> None:
@@ -563,18 +680,28 @@ class AgentRunner:
             "reasoning_chars": len(delta.reasoning),
             "tool_call_count": len(delta.tool_calls),
             "session_message_index": message_index,
-            **_context_diagnostics(
-                state,
-                _model_messages(state),
-                latest_observation_path(_task_context(state)),
-                historical_message_count=self._historical_message_count(state),
-            ),
+            "attempt_count": delta.attempt_count,
+            "retry_count": delta.retry_count,
+            **dict(state.get("context_diagnostics") or {}),
         }
         if delta.usage is not None:
             data["prompt_tokens"] = delta.usage.prompt_tokens
             data["completion_tokens"] = delta.usage.completion_tokens
             data["total_tokens"] = delta.usage.total_tokens
         self._emit_event("model.completed", state, data)
+
+    def _emit_model_retry(self, state: AgentState, notice: RetryNotice) -> None:
+        """把客户端安全重试通知转成一次结构化运行事件。"""
+        data: dict[str, Any] = {
+            "attempt": notice.attempt,
+            "max_attempts": notice.max_attempts,
+            "reason_code": notice.reason_code,
+            "delay_ms": notice.delay_ms,
+            "error": safe_error_summary(notice.error),
+        }
+        if notice.status_code is not None:
+            data["status_code"] = notice.status_code
+        self._emit_event("model.retrying", state, data)
 
     def _run_summary(self, final_status: str) -> dict[str, Any]:
         """返回当前记录器汇总；记录器缺失时给最小终态。"""
@@ -616,8 +743,7 @@ class AgentRunner:
         frame, hits = snapshot_desktop_context()
         if frame is not None:
             session.view_frame = frame
-        if hits:
-            session.locate_hits = hits
+        session.locate_hits = hits
         known = len(session.messages)
         extras = list(state.get("messages") or [])[known:]
         if extras:
@@ -645,7 +771,7 @@ def _build_graph(runner: AgentRunner):
     graph.add_edge(START, "think")
     graph.add_conditional_edges("think", _route_after_think)
     graph.add_edge("act", "observe")
-    graph.add_edge("observe", "think")
+    graph.add_conditional_edges("observe", _route_after_observe)
     return graph.compile()
 
 
@@ -727,24 +853,27 @@ def _task_context(state: AgentState) -> TaskContext:
     return restore_task_context(state.get("task_context"), list(state.get("messages") or []))
 
 
-def _model_messages(state: AgentState) -> list[dict[str, Any]]:
-    """从当前任务保留用户指令与近期完整工具调用链，拒绝重放会话历史。"""
-    context = _task_context(state)
+def _select_model_context(
+    state: AgentState,
+    *,
+    context: TaskContext,
+    system: str,
+    tools: list[dict[str, Any]],
+    inline_image: str | None,
+    settings: Settings,
+) -> ContextSelection:
+    """按主推理预算选择当前用户消息和最近完整工具链。"""
     messages = list(state.get("messages") or [])
     user = _task_user_message(messages, context)
     chains = _completed_tool_chains(messages)
-    selected: list[list[dict[str, Any]]] = []
-    action_count = 0
-    for chain in reversed(chains):
-        tool_count = sum(1 for item in chain if item.get("role") == "tool")
-        if selected and action_count + tool_count > 6:
-            break
-        selected.append(chain)
-        action_count += tool_count
-    output = [user]
-    for chain in reversed(selected):
-        output.extend(chain)
-    return output
+    return select_context_chains(
+        user_message=user,
+        chains=chains,
+        system=system,
+        tools=tools,
+        has_inline_image=bool(inline_image and Path(inline_image).is_file()),
+        settings=settings,
+    )
 
 
 def _task_user_message(messages: list[dict[str, Any]], context: TaskContext) -> dict[str, Any]:
@@ -759,7 +888,33 @@ def _task_user_message(messages: list[dict[str, Any]], context: TaskContext) -> 
     content["text"] = (
         f"{instruction}\n\n{task_context_message(context, current_frame_path=_active_frame_path())}"
     )
+    if not content.get("images") and not latest_observation_path(context):
+        history = conversation_observation_path(context)
+        if history and Path(history).is_file():
+            content["images"] = [{"path": history}]
     return {"role": "user", "content": content}
+
+
+def _capture_conversation_context(session: Session) -> None:
+    """把上一回合最后一张可读图存为只读背景，不保留可执行坐标。"""
+    frame = active_view_frame()
+    if frame is None or not frame.image_path.is_file():
+        return
+    dialogue: list[str] = []
+    for message in session.messages[-4:]:
+        if message.role not in {"user", "assistant"}:
+            continue
+        text = str(message.content.get("text") or "").strip()
+        if text:
+            dialogue.append(text[:240])
+    session.conversation_context = {
+        "observation": {
+            "path": str(frame.image_path),
+            "source": "tool",
+            "captured_at": session.updated_at,
+        },
+        "dialogue": dialogue[-2:],
+    }
 
 
 def _completed_tool_chains(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -787,22 +942,69 @@ def _completed_tool_chains(messages: list[dict[str, Any]]) -> list[list[dict[str
     return chains
 
 
-def _context_diagnostics(
+def _selection_diagnostics(
     state: AgentState,
-    model_messages: list[dict[str, Any]],
-    inline_image: str | None,
     *,
-    historical_message_count: int,
-) -> dict[str, Any]:
-    """返回只含计数的模型上下文诊断，避免把正文写入运行日志。"""
-    context = _task_context(state)
+    context: TaskContext,
+    selection: ContextSelection,
+    inline_image: str | None,
+    tool_count: int,
+    settings: Settings,
+) -> dict[str, int | str | None]:
+    """返回预算与裁剪计数，不复制消息、schema 或完成证据。"""
     return {
         "task_id": context.get("task_id"),
-        "context_message_count": len(model_messages),
+        "context_message_count": len(selection.messages),
         "context_inline_image_count": int(bool(inline_image and Path(inline_image).is_file())),
         "context_recent_action_count": len(context.get("action_history") or []),
-        "context_excluded_message_count": historical_message_count,
+        "context_excluded_message_count": max(0, int(state.get("history_message_count") or 0)),
+        "context_window": settings.context_window,
+        "context_max_output_tokens": settings.max_output_tokens,
+        "context_safety_margin": settings.context_safety_margin,
+        "context_estimated_input_tokens": selection.estimated_input_tokens,
+        "context_available_input_tokens": selection.available_input_tokens,
+        "context_dynamic_tool_count": tool_count,
+        "context_included_chain_count": selection.included_chain_count,
+        "context_excluded_chain_count": selection.excluded_chain_count,
     }
+
+
+_INITIAL_TOOL_NAMES = {"prepare_image", "ocr", "screenshot", "screen_info"}
+
+
+def _allowed_tool_names(context: TaskContext, registry: ToolRegistry) -> set[str]:
+    """按当前任务有效截图与完成门返回实际可暴露工具名。"""
+    frame = active_view_frame()
+    frame_ready = bool(frame is not None and frame.image_path.is_file())
+    if not frame_ready:
+        return registry.names() & _INITIAL_TOOL_NAMES
+    allowed = registry.names() - {"task_complete"}
+    if context.get("completion_required") and not context.get("completion_verified"):
+        allowed.add("task_complete")
+    return allowed
+
+
+def _completion_evidence_ready(context: TaskContext) -> bool:
+    """最近一次成功副作用本身或其后是否取得了后置截图。"""
+    side_effects = {
+        "mouse_move",
+        "mouse_click",
+        "mouse_drag",
+        "mouse_scroll",
+        "keyboard_type",
+        "keyboard_press",
+    }
+    history = list(context.get("action_history") or [])
+    last_side_effect = -1
+    for index, item in enumerate(history):
+        if item.get("name") in side_effects and item.get("outcome") == "success":
+            last_side_effect = index
+    if last_side_effect < 0:
+        return False
+    for item in history[last_side_effect:]:
+        if item.get("has_observation"):
+            return True
+    return False
 
 
 def _action_conclusion(name: str, text: str) -> str:
@@ -904,11 +1106,20 @@ def _record_locate_facts(context: TaskContext, *, text: str, frame_path: str | N
     return replace_locate_facts(cleared, items=items, source_path=frame_path)
 
 
-def _route_after_think(state: AgentState) -> Literal["act", "__end__"]:
-    """Think 之后：`acting` 去 Act，否则结束。"""
+def _route_after_think(state: AgentState) -> Literal["think", "act", "__end__"]:
+    """Think 之后：工具调用去 Act，缺完成声明时重试，其余结束。"""
     if state.get("status") == "acting":
         return "act"
+    if state.get("status") == "thinking":
+        return "think"
     return END
+
+
+def _route_after_observe(state: AgentState) -> Literal["think", "__end__"]:
+    """Observe 之后：完成门通过则结束，否则继续 Think。"""
+    if state.get("status") == "done":
+        return END
+    return "think"
 
 
 def _message_to_state(message: SessionMessage) -> dict[str, Any]:

@@ -598,7 +598,10 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
         try:
             shot = await screenshot({}, verify_source=verify_source)
         except ToolError as exc:
-            return ToolResult(text=f"{action_text}\n后置截图失败：{exc}")
+            return ToolResult(
+                text=f"{action_text}\n后置截图失败：{exc}",
+                code="action_applied_observation_failed",
+            )
         return ToolResult(text=f"{action_text}\n{shot.text}", images=list(shot.images))
 
     async def mouse_move(args: dict) -> ToolResult:
@@ -772,6 +775,7 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
                 },
             },
             invoke=mouse_move,
+            side_effect=True,
         ),
         Tool(
             name="mouse_click",
@@ -785,6 +789,7 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
                 },
             },
             invoke=mouse_click,
+            side_effect=True,
         ),
         Tool(
             name="mouse_drag",
@@ -800,6 +805,7 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
                 "required": ["x2", "y2"],
             },
             invoke=mouse_drag,
+            side_effect=True,
         ),
         Tool(
             name="mouse_scroll",
@@ -815,6 +821,7 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
                 "required": ["clicks"],
             },
             invoke=mouse_scroll,
+            side_effect=True,
         ),
         Tool(
             name="keyboard_type",
@@ -829,6 +836,7 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
                 "required": ["text"],
             },
             invoke=keyboard_type,
+            side_effect=True,
         ),
         Tool(
             name="keyboard_press",
@@ -850,5 +858,6 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
                 "required": ["keys"],
             },
             invoke=keyboard_press,
+            side_effect=True,
         ),
     ]

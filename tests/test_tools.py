@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -19,8 +20,8 @@ from max_gui.tools.desktop import (
     store_locate_hits,
     store_view_frame,
 )
-from max_gui.tools.protocol import ToolResult
-from max_gui.tools.registry import DenyGate, SessionScopedGate, build_default_registry
+from max_gui.tools.protocol import Tool, ToolResult
+from max_gui.tools.registry import DenyGate, SessionScopedGate, ToolRegistry, build_default_registry
 
 
 def _text(result: str | ToolResult) -> str:
@@ -36,6 +37,36 @@ async def test_unknown_tool_and_screenshot_skips_gate(settings: Settings) -> Non
     shot = await registry.invoke("screenshot", {})
     assert isinstance(shot, ToolResult)
     assert shot.images
+
+
+def test_registry_filters_strict_schemas_and_marks_side_effects(settings: Settings) -> None:
+    """动态 schema 只导出指定工具，且对象层递归拒绝未知字段。"""
+    registry = build_default_registry(settings, desktop=FakeDesktopBackend())
+    schemas = registry.schemas({"screenshot"})
+    assert [item["function"]["name"] for item in schemas] == ["screenshot"]
+    parameters = schemas[0]["function"]["parameters"]
+    assert parameters["additionalProperties"] is False
+    assert parameters["properties"]["region"]["additionalProperties"] is False
+    assert registry.is_side_effect("mouse_click")
+    assert not registry.is_side_effect("screenshot")
+
+
+async def test_registry_enforces_real_timeout() -> None:
+    """工具实现超过注册表时限时返回稳定 timeout 错误码。"""
+
+    async def slow(_args: dict) -> str:
+        """等待到注册表取消，用于验证真实超时。"""
+        await asyncio.sleep(0.05)
+        return "不应返回"
+
+    registry = ToolRegistry(
+        [Tool(name="slow", description="慢工具", parameters={"type": "object"}, invoke=slow)],
+        timeout=0.001,
+    )
+    result = await registry.invoke("slow", {})
+    assert isinstance(result, ToolResult)
+    assert not result.ok
+    assert result.code == "timeout"
 
 
 async def test_removed_workspace_file_tools_are_unknown(settings: Settings) -> None:
@@ -137,7 +168,9 @@ async def test_keyboard_requires_key_array_and_sends_command_tab(settings: Setti
     )
     for keys in invalid_values:
         result = await registry.invoke("keyboard_press", {"keys": keys})
-        assert "非空字符串数组" in result
+        assert isinstance(result, ToolResult)
+        assert not result.ok
+        assert result.code == "invalid_arguments"
     assert backend.calls == before
 
     result = await registry.invoke("keyboard_press", {"keys": ["command", "tab"]})
@@ -296,7 +329,9 @@ async def test_view_out_of_bounds_rejected(settings: Settings) -> None:
     assert "超出最近截图视图" in dragged
     assert all(call[0] != "drag_to" for call in backend.calls)
     clicked = await registry.invoke("mouse_click", {"x": payload["view_width"], "y": 0})
-    assert "不接受坐标" in clicked
+    assert isinstance(clicked, ToolResult)
+    assert clicked.code == "invalid_arguments"
+    assert "未知字段" in clicked
     assert all(call[0] != "click" for call in backend.calls)
 
 
@@ -348,7 +383,9 @@ async def test_target_id_clicks_locate_center(settings: Settings) -> None:
     missing = await registry.invoke("mouse_move", {"target_id": 9})
     assert "没有 id=9" in missing
     rejected = await registry.invoke("mouse_click", {"target_id": 1})
-    assert "不接受坐标" in rejected
+    assert isinstance(rejected, ToolResult)
+    assert rejected.code == "invalid_arguments"
+    assert "未知字段" in rejected
 
 
 async def test_mouse_move_attaches_screenshot(settings: Settings) -> None:
@@ -419,7 +456,9 @@ async def test_drag_from_current_pointer(settings: Settings) -> None:
     await registry.invoke("mouse_move", {"x": 8, "y": 8})
     start = backend.mouse
     rejected = await registry.invoke("mouse_drag", {"x1": 1, "y1": 1, "x2": 20, "y2": 20})
-    assert "x2/y2" in rejected or "当前位置" in rejected
+    assert isinstance(rejected, ToolResult)
+    assert rejected.code == "invalid_arguments"
+    assert "未知字段" in rejected
     dragged = await registry.invoke(
         "mouse_drag",
         {"x2": payload["view_width"] // 3, "y2": payload["view_height"] // 3},

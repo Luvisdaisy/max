@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
-DEFAULT_PROVIDER = "local"
+DEFAULT_PROVIDER = "ollama"
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,12 +20,11 @@ class ProviderDefinition:
 
     字段：
         name: `.env` 中使用的唯一 provider 名称。
-        model_name: 请求与本地权重使用的固定模型名。
+        model_name: 请求使用的固定模型名。
         base_url: OpenAI 兼容 API 根端点，不含 `/chat/completions`。
         api_key_env: 保存密钥的环境变量名；`None` 表示不鉴权。
         key_label: 缺密钥时展示的凭据类型。
-        requires_local_weights: 发请求前是否检查本地模型权重。
-        allows_serve: 是否允许 `max-gui serve` 启动本机 vLLM。
+        context_window: 主推理上下文容量。
         replay_reasoning: 是否把历史思考回传为 `reasoning_content`。
         connection_hint: 网络失败时附加的中文排查提示。
 
@@ -37,34 +36,21 @@ class ProviderDefinition:
     base_url: str
     api_key_env: str | None
     key_label: str
-    requires_local_weights: bool
-    allows_serve: bool
+    context_window: int
     replay_reasoning: bool
     connection_hint: str
 
 
 _PROVIDER_ITEMS = (
     ProviderDefinition(
-        name="local",
-        model_name="qwen3.5-4b",
-        base_url="http://127.0.0.1:8000/v1",
+        name="ollama",
+        model_name="qwen3.5:9b",
+        base_url="http://192.168.1.158:11434/v1",
         api_key_env=None,
         key_label="",
-        requires_local_weights=True,
-        allows_serve=True,
+        context_window=262_144,
         replay_reasoning=False,
-        connection_hint="请先运行：max-gui serve",
-    ),
-    ProviderDefinition(
-        name="remote",
-        model_name="qwen3.5-4b",
-        base_url="http://192.168.1.158:8000/v1",
-        api_key_env=None,
-        key_label="",
-        requires_local_weights=False,
-        allows_serve=False,
-        replay_reasoning=False,
-        connection_hint="请检查局域网与端口转发。",
+        connection_hint="请检查 WSL Ollama 服务、Windows 防火墙与局域网端口。",
     ),
     ProviderDefinition(
         name="modelscope",
@@ -72,8 +58,7 @@ _PROVIDER_ITEMS = (
         base_url="https://api-inference.modelscope.cn/v1",
         api_key_env="MAX_MODELSCOPE_KEY",
         key_label="魔搭 Access Token",
-        requires_local_weights=False,
-        allows_serve=False,
+        context_window=32_768,
         replay_reasoning=False,
         connection_hint="请检查网络与 MAX_MODELSCOPE_KEY。",
     ),
@@ -83,8 +68,7 @@ _PROVIDER_ITEMS = (
         base_url=("https://llm-xxcxmbwit4rg4ios.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"),
         api_key_env="MAX_DASHSCOPE_KEY",
         key_label="百炼 API Key",
-        requires_local_weights=False,
-        allows_serve=False,
+        context_window=32_768,
         replay_reasoning=True,
         connection_hint="请检查网络与 MAX_DASHSCOPE_KEY。",
     ),
@@ -94,8 +78,7 @@ _PROVIDER_ITEMS = (
         base_url="https://openrouter.ai/api/v1",
         api_key_env="MAX_OPENROUTER_KEY",
         key_label="OpenRouter API Key",
-        requires_local_weights=False,
-        allows_serve=False,
+        context_window=32_768,
         replay_reasoning=False,
         connection_hint="请检查网络与 MAX_OPENROUTER_KEY。",
     ),
@@ -134,16 +117,6 @@ class MissingProviderKeyError(ValueError):
         )
 
 
-class ServeNotAllowedError(RuntimeError):
-    """当前 provider 不允许启动本机 vLLM。"""
-
-    def __init__(self) -> None:
-        """提示用户切换回注册表中允许 `serve` 的 local provider。"""
-        super().__init__(
-            "当前 MAX_PROVIDER 不是 local。请在 .env 中改为 local 后再运行 max-gui serve。"
-        )
-
-
 def get_provider(name: str) -> ProviderDefinition:
     """按规范化名称取得 provider 定义。
 
@@ -166,7 +139,7 @@ def resolve_provider(raw: str | None) -> ProviderDefinition:
     """规范化 `MAX_PROVIDER` 原文并返回对应定义。
 
     参数：
-        raw: 环境变量原文；空值选择 `local`。
+        raw: 环境变量原文；空值选择 `ollama`。
 
     返回：
         注册表中的不可变定义。

@@ -1,4 +1,4 @@
-"""命令行入口：解析参数并分发 TUI 与 vLLM 服务。"""
+"""命令行入口：解析参数并分发 TUI、评测与记录清理。"""
 
 from __future__ import annotations
 
@@ -7,15 +7,9 @@ import sys
 from pathlib import Path
 
 from max_gui.cleanup import cleanup_record_directories
-from max_gui.config import (
-    MissingVllmError,
-    MissingWeightsError,
-    load_settings,
-)
-from max_gui.lifecycle import serve_model
+from max_gui.config import load_settings
 from max_gui.provider import (
     MissingProviderKeyError,
-    ServeNotAllowedError,
     UnknownProviderError,
     get_provider,
     require_provider_key,
@@ -41,9 +35,6 @@ def build_parser() -> argparse.ArgumentParser:
     tui.add_argument("--new", action="store_true", help="强制创建新会话")
     tui.add_argument("--workspace", type=Path, default=None)
 
-    serve = sub.add_parser("serve", help="启动本地 vLLM OpenAI 兼容服务")
-    serve.add_argument("--workspace", type=Path, default=None)
-
     cleanup = sub.add_parser("cleanup", help="清除截图、运行和会话记录")
     cleanup.add_argument("--workspace", type=Path, default=None)
     return parser
@@ -56,9 +47,7 @@ def main(argv: list[str] | None = None) -> None:
         argv: 参数列表；`None` 时读 `sys.argv[1:]`。
 
     异常：
-        SystemExit: 非法 provider 退出码 2；缺密钥、缺 Workspace、缺权重、
-            非 local 下 serve 或找不到 vLLM 退出码 1；`serve` 成功时以
-            vLLM 进程退出码结束。
+        SystemExit: 非法 provider 退出码 2；缺密钥时退出码 1。
     """
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -71,12 +60,6 @@ def main(argv: list[str] | None = None) -> None:
 
     if command == "cleanup":
         raise SystemExit(_run_cleanup(settings))
-    if command == "serve":
-        try:
-            raise SystemExit(serve_model(settings))
-        except (MissingWeightsError, MissingVllmError, ServeNotAllowedError) as exc:
-            print(str(exc), file=sys.stderr)
-            raise SystemExit(1) from exc
     if args.benchmark:
         from max_gui.benchmark.service import run_benchmark_server
 

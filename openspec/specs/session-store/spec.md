@@ -3,9 +3,7 @@
 ## Purpose
 
 基于本地 JSON 的会话/历史持久化与多会话恢复。
-
 ## Requirements
-
 ### Requirement: 持久化任务级已落地事实
 
 会话 JSON 的 `task_context` MUST 允许持久化 `grounded_facts`，以便同一未完成任务的中断恢复继续使用当前仍有效的事实。旧会话缺少该字段、字段不是列表或条目缺少必要字段时 MUST 正常加载，并把无效条目丢弃。会话切换或开始新的用户任务 MUST NOT 把上一任务的事实带入新任务。
@@ -92,12 +90,17 @@
 
 ### Requirement: 推理失败写入会话错误
 
-当 `think` 因推理客户端异常结束时，会话 JSON 的 `status` MUST 为 `error`，MUST 写入可读错误说明，检查点 MUST 反映当时已提交的消息。MUST NOT 把上一回合的 `done` 与过期检查点留在磁盘上假装本回合成功。
+当 `think` 因不可重试推理错误、有效流式增量后的断流或重试耗尽而结束时，会话 JSON 的 `status` MUST 为 `error`，MUST 写入可读错误说明与已重试次数，检查点 MUST 反映当时已提交的消息。重试过程中 MUST NOT 追加重复 user、assistant 或 tool 消息；后续尝试成功时 MUST 只提交成功结果对应的一条助手消息。MUST NOT 把上一回合的 `done` 与过期检查点留在磁盘上假装本回合成功。
 
-#### Scenario: 多轮后推理 400 落盘
+#### Scenario: 多轮后推理 400 重试耗尽落盘
 
-- **WHEN** 本回合已执行若干工具，下一轮 `think` 收到推理服务非 2xx
-- **THEN** 保存后的会话 `status` 为 `error`，`error` 或检查点中含状态码或正文摘要，消息列表含已执行的工具结果
+- **WHEN** 本回合已执行若干工具，下一轮 `think` 连续收到可重试推理错误并达到最大次数
+- **THEN** 保存后的会话 `status` 为 `error`，错误或检查点中含最后状态码、正文摘要和重试次数，消息列表含已执行的工具结果且没有重复项
+
+#### Scenario: 重试成功只保存一次助手消息
+
+- **WHEN** 同一次 `think` 的前两次网络尝试失败且第三次成功
+- **THEN** 会话不保存失败尝试内容，只追加第三次成功结果对应的一条助手消息
 
 ### Requirement: 持久化桌面视图坐标系
 
@@ -196,3 +199,4 @@
 
 - **WHEN** 用户提交 `/new` 且当前 `MODEL_NAME` 为 `Qwen/Qwen3.8-27B`
 - **THEN** 新建会话 JSON 的 `model` 为 `Qwen/Qwen3.8-27B`
+

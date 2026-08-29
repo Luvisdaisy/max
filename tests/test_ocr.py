@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from max_gui.config import DEFAULT_OCR_MODEL, Settings
+from max_gui.config import Settings
 from max_gui.desktop.fake import FakeDesktopBackend
 from max_gui.inference.ocr import (
     OCR_SKIP_MESSAGE,
@@ -16,7 +16,6 @@ from max_gui.inference.ocr import (
     shutdown_owned_ocr,
 )
 from max_gui.inference.spotting import SpottingParseError, parse_spotting
-from max_gui.lifecycle import _serve_command
 from max_gui.tools.desktop import clear_desktop_context
 from max_gui.tools.protocol import ToolResult
 from max_gui.tools.registry import DenyGate, build_default_registry
@@ -109,7 +108,9 @@ async def test_ocr_reads_workspace_and_rejects_escape(settings: Settings) -> Non
     missing = await registry.invoke("ocr", {"path": "nope.png"})
     assert "不存在" in missing
     empty = await registry.invoke("ocr", {})
-    assert "需要 path" in empty
+    assert isinstance(empty, ToolResult)
+    assert empty.code == "invalid_arguments"
+    assert "path" in empty
     assert runtime.start_count == 0
 
 
@@ -203,17 +204,11 @@ async def test_ocr_reuses_started_server(settings: Settings) -> None:
     assert runtime.start_count == 1
 
 
-def test_main_serve_does_not_start_ocr(settings: Settings, tmp_path: Path) -> None:
-    """`max-gui serve` 命令只加载主模型，不含 OCR 权重与 trust-remote-code。"""
+def test_ocr_serve_uses_dedicated_configuration(settings: Settings, tmp_path: Path) -> None:
+    """OCR 的独立 vLLM 命令使用 OCR 权重与安全的专用参数。"""
     binary = tmp_path / "vllm"
     binary.write_text("#!/bin/sh\n", encoding="utf-8")
     binary.chmod(0o755)
-    command = _serve_command(settings, settings.model_path, vllm_bin=binary)
-    joined = " ".join(command)
-    assert DEFAULT_OCR_MODEL not in joined
-    assert "paddleocr" not in joined
-    assert "--trust-remote-code" not in command
-    assert "--tool-call-parser" in command
     ocr_cmd = ocr_serve_command(settings, vllm_bin=binary)
     assert str(settings.ocr_model_path) in ocr_cmd
     assert "--trust-remote-code" in ocr_cmd

@@ -20,6 +20,7 @@ RunEventType = Literal[
     "run.interrupted",
     "state.changed",
     "model.started",
+    "model.retrying",
     "model.completed",
     "model.failed",
     "tool.started",

@@ -6,17 +6,20 @@ OpenAI 兼容客户端（本机 vLLM、魔搭 API-Inference 或阿里云百炼�
 ## Requirements
 ### Requirement: OpenAI 兼容客户端
 
-系统 SHALL 让全部已注册 provider 调用各自定义的 OpenAI 兼容 `/chat/completions` 端点。客户端 MUST 按配置发送 `model`、`messages`、`stream`。连接失败 MUST 作为用户可见错误报告，且 MUST NOT 让 TUI 崩溃。仅 provider 定义要求本地启动提示时，错误 MUST 提示建议的 `max-gui serve` 命令。流式请求遇到 HTTP 非 2xx 时，客户端 MUST 读取响应正文（不得访问未 `read()` 的流式 `response.text`），并把状态码与截断后的正文展示给用户。
+系统 SHALL 让全部已注册 provider 调用各自定义的 OpenAI 兼容 `/chat/completions` 端点。
+客户端 MUST 按配置发送 `model`、`messages`、`stream`。连接失败 MUST 作为用户可见错误
+报告，且 MUST NOT 让 TUI 崩溃。流式请求遇到 HTTP 非 2xx 时，客户端 MUST 读取响应正文
+（不得访问未 `read()` 的流式 `response.text`），并把状态码与截断后的正文展示给用户。
 
 #### Scenario: 成功流式输出
 
 - **WHEN** 任一已注册 provider 端点可达并返回 SSE token 流
 - **THEN** 客户端按顺序产出 token，直到流结束
 
-#### Scenario: 本地服务不可达
+#### Scenario: Ollama 服务不可达
 
-- **WHEN** `MAX_PROVIDER=local` 且定义的本机端点拒绝连接
-- **THEN** 客户端抛出已处理错误，TUI 展示该错误并提示建议的 `max-gui serve` 命令
+- **WHEN** `MAX_PROVIDER=ollama` 且定义的局域网端点拒绝连接
+- **THEN** 客户端抛出已处理错误，TUI 展示 WSL Ollama、Windows 防火墙与局域网端口检查提示，且不提示 `max-gui serve`
 
 #### Scenario: 云端服务不可达
 
@@ -115,12 +118,15 @@ OpenAI 兼容客户端（本机 vLLM、魔搭 API-Inference 或阿里云百炼�
 
 ### Requirement: 模型选择
 
-系统 MUST 从独立 Python provider 定义取得当前模型名，运行时 `MODEL_NAME` MUST NOT 覆盖该值。`local` 模型 MUST 为完整目录名 `qwen3.5-4b`，权重路径为 `model/qwen3.5-4b`；系统 MUST NOT 将短别名解释为其它目录。`openrouter` 模型 MUST 为 `qwen/qwen3.5-plus`。本地权重缺失 MUST 报告包含该目录路径的错误，MUST NOT 提及 `max-gui download`。自动化测试 MUST 仍可通过显式构造 `Settings` 钉死占位权重。系统 MUST NOT 提供 TUI `/model` 或 CLI `--model`。
+系统 MUST 从独立 Python provider 定义取得当前模型名，运行时 `MODEL_NAME` MUST NOT
+覆盖该值。`ollama` 模型 MUST 为 `qwen3.5:9b`，`openrouter` 模型 MUST 为
+`qwen/qwen3.5-plus`。系统 MUST NOT 提供 TUI `/model` 或 CLI `--model`，也 MUST NOT
+检查主推理模型的本地权重目录。
 
-#### Scenario: local 默认模型
+#### Scenario: Ollama 默认模型
 
-- **WHEN** `MAX_PROVIDER=local`
-- **THEN** 请求使用 model id `qwen3.5-4b`，权重目录为 `model/qwen3.5-4b`
+- **WHEN** `MAX_PROVIDER` 未设置或为 `ollama`
+- **THEN** 请求使用 model id `qwen3.5:9b`
 
 #### Scenario: OpenRouter 默认模型
 
@@ -132,58 +138,20 @@ OpenAI 兼容客户端（本机 vLLM、魔搭 API-Inference 或阿里云百炼�
 - **WHEN** `MAX_PROVIDER=openrouter` 且环境中另有 `MODEL_NAME=other-model`
 - **THEN** 请求仍使用 `qwen/qwen3.5-plus`
 
-#### Scenario: 权重缺失
-
-- **WHEN** `local` provider 定义的模型没有完整本地权重目录
-- **THEN** 系统报告包含 `model/qwen3.5-4b` 路径的错误，且不发送请求，且不含 download 命令
-
-### Requirement: serve 与 download 辅助命令
-
-CLI SHALL 提供 `max-gui serve`，仅当选中 provider 定义允许 `serve` 时以 OpenAI 兼容模式启动 vLLM，并带上配置的 `--max-model-len`、`--gpu-memory-utilization`、`--dtype`。开发默认加载 `model/qwen3.5-4b`。vLLM 可执行文件 MUST 按 `MAX_GUI_VLLM`、`PATH` 中的 `vllm`、`~/.venv-vllm-metal/bin/vllm` 的顺序解析，MUST NOT 回退到当前解释器的 `python -m vllm`。找不到可执行文件时 MUST 以非零退出码报中文错误。不允许 `serve` 的 provider MUST 以非零退出码失败并提示修改 `.env`。CLI MUST NOT 提供 `max-gui download` 子命令。
-
-#### Scenario: 启动已配置模型
-
-- **WHEN** `MAX_PROVIDER=local`，用户执行 `max-gui serve` 且权重存在，并且能解析到 vLLM 可执行文件
-- **THEN** 使用该二进制以配置的模型路径启动 OpenAI 兼容 HTTP API，并开启 `--enable-auto-tool-choice` 与 `--tool-call-parser qwen3_coder`
-
-#### Scenario: 云端 provider 拒绝 serve
-
-- **WHEN** `MAX_PROVIDER` 为 `modelscope`、`dashscope` 或 `openrouter` 且用户执行 `max-gui serve`
-- **THEN** 命令以非零退出码失败，错误信息提示将 `MAX_PROVIDER` 改为 `local`
-
-#### Scenario: remote 拒绝 serve
-
-- **WHEN** `MAX_PROVIDER=remote` 且用户执行 `max-gui serve`
-- **THEN** 命令以非零退出码失败，错误信息提示将 `MAX_PROVIDER` 改为 `local`
-
-#### Scenario: 未激活独立 vLLM 环境
-
-- **WHEN** `MAX_PROVIDER=local`，PATH 中没有 `vllm`，但 `~/.venv-vllm-metal/bin/vllm` 存在
-- **THEN** `max-gui serve` 仍使用该默认路径启动，而不是项目 `.venv` 的 Python
-
-#### Scenario: 找不到 vLLM
-
-- **WHEN** `MAX_PROVIDER=local` 且 `MAX_GUI_VLLM`、PATH 与默认路径都没有可用的 vLLM 可执行文件
-- **THEN** 命令以非零退出码失败，错误信息提示 `source ~/.venv-vllm-metal/bin/activate` 或设置 `MAX_GUI_VLLM`
-
-#### Scenario: download 子命令不存在
-
-- **WHEN** 用户执行 `max-gui download`
-- **THEN** CLI 不以成功下载结束；该子命令 MUST 不再作为受支持的入口
-
 ### Requirement: 双推理后端
 
-系统 MUST 根据 `MAX_PROVIDER` 从单一注册表选择 `local`、`remote`、`modelscope`、`dashscope` 或 `openrouter`。所有 provider MUST 使用定义中的 OpenAI 兼容根端点与模型，并共用 `/chat/completions`、消息编码、SSE 解析、工具调用和 token 用量链路。仅 `local` MUST 在发请求前检查本地权重。具有密钥环境变量的 provider MUST 在启动 TUI 或首次请求前校验专属密钥；缺密钥 MUST 中文报错且不提示 `max-gui serve`。`openrouter` MUST 使用 `https://openrouter.ai/api/v1`、`qwen/qwen3.5-plus` 与 `MAX_OPENROUTER_KEY`。
+系统 MUST 根据 `MAX_PROVIDER` 从单一注册表选择 `ollama`、`modelscope`、`dashscope` 或
+`openrouter`。所有 provider MUST 使用定义中的 OpenAI 兼容根端点与模型，并共用
+`/chat/completions`、消息编码、SSE 解析、工具调用和 token 用量链路。具有密钥环境变量
+的 provider MUST 在启动 TUI 或首次请求前校验专属密钥；缺密钥 MUST 中文报错且不提示
+`max-gui serve`。`ollama` MUST 使用 `http://192.168.1.158:11434/v1`、`qwen3.5:9b`，
+不发送 Authorization 头；`openrouter` MUST 使用 `https://openrouter.ai/api/v1`、
+`qwen/qwen3.5-plus` 与 `MAX_OPENROUTER_KEY`。
 
-#### Scenario: local 仍检查权重
+#### Scenario: Ollama 不发送认证头
 
-- **WHEN** `MAX_PROVIDER=local` 且对应目录无完整权重
-- **THEN** 客户端不发送请求，错误信息包含路径 `model/qwen3.5-4b`，且不含 `max-gui download`
-
-#### Scenario: remote 不检查权重且不发送认证头
-
-- **WHEN** `MAX_PROVIDER=remote`
-- **THEN** 客户端向注册表定义的局域网端点发请求，不检查本地权重且不发送 Authorization 头
+- **WHEN** `MAX_PROVIDER=ollama`
+- **THEN** 客户端向注册表定义的局域网端点发请求，不检查主推理本地权重且不发送 Authorization 头
 
 #### Scenario: modelscope 使用专属密钥
 
@@ -193,12 +161,12 @@ CLI SHALL 提供 `max-gui serve`，仅当选中 provider 定义允许 `serve` �
 #### Scenario: dashscope 使用代码内专属端点
 
 - **WHEN** `MAX_PROVIDER=dashscope` 且 `MAX_DASHSCOPE_KEY` 非空
-- **THEN** 客户端向 provider 定义的北京专属端点发送 `/chat/completions`，且不检查本地权重
+- **THEN** 客户端向 provider 定义的北京专属端点发送 `/chat/completions`，且不检查主推理本地权重
 
 #### Scenario: openrouter 发送兼容请求
 
 - **WHEN** `MAX_PROVIDER=openrouter` 且 `MAX_OPENROUTER_KEY` 非空
-- **THEN** 客户端向 `https://openrouter.ai/api/v1/chat/completions` 发请求，模型为 `qwen/qwen3.5-plus`，带 Bearer 密钥且不检查本地权重
+- **THEN** 客户端向 `https://openrouter.ai/api/v1/chat/completions` 发请求，模型为 `qwen/qwen3.5-plus`，带 Bearer 密钥且不检查主推理本地权重
 
 #### Scenario: 云端缺专属密钥
 
@@ -207,7 +175,9 @@ CLI SHALL 提供 `max-gui serve`，仅当选中 provider 定义允许 `serve` �
 
 ### Requirement: 云端与本地均发送工具 schema
 
-当 Agent 调用推理且工具注册表非空时，客户端 MUST 在请求中包含 `tools` 与 `tool_choice=auto`，无论选中哪个已注册 provider。解析 SSE 时 MUST 按现有规则拼装 `tool_calls`。系统 MUST NOT 因云端后端而改为从正文 JSON 解析工具调用。
+当 Agent 调用推理且工具注册表非空时，客户端 MUST 在请求中包含 `tools` 与
+`tool_choice=auto`，无论选中哪个已注册 provider。解析 SSE 时 MUST 按现有规则拼装
+`tool_calls`。系统 MUST NOT 因 provider 而改为从正文 JSON 解析工具调用。
 
 #### Scenario: OpenRouter 请求带 tools
 
@@ -216,7 +186,7 @@ CLI SHALL 提供 `max-gui serve`，仅当选中 provider 定义允许 `serve` �
 
 #### Scenario: 其它 provider 请求带 tools
 
-- **WHEN** `MAX_PROVIDER` 为 `local`、`remote`、`modelscope` 或 `dashscope` 且注册表含桌面工具 schema
+- **WHEN** `MAX_PROVIDER` 为 `ollama`、`modelscope` 或 `dashscope` 且注册表含桌面工具 schema
 - **THEN** POST `/chat/completions` 的 JSON 含 `tools` 数组与 `tool_choice` 为 `auto`
 
 #### Scenario: 流式 tool_calls 拼装
@@ -226,7 +196,10 @@ CLI SHALL 提供 `max-gui serve`，仅当选中 provider 定义允许 `serve` �
 
 ### Requirement: dashscope 回传思考字段
 
-当 `MAX_PROVIDER=dashscope` 且助手消息 content 含非空 `reasoning` 时，`to_chat_messages` MUST 在该条请求消息上设置独立字段 `reasoning_content`，其值等于已存思考文本；`content` MUST 仍为正文，MUST NOT 把思考拼进 `content`。无思考的助手消息 MUST NOT 带 `reasoning_content`。`local` 与 `modelscope` MUST 仍不把思考编进请求。
+当 `MAX_PROVIDER=dashscope` 且助手消息 content 含非空 `reasoning` 时，系统 MUST 让
+`to_chat_messages` 在该条请求消息上设置独立字段 `reasoning_content`，其值等于已存思考
+文本；`content` MUST 仍为正文，MUST NOT 把思考拼进 `content`。无思考的助手消息 MUST
+NOT 带 `reasoning_content`。其它已注册 provider MUST NOT 把思考编进请求。
 
 #### Scenario: dashscope 助手带 reasoning_content
 
@@ -238,9 +211,9 @@ CLI SHALL 提供 `max-gui serve`，仅当选中 provider 定义允许 `serve` �
 - **WHEN** `MAX_PROVIDER=dashscope`，助手 content 仅有 `text`、无 `reasoning`
 - **THEN** 编码结果该条不含 `reasoning_content`
 
-#### Scenario: local 仍不回传思考
+#### Scenario: 非 DashScope 不回传思考
 
-- **WHEN** `MAX_PROVIDER=local`，助手 content 含 `reasoning`
+- **WHEN** `MAX_PROVIDER=ollama`，助手 content 含 `reasoning`
 - **THEN** 编码结果该条无 `reasoning_content`，`content` 仅为正文
 
 ### Requirement: 流式补全回传 token 用量
@@ -261,3 +234,46 @@ CLI SHALL 提供 `max-gui serve`，仅当选中 provider 定义允许 `serve` �
 
 - **WHEN** 客户端发起流式 `/chat/completions`
 - **THEN** JSON 请求体含 `stream` 为真，且 `stream_options.include_usage` 为真
+
+### Requirement: Ollama OpenAI 兼容请求
+
+系统 MUST 让 `ollama` provider 复用现有 OpenAI 兼容 `/chat/completions` 请求、消息编码、SSE 解析、工具调用与 token 用量链路。请求 MUST 使用注册表中的模型与端点，且 MUST NOT 发送 `Authorization` 头。连接失败 MUST 提示检查 WSL Ollama 服务、Windows 防火墙与局域网端口，且 MUST NOT 提示运行 `max-gui serve`。
+
+#### Scenario: Ollama 请求带工具 schema
+
+- **WHEN** `MAX_PROVIDER=ollama` 且 Agent 提供桌面工具 schema
+- **THEN** POST `http://192.168.1.158:11434/v1/chat/completions` 的 JSON 使用模型 `qwen3.5:9b`，包含 `tools` 与 `tool_choice=auto`，且没有 `Authorization` 头
+
+#### Scenario: Ollama 服务不可达
+
+- **WHEN** `MAX_PROVIDER=ollama` 的端点拒绝连接
+- **THEN** 系统报告 WSL Ollama、Windows 防火墙和局域网端口的中文检查提示，且不提示 `max-gui serve`
+
+### Requirement: 推理请求按 token 预算选择上下文
+
+系统 MUST 在发送主推理请求前，按配置的上下文容量扣除输出预留、安全余量和唯一内联图片预留，并对 system、当前用户消息、动态工具 schema 与完整工具调用链进行保守 token 估算。工具调用链 MUST 从最近向前选择，MUST NOT 拆开 assistant `tool_calls` 与对应 tool 消息。当前用户消息、system 与工具 schema 已超过可用预算时 MUST 在网络请求前失败，并给出中文预算诊断。请求 MUST 发送 `max_tokens` 等于配置的输出预留。
+
+#### Scenario: 256K Ollama 请求保留输出空间
+
+- **WHEN** Ollama 上下文容量为 `262144`、输出预留为 `8192`、安全余量为 `4096`
+- **THEN** 模型输入选择器不会使用这两项预留，且请求 JSON 的 `max_tokens` 为 `8192`
+
+#### Scenario: 较早完整链被预算裁剪
+
+- **WHEN** 当前用户消息和最近工具链可放入预算，但再加入更早的一条完整链会超限
+- **THEN** 请求包含最近完整链，不包含更早完整链，且没有孤立 tool 消息
+
+#### Scenario: 基础请求已超预算
+
+- **WHEN** system、当前用户消息、工具 schema 与图片预留已经超过可用上下文
+- **THEN** 客户端不发送 HTTP 请求，并报告容量、预留和估算输入的中文错误
+
+### Requirement: 上下文预算诊断不保存敏感内容
+
+模型调用事件 MUST 记录上下文容量、输出预留、安全余量、估算输入 token、动态工具数量、纳入和裁剪的工具链数量。事件 MUST NOT 复制消息正文、工具 schema、图片内容、键盘输入或完成证据原文。
+
+#### Scenario: 模型事件记录预算计数
+
+- **WHEN** 一次请求从四条完整工具链中按预算选择最近三条
+- **THEN** `model.started` 或 `model.completed` 记录纳入三条、裁剪一条及预算数值，且不含工具结果正文
+

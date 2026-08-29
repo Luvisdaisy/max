@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Mapping
 from typing import Any
@@ -69,38 +70,63 @@ class SessionScopedGate:
 class ToolRegistry:
     """按名查找、导出 schema，并在确认后调用。"""
 
-    def __init__(self, tools: list[Tool], *, gate: ConfirmationGate | None = None) -> None:
-        """参数：`tools` 列表；`gate` 缺省为 `AutoApproveGate`。"""
+    def __init__(
+        self,
+        tools: list[Tool],
+        *,
+        gate: ConfirmationGate | None = None,
+        timeout: float = 30.0,
+    ) -> None:
+        """参数：`tools` 列表；`gate` 缺省自动批准；`timeout` 限制单次实现调用。"""
         self._tools = {tool.name: tool for tool in tools}
         self.gate = gate or AutoApproveGate()
+        self.timeout = float(timeout)
 
     def get(self, name: str) -> Tool | None:
         """按名取工具；不存在返回 `None`。"""
         return self._tools.get(name)
 
-    def schemas(self) -> list[dict[str, Any]]:
-        """全部工具的 OpenAI function schema。"""
-        return [tool.schema() for tool in self._tools.values()]
+    def schemas(self, names: set[str] | None = None) -> list[dict[str, Any]]:
+        """按注册顺序导出允许名称的 OpenAI function schema；缺省导出全部。"""
+        return [
+            tool.schema() for tool in self._tools.values() if names is None or tool.name in names
+        ]
+
+    def names(self) -> set[str]:
+        """返回全部已注册工具名的副本。"""
+        return set(self._tools)
+
+    def is_side_effect(self, name: str) -> bool:
+        """未知工具按非副作用返回，分发前仍须单独拒绝未知名称。"""
+        tool = self._tools.get(name)
+        return bool(tool and tool.side_effect)
 
     async def invoke(self, name: str, arguments: dict[str, Any] | str | None) -> str | ToolResult:
         """解析参数、走确认门并调用。
 
-        未知工具、拒绝确认或异常都返回错误字符串，不向外抛。
+        未知工具、参数错误、拒绝、超时或异常都返回结构化错误，不向外抛。
         """
         tool = self._tools.get(name)
         if tool is None:
-            return f"工具错误：未知工具 {name}"
-        parsed = _coerce_args(arguments)
+            return _failure("unknown_tool", f"工具错误：未知工具 {name}")
+        parsed, parse_error = _coerce_args(arguments)
+        if parse_error:
+            return _failure("invalid_arguments", parse_error)
+        validation_error = _validate_json_value(parsed, tool.schema()["function"]["parameters"])
+        if validation_error:
+            return _failure("invalid_arguments", f"工具参数错误：{validation_error}")
         if tool.requires_confirmation:
             allowed = await self.gate.confirm(name, parsed, scope=tool.confirmation_scope)
             if not allowed:
-                return "已取消：用户拒绝执行"
+                return _failure("cancelled", "已取消：用户拒绝执行")
         try:
-            return await tool.invoke(parsed)
+            return await asyncio.wait_for(tool.invoke(parsed), timeout=self.timeout)
+        except TimeoutError:
+            return _failure("timeout", f"工具超时：{name} 超过 {self.timeout:g} 秒")
         except ToolError as exc:
-            return str(exc)
+            return _failure("tool_error", str(exc))
         except Exception as exc:
-            return f"工具错误：{exc}"
+            return _failure("internal_error", f"工具错误：{exc}")
 
 
 def build_default_registry(
@@ -126,18 +152,102 @@ def build_default_registry(
         *ocr_tools(settings, ocr),
         locate_tool(settings, locate),
         *desktop_tools(settings, backend),
+        _task_complete_tool(),
     ]
-    return ToolRegistry(tools, gate=gate)
+    return ToolRegistry(tools, gate=gate, timeout=settings.tool_timeout)
 
 
-def _coerce_args(arguments: dict[str, Any] | str | None) -> dict[str, Any]:
-    """把模型给出的参数收成字典。JSON 字符串会解析；解析失败放进 `raw`。"""
+def _task_complete_tool() -> Tool:
+    """构造由 Agent 二次校验状态的机器可识别完成声明工具。"""
+
+    async def complete(args: dict[str, Any]) -> ToolResult:
+        """接收已通过 schema 的摘要和可见证据，不在此判断 GUI 业务语义。"""
+        return ToolResult(text="已收到任务完成声明，等待 Agent 核验后置截图。")
+
+    return Tool(
+        name="task_complete",
+        description=(
+            "仅在完成桌面副作用且已查看后置截图后调用。"
+            "summary 简述结果，evidence 说明截图中可见的完成证据。"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "summary": {"type": "string", "minLength": 1},
+                "evidence": {"type": "string", "minLength": 1},
+            },
+            "required": ["summary", "evidence"],
+        },
+        invoke=complete,
+    )
+
+
+def _failure(code: str, text: str) -> ToolResult:
+    """构造不带图片的稳定结构化工具错误。"""
+    return ToolResult(text=text, ok=False, code=code)
+
+
+def _coerce_args(arguments: dict[str, Any] | str | None) -> tuple[dict[str, Any], str | None]:
+    """把模型参数解析为对象，并单独返回不会泄露原文的错误。"""
     if arguments is None:
-        return {}
+        return {}, None
     if isinstance(arguments, dict):
-        return arguments
+        return arguments, None
+    if not isinstance(arguments, str):
+        return {}, "参数必须是 JSON 对象"
     try:
         loaded = json.loads(arguments)
     except json.JSONDecodeError:
-        return {"raw": arguments}
-    return loaded if isinstance(loaded, dict) else {"raw": loaded}
+        return {}, "参数不是合法 JSON 对象"
+    if not isinstance(loaded, dict):
+        return {}, "参数必须是 JSON 对象"
+    return loaded, None
+
+
+def _validate_json_value(value: Any, schema: dict[str, Any], path: str = "参数") -> str | None:
+    """校验项目工具使用的 JSON Schema 子集，返回第一条中文错误。"""
+    expected = schema.get("type")
+    if expected == "object":
+        if not isinstance(value, dict):
+            return f"{path}必须是对象"
+        properties = schema.get("properties") or {}
+        missing = [name for name in schema.get("required") or [] if name not in value]
+        if missing:
+            return f"{path}缺少必填字段：{', '.join(missing)}"
+        if schema.get("additionalProperties") is False:
+            extras = [str(name) for name in value if name not in properties]
+            if extras:
+                return f"{path}包含未知字段：{', '.join(extras)}"
+        for name, item in value.items():
+            child = properties.get(name)
+            if isinstance(child, dict):
+                error = _validate_json_value(item, child, f"{path}.{name}")
+                if error:
+                    return error
+    elif expected == "array":
+        if not isinstance(value, list):
+            return f"{path}必须是数组"
+        if len(value) < int(schema.get("minItems") or 0):
+            return f"{path}至少需要 {schema['minItems']} 项"
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                error = _validate_json_value(item, item_schema, f"{path}[{index}]")
+                if error:
+                    return error
+    elif expected == "string":
+        if not isinstance(value, str):
+            return f"{path}必须是字符串"
+        if len(value) < int(schema.get("minLength") or 0):
+            return f"{path}不能为空"
+    elif expected == "integer":
+        if isinstance(value, bool) or not isinstance(value, int):
+            return f"{path}必须是整数"
+    elif expected == "number":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return f"{path}必须是数字"
+    elif expected == "boolean" and not isinstance(value, bool):
+        return f"{path}必须是布尔值"
+    if "enum" in schema and value not in schema["enum"]:
+        return f"{path}不在允许值中"
+    return None

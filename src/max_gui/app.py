@@ -409,12 +409,20 @@ class MaxGuiApp(App[None]):
             self._monitor["status"] = _monitor_status(str(data.get("to") or ""))
         elif event.event_type == "model.started":
             self._monitor["activity"] = f"模型 {(data.get('model') or '未知')!s}"
+        elif event.event_type == "model.retrying":
+            attempt = _nonnegative_int(data.get("attempt"))
+            maximum = _nonnegative_int(data.get("max_attempts"))
+            delay = _nonnegative_int(data.get("delay_ms"))
+            self._monitor["activity"] = f"模型重试 {attempt}/{maximum}，等待 {delay}ms"
+            self._monitor["diagnostic"] = str(data.get("error") or data.get("reason_code") or "")
         elif event.event_type in {"model.completed", "model.failed"}:
             self._monitor["model_duration_ms"] += _nonnegative_int(data.get("duration_ms"))
             self._add_monitor_usage(data)
             self._monitor["activity"] = (
                 "模型完成" if event.event_type.endswith("completed") else "模型失败"
             )
+            if event.event_type == "model.completed":
+                self._monitor["diagnostic"] = ""
         elif event.event_type == "tool.started":
             self._monitor["activity"] = f"工具 {(data.get('tool_name') or '未知')!s}"
         elif event.event_type in {"tool.completed", "tool.failed"}:
@@ -637,6 +645,11 @@ def _event_summary(event: RunEvent) -> str:
         )
     if event.event_type == "model.started":
         return "模型开始"
+    if event.event_type == "model.retrying":
+        attempt = _nonnegative_int(data.get("attempt"))
+        maximum = _nonnegative_int(data.get("max_attempts"))
+        delay = _nonnegative_int(data.get("delay_ms"))
+        return f"模型重试 {attempt}/{maximum} 等待 {delay}ms"
     if event.event_type in {"model.completed", "model.failed"}:
         result = "完成" if event.event_type == "model.completed" else "失败"
         usage = usage_from_data(data)

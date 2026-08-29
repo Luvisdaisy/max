@@ -25,6 +25,8 @@ class AgentState(TypedDict, total=False):
         current_subtask: 当前子任务文案；无计划时为空。
         task_context: 当前用户任务的最小推理上下文；不重放全量会话历史。
         history_message_count: 任务开始前会话的消息数，只供上下文裁剪诊断。
+        allowed_tools: 产生当前模型回复时实际暴露的工具名，用于 act 二次门禁。
+        context_diagnostics: 本轮上下文预算的脱敏计数。
     """
 
     session_id: str
@@ -39,3 +41,5 @@ class AgentState(TypedDict, total=False):
     current_subtask: str | None
     task_context: TaskContext
     history_message_count: int
+    allowed_tools: list[str]
+    context_diagnostics: dict[str, Any]

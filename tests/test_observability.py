@@ -97,6 +97,48 @@ def test_summary_tracks_calls_and_terminal_data(tmp_path: Path) -> None:
     recorder.close()
 
 
+def test_model_retry_event_does_not_increase_logical_call_summary(tmp_path: Path) -> None:
+    """网络重试事件被持久化，但不增加逻辑模型调用或重复用量。"""
+    recorder = RunRecorder(tmp_path / "runs", "session-1")
+    recorder.record("model.started", iteration=1)
+    recorder.record(
+        "model.retrying",
+        iteration=1,
+        data={
+            "attempt": 2,
+            "max_attempts": 6,
+            "reason_code": "http_503",
+            "delay_ms": 500,
+            "error": "service unavailable",
+        },
+    )
+    recorder.record(
+        "model.completed",
+        iteration=1,
+        data={
+            "duration_ms": 900,
+            "attempt_count": 2,
+            "retry_count": 1,
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+        },
+    )
+    recorder.close()
+    events = _read_events(recorder.path)
+    assert [item["event_type"] for item in events] == [
+        "model.started",
+        "model.retrying",
+        "model.completed",
+    ]
+    resumed = RunRecorder(tmp_path / "runs", "session-1", run_id=recorder.run_id)
+    summary = resumed.summary()
+    assert summary["model_calls"] == 1
+    assert summary["model_duration_ms"] == 900
+    assert summary["total_tokens"] == 15
+    resumed.close()
+
+
 def test_summary_accumulates_known_usage_and_skips_unknown(tmp_path: Path) -> None:
     """两次已知用量相加；未知调用不把累计写成 0。"""
     recorder = RunRecorder(tmp_path / "runs", "session-1")

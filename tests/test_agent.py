@@ -7,12 +7,13 @@ import json
 
 import pytest
 
-from max_gui.agent.graph import ITERATION_LIMIT_MESSAGE, AgentRunner
+from max_gui.agent.graph import ITERATION_LIMIT_MESSAGE, AgentRunner, _completion_evidence_ready
 from max_gui.agent.prompts import GUI_SYSTEM_PROMPT, os_contract
 from max_gui.config import Settings
 from max_gui.desktop.fake import FakeDesktopBackend
-from max_gui.inference.client import ChatDelta, TokenUsage
+from max_gui.inference.client import ChatDelta, InferenceRequestError, TokenUsage
 from max_gui.inference.omniparser import DetectedBox, LocateRuntime
+from max_gui.inference.retry import RetryMetadata, RetryNotice
 from max_gui.session.store import SessionStore
 from max_gui.tools.desktop import clear_desktop_context
 from max_gui.tools.registry import AutoApproveGate, build_default_registry
@@ -25,12 +26,21 @@ class ScriptedClient:
         """参数：`deltas` 为每次 `stream` 弹出的回复。"""
         self.deltas = list(deltas)
         self.requests: list[list[dict]] = []
+        self.tool_requests: list[list[dict]] = []
 
     async def stream(
-        self, messages, *, tools=None, on_token=None, on_reasoning=None, should_stop=None
+        self,
+        messages,
+        *,
+        tools=None,
+        on_token=None,
+        on_reasoning=None,
+        should_stop=None,
+        on_retry=None,
     ):
         """记录请求消息并弹出下一条脚本回复。"""
         self.requests.append(messages)
+        self.tool_requests.append(list(tools or []))
         delta = self.deltas.pop(0)
         if delta.reasoning and on_reasoning:
             on_reasoning(delta.reasoning)
@@ -47,7 +57,14 @@ class SlowClient:
         self.started = asyncio.Event()
 
     async def stream(
-        self, messages, *, tools=None, on_token=None, on_reasoning=None, should_stop=None
+        self,
+        messages,
+        *,
+        tools=None,
+        on_token=None,
+        on_reasoning=None,
+        should_stop=None,
+        on_retry=None,
     ):
         """轮询 `should_stop`，被中断则返回 `interrupted`。"""
         self.started.set()
@@ -136,6 +153,174 @@ async def test_one_tool_cycle(settings: Settings) -> None:
         for req in client.requests
         for msg in req
     )
+
+
+async def test_dynamic_tool_schemas_follow_observation_stage(settings: Settings) -> None:
+    """初始阶段不暴露桌面副作用，取得活动截图后才开放。"""
+    client = ScriptedClient(
+        [
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "shot",
+                        "type": "function",
+                        "function": {"name": "screenshot", "arguments": "{}"},
+                    }
+                ]
+            ),
+            ChatDelta(text="已观察"),
+        ]
+    )
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text="看屏幕")
+    assert state["status"] == "done"
+    initial = {item["function"]["name"] for item in client.tool_requests[0]}
+    observed = {item["function"]["name"] for item in client.tool_requests[1]}
+    assert "screenshot" in initial
+    assert "mouse_move" not in initial
+    assert "task_complete" not in initial
+    assert "mouse_move" in observed
+    assert "task_complete" not in observed
+
+
+async def test_one_side_effect_per_response_pairs_all_tool_calls(settings: Settings) -> None:
+    """同一模型回复只执行首个副作用，其余调用仍返回配对错误。"""
+    client = ScriptedClient(
+        [
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "shot",
+                        "type": "function",
+                        "function": {"name": "screenshot", "arguments": "{}"},
+                    }
+                ]
+            ),
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "move",
+                        "type": "function",
+                        "function": {
+                            "name": "mouse_move",
+                            "arguments": '{"x":8,"y":8}',
+                        },
+                    },
+                    {
+                        "id": "type",
+                        "type": "function",
+                        "function": {
+                            "name": "keyboard_type",
+                            "arguments": '{"text":"blocked"}',
+                        },
+                    },
+                ]
+            ),
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "done",
+                        "type": "function",
+                        "function": {
+                            "name": "task_complete",
+                            "arguments": '{"summary":"已移动","evidence":"光标截图可见"}',
+                        },
+                    }
+                ]
+            ),
+        ]
+    )
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text="移动并输入")
+    paired = {
+        item["tool_call_id"]: item["content"]
+        for item in state["messages"]
+        if item.get("role") == "tool" and item.get("tool_call_id") in {"move", "type"}
+    }
+    assert set(paired) == {"move", "type"}
+    assert paired["move"]["exec"]["code"] == "ok"
+    assert paired["type"]["exec"]["code"] == "action_batch_blocked"
+
+
+async def test_side_effect_requires_task_complete_after_plain_text(settings: Settings) -> None:
+    """副作用后的普通正文不能结束，必须在后置截图后显式声明完成。"""
+    settings.max_iterations = 4
+    client = ScriptedClient(
+        [
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "shot",
+                        "type": "function",
+                        "function": {"name": "screenshot", "arguments": "{}"},
+                    }
+                ]
+            ),
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "move",
+                        "type": "function",
+                        "function": {
+                            "name": "mouse_move",
+                            "arguments": '{"x":8,"y":8}',
+                        },
+                    }
+                ]
+            ),
+            ChatDelta(text="我认为完成了"),
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "done",
+                        "type": "function",
+                        "function": {
+                            "name": "task_complete",
+                            "arguments": '{"summary":"已移动","evidence":"后置截图含光标"}',
+                        },
+                    }
+                ]
+            ),
+        ]
+    )
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text="移动鼠标")
+    assert state["status"] == "done"
+    assert state["task_context"]["completion_required"] is True
+    assert state["task_context"]["completion_verified"] is True
+    assert len(client.requests) == 4
+    before_action = {item["function"]["name"] for item in client.tool_requests[1]}
+    after_action = {item["function"]["name"] for item in client.tool_requests[2]}
+    assert "task_complete" not in before_action
+    assert "task_complete" in after_action
+
+
+def test_completion_evidence_accepts_separate_post_action_screenshot() -> None:
+    """动作自身截图失败后，后续独立截图也可作为完成门的后置观察。"""
+    context = {
+        "action_history": [
+            {
+                "name": "mouse_move",
+                "arguments": {},
+                "outcome": "success",
+                "has_observation": False,
+                "conclusion": "动作成功但后置截图失败",
+            },
+            {
+                "name": "screenshot",
+                "arguments": {},
+                "outcome": "success",
+                "has_observation": True,
+                "conclusion": "已补拍",
+            },
+        ]
+    }
+    assert _completion_evidence_ready(context)
+    context["action_history"].pop()
+    assert not _completion_evidence_ready(context)
 
 
 async def test_iteration_limit(settings: Settings) -> None:
@@ -234,8 +419,8 @@ async def test_screenshot_tool_image_reaches_think(settings: Settings) -> None:
     assert loaded.view_frame["view_width"] > 0
 
 
-async def test_next_turn_reuses_saved_view_frame(settings: Settings) -> None:
-    """下一回合清空 ContextVar 后，仍按会话里的视图像素换算。"""
+async def test_next_turn_invalidates_saved_view_frame(settings: Settings) -> None:
+    """新桌面任务不复用上回合截图坐标，必须重新观察。"""
     client = ScriptedClient(
         [
             ChatDelta(
@@ -248,19 +433,7 @@ async def test_next_turn_reuses_saved_view_frame(settings: Settings) -> None:
                 ]
             ),
             ChatDelta(text="已截图"),
-            ChatDelta(
-                tool_calls=[
-                    {
-                        "id": "move1",
-                        "type": "function",
-                        "function": {
-                            "name": "mouse_move",
-                            "arguments": '{"x": 16, "y": 10}',
-                        },
-                    }
-                ]
-            ),
-            ChatDelta(text="已移动"),
+            ChatDelta(text="需要先截图"),
         ]
     )
     runner, store = _runner(settings, client)
@@ -270,26 +443,13 @@ async def test_next_turn_reuses_saved_view_frame(settings: Settings) -> None:
     session = store.get(session.id)
     assert session is not None
     assert session.view_frame is not None
-    frame = session.view_frame
     clear_desktop_context()
     second = await runner.run(session, user_text="移动")
     assert second["status"] == "done"
-    move_msg = next(
-        msg
-        for msg in second["messages"]
-        if msg.get("role") == "tool" and "指针已移到" in str(msg.get("content"))
-    )
-    text = (
-        move_msg["content"]["text"]
-        if isinstance(move_msg["content"], dict)
-        else move_msg["content"]
-    )
-    assert "视图像素" in text
-    assert "尚无截图" not in text
-    assert "(16, 10)" in text
-    expected_x = round(16 * frame["logical_width"] / frame["view_width"])
-    expected_y = round(10 * frame["logical_height"] / frame["view_height"])
-    assert f"逻辑坐标 ({expected_x}, {expected_y})" not in text
+    initial_tools = {item["function"]["name"] for item in client.tool_requests[-1]}
+    assert "mouse_move" not in initial_tools
+    assert session.view_frame is None
+    assert session.locate_hits == {}
 
 
 def test_os_contract_darwin_not_windows() -> None:
@@ -470,6 +630,15 @@ async def test_click_followup_image_reaches_think(settings: Settings) -> None:
             ChatDelta(
                 tool_calls=[
                     {
+                        "id": "shot",
+                        "type": "function",
+                        "function": {"name": "screenshot", "arguments": "{}"},
+                    }
+                ]
+            ),
+            ChatDelta(
+                tool_calls=[
+                    {
                         "id": "clk",
                         "type": "function",
                         "function": {
@@ -479,16 +648,32 @@ async def test_click_followup_image_reaches_think(settings: Settings) -> None:
                     }
                 ]
             ),
-            ChatDelta(text="移完了"),
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "done",
+                        "type": "function",
+                        "function": {
+                            "name": "task_complete",
+                            "arguments": '{"summary":"移完了","evidence":"截图含光标"}',
+                        },
+                    }
+                ]
+            ),
         ]
     )
     runner, store = _runner(settings, client)
     session = store.create(model="qwen3.5-2b")
     state = await runner.run(session, user_text="点一下")
     tool_msgs = [msg for msg in state["messages"] if msg.get("role") == "tool"]
-    assert tool_msgs and isinstance(tool_msgs[0]["content"], dict)
-    assert tool_msgs[0]["content"]["images"]
-    tool_encoded = next(item for item in client.requests[1] if item.get("role") == "tool")
+    move_message = next(item for item in tool_msgs if item.get("name") == "mouse_move")
+    assert isinstance(move_message["content"], dict)
+    assert move_message["content"]["images"]
+    tool_encoded = next(
+        item
+        for item in client.requests[2]
+        if item.get("role") == "tool" and item.get("tool_call_id") == "clk"
+    )
     types = [part["type"] for part in tool_encoded["content"]]
     assert "text" in types and "image_url" in types
 
@@ -497,10 +682,92 @@ class FailingStreamClient:
     """`stream` 抛出推理 HTTP 错误，供测试落盘。"""
 
     async def stream(
-        self, messages, *, tools=None, on_token=None, on_reasoning=None, should_stop=None
+        self,
+        messages,
+        *,
+        tools=None,
+        on_token=None,
+        on_reasoning=None,
+        should_stop=None,
+        on_retry=None,
     ):
         """始终失败。"""
         raise RuntimeError("推理服务返回 400：maximum context length")
+
+
+class RetryReportingClient:
+    """先报告安全重试通知，再返回指定结果的假客户端。"""
+
+    def __init__(self, deltas: list[ChatDelta]) -> None:
+        """参数：`deltas` 为每次逻辑模型调用的最终结果。"""
+        self.deltas = list(deltas)
+        self.calls = 0
+
+    async def stream(
+        self,
+        messages,
+        *,
+        tools=None,
+        on_token=None,
+        on_reasoning=None,
+        should_stop=None,
+        on_retry=None,
+    ):
+        """每次逻辑调用只报告一次传输重试，不重复返回中间消息。"""
+        self.calls += 1
+        if on_retry:
+            on_retry(
+                RetryNotice(
+                    attempt=2,
+                    max_attempts=6,
+                    reason_code="transport_connecterror",
+                    status_code=None,
+                    delay_ms=500,
+                    error="Authorization: Bearer secret-token",
+                )
+            )
+        delta = self.deltas.pop(0)
+        if delta.reasoning and on_reasoning:
+            on_reasoning(delta.reasoning)
+        if delta.text and on_token:
+            on_token(delta.text)
+        return delta
+
+
+class RetriedFailureClient:
+    """模拟两次网络尝试后仍失败的客户端。"""
+
+    async def stream(
+        self,
+        messages,
+        *,
+        tools=None,
+        on_token=None,
+        on_reasoning=None,
+        should_stop=None,
+        on_retry=None,
+    ):
+        """先报告一次重试，再抛出带尝试统计的最终错误。"""
+        if on_retry:
+            on_retry(
+                RetryNotice(
+                    attempt=2,
+                    max_attempts=2,
+                    reason_code="http_503",
+                    status_code=503,
+                    delay_ms=500,
+                    error="service unavailable",
+                )
+            )
+        raise InferenceRequestError(
+            "推理服务返回 503：service unavailable（已重试 1 次，共尝试 2 次。）",
+            metadata=RetryMetadata(
+                attempt_count=2,
+                retry_count=1,
+                reason_code="http_503",
+                status_code=503,
+            ),
+        )
 
 
 async def test_think_stream_error_persists_session(settings: Settings) -> None:
@@ -680,7 +947,20 @@ async def test_grounded_facts_reuse_target_then_require_click_verification(
             )
             for call_id, name, arguments in calls
         ]
-        + [ChatDelta(text="完成")]
+        + [
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "done",
+                        "type": "function",
+                        "function": {
+                            "name": "task_complete",
+                            "arguments": '{"summary":"完成","evidence":"光标截图已核验"}',
+                        },
+                    }
+                ]
+            )
+        ]
     )
     settings.max_iterations = 4
     runner, store = _runner_with_locate(settings, client)
@@ -851,3 +1131,78 @@ async def test_inference_error_emits_model_and_run_failures(settings: Settings) 
     types = [item["event_type"] for item in events]
     assert types.index("model.failed") < types.index("run.failed")
     assert events[-1]["data"]["final_status"] == "error"
+
+
+async def test_model_retry_event_keeps_one_logical_call_and_one_message(
+    settings: Settings,
+) -> None:
+    """重试事件位于同一模型调用内，脱敏且只提交成功助手消息。"""
+    client = RetryReportingClient([ChatDelta(text="完成", attempt_count=2, retry_count=1)])
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text="重试")
+    events = _run_events(settings, state["run_id"])
+    types = [item["event_type"] for item in events]
+    assert types.count("model.started") == 1
+    assert types.count("model.retrying") == 1
+    assert types.count("model.completed") == 1
+    retrying = next(item for item in events if item["event_type"] == "model.retrying")
+    completed = next(item for item in events if item["event_type"] == "model.completed")
+    terminal = next(item for item in events if item["event_type"] == "run.completed")
+    assert retrying["data"]["attempt"] == 2
+    assert retrying["data"]["delay_ms"] == 500
+    assert "secret-token" not in json.dumps(retrying, ensure_ascii=False)
+    assert completed["data"]["attempt_count"] == 2
+    assert completed["data"]["retry_count"] == 1
+    assert terminal["data"]["model_calls"] == 1
+    loaded = store.get(session.id)
+    assert loaded is not None
+    assert [message.role for message in loaded.messages].count("assistant") == 1
+
+
+async def test_retry_after_tool_does_not_replay_tool(settings: Settings) -> None:
+    """下一轮模型重试不会重新执行上一轮已成功的截图工具。"""
+    client = RetryReportingClient(
+        [
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "shot",
+                        "type": "function",
+                        "function": {"name": "screenshot", "arguments": "{}"},
+                    }
+                ],
+                attempt_count=2,
+                retry_count=1,
+            ),
+            ChatDelta(text="已观察", attempt_count=2, retry_count=1),
+        ]
+    )
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text="截图")
+    events = _run_events(settings, state["run_id"])
+    tool_starts = [item for item in events if item["event_type"] == "tool.started"]
+    tool_messages = [item for item in state["messages"] if item.get("role") == "tool"]
+    assert len(tool_starts) == 1
+    assert len(tool_messages) == 1
+    assert client.calls == 2
+
+
+async def test_retry_exhaustion_persists_once_with_attempt_metadata(settings: Settings) -> None:
+    """重试耗尽只形成一次最终错误和检查点，不追加失败尝试消息。"""
+    runner, store = _runner(settings, RetriedFailureClient())
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text="失败")
+    events = _run_events(settings, state["run_id"])
+    retrying = [item for item in events if item["event_type"] == "model.retrying"]
+    failures = [item for item in events if item["event_type"] == "model.failed"]
+    assert len(retrying) == 1
+    assert len(failures) == 1
+    assert failures[0]["data"]["attempt_count"] == 2
+    assert failures[0]["data"]["retry_count"] == 1
+    loaded = store.get(session.id)
+    assert loaded is not None
+    assert loaded.status == "error"
+    assert "已重试 1 次" in str(loaded.checkpoint.get("error"))
+    assert [message.role for message in loaded.messages] == ["user"]

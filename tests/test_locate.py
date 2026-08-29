@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from max_gui.config import DEFAULT_OMNIPARSER_DIR, Settings
@@ -24,6 +25,8 @@ from max_gui.tools.desktop import (
     clear_desktop_context,
     store_locate_hits,
 )
+from max_gui.tools.dock import DockCandidate
+from max_gui.tools.locate import _dock_boxes
 from max_gui.tools.protocol import ToolResult
 from max_gui.tools.registry import DenyGate, build_default_registry
 
@@ -115,6 +118,48 @@ async def test_locate_draws_boxes_and_default_path(settings: Settings) -> None:
     assert payload["coordinate_space"] == "view"
     assert result.images and result.images[0].is_file()
     assert 1 in active_locate_hits()
+
+
+async def test_locate_query_requires_unique_semantic_label(settings: Settings) -> None:
+    """查询不会把泛化 icon 当作 Chrome，唯一具名框才可执行。"""
+    runtime = LocateRuntime(
+        settings,
+        parse_fn=_parse_boxes([_box(0, 0, 16, 16, "icon"), _box(20, 0, 36, 16, "Google Chrome")]),
+    )
+    registry = _registry(settings, runtime)
+    await registry.invoke("screenshot", {})
+    result = await registry.invoke("locate", {"query": "Chrome"})
+    assert isinstance(result, ToolResult)
+    payload = json.loads(result.text)
+    assert payload["semantic_status"] == "matched"
+    assert payload["items"][0]["label"] == "Google Chrome"
+    assert active_locate_hits()
+
+
+async def test_locate_query_generic_label_is_not_match(settings: Settings) -> None:
+    """无名图标查询失败时不保留可执行命中。"""
+    runtime = LocateRuntime(settings, parse_fn=_parse_boxes([_box(0, 0, 16, 16, "icon")]))
+    registry = _registry(settings, runtime)
+    await registry.invoke("screenshot", {})
+    result = await registry.invoke("locate", {"query": "Chrome"})
+    assert isinstance(result, ToolResult)
+    assert json.loads(result.text)["semantic_status"] == "not_matched"
+    assert active_locate_hits() == {}
+
+
+def test_dock_candidate_projection_is_read_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Dock 辅助功能结果只投影为框，不触发任何桌面动作。"""
+    monkeypatch.setattr(
+        "max_gui.tools.locate.find_dock_apps",
+        lambda: ([DockCandidate(title="Google Chrome", x=10, y=20, width=30, height=40)], "ok"),
+    )
+    from max_gui.tools.desktop import ViewFrame
+
+    frame = ViewFrame(0, 0, 100, 100, 50, 50, Path("/tmp/current.png"))
+    boxes, status = _dock_boxes("Chrome", frame=frame, width=100, height=100)
+    assert status == "ok"
+    assert boxes[0].label == "Google Chrome"
+    assert (boxes[0].x1, boxes[0].y1, boxes[0].x2, boxes[0].y2) == (10, 20, 40, 60)
 
 
 async def test_current_retina_screenshot_target_id_uses_logical_center(settings: Settings) -> None:
