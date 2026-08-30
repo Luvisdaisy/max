@@ -46,12 +46,14 @@ class ToolResult:
         images: 本地图像路径，推理层会编成 `image_url`。
         ok: 工具调用是否成功。
         code: 稳定的机器可读结果码。
+        data: 可选的脱敏执行事实；不表示任务进度或业务完成。
     """
 
     text: str
     images: list[Path] = field(default_factory=list)
     ok: bool = True
     code: str = "ok"
+    data: dict[str, Any] = field(default_factory=dict)
 
     def __contains__(self, value: object) -> bool:
         """兼容既有测试和调用方对文本结果使用 `in` 的判断。"""

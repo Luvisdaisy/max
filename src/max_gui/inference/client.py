@@ -138,6 +138,7 @@ class InferenceClient:
             "stream_options": {"include_usage": True},
             "max_tokens": self.settings.max_output_tokens,
         }
+        payload.update(provider.thinking_payload(self.settings.enable_thinking))
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"

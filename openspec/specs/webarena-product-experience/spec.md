@@ -1,0 +1,25 @@
+# webarena-product-experience Specification
+
+## Purpose
+TBD - created by archiving change expand-webarena-product-complexity. Update Purpose after archive.
+## Requirements
+### Requirement: 高信息密度且可见的协作界面
+
+系统 SHALL 在工作台、项目、任务、日历和报表页面展示由当前本地业务状态计算的摘要、关系和行动入口。任务
+详情 MUST 通过可见抽屉或对话框展示，并提供可操作的状态、负责人、日期、标签、子任务与草稿评论字段。
+
+#### Scenario: 从项目进入关联任务详情
+
+- **WHEN** Agent 在项目页点击一个可见的风险项目并打开关联任务
+- **THEN** 页面显示该任务的完整可编辑信息与项目上下文，且没有通过地址栏直达绕过站内导航
+
+### Requirement: 明确的产品状态反馈与响应式可用性
+
+系统 SHALL 为加载、空状态、校验错误、保存成功、撤销和冲突提供可读文案与可见控件。桌面和 390px 宽视口
+MUST 无横向溢出，核心导航、任务详情和运行控制均可见且可操作。
+
+#### Scenario: 小屏显示空筛选结果
+
+- **WHEN** 用户在 390px 宽视口使用筛选条件且没有匹配任务
+- **THEN** 页面显示明确的空状态和清除筛选入口，核心页面宽度不产生横向滚动
+

@@ -13,6 +13,7 @@ from langgraph.graph import END, START, StateGraph
 
 from max_gui.agent.context import (
     TaskContext,
+    add_ui_candidates,
     append_action_summary,
     clear_grounded_facts,
     conversation_observation_path,
@@ -21,18 +22,23 @@ from max_gui.agent.context import (
     new_task_context,
     record_cursor_verification,
     register_completion_declaration,
+    register_expectation,
+    replace_desktop_snapshot,
     replace_locate_facts,
+    replace_ui_snapshot,
     require_completion,
     restore_task_context,
     task_context_message,
     update_recovery,
     update_task_context,
     verify_completion,
+    verify_current_expectation,
 )
 from max_gui.agent.plan import advance_subtask_after_tools, ingest_assistant_plan
 from max_gui.agent.prompts import compose_gui_system_prompt
 from max_gui.agent.state import AgentState
 from max_gui.config import Settings
+from max_gui.desktop.observation import observe_desktop_identity
 from max_gui.inference.budget import ContextSelection, select_context_chains
 from max_gui.inference.client import ChatDelta, InferenceClient, to_chat_messages
 from max_gui.inference.retry import RetryNotice
@@ -51,6 +57,15 @@ from max_gui.tools.registry import ToolRegistry
 ITERATION_LIMIT_MESSAGE = "已达到最大迭代次数，本回合停止。"
 RECOVERY_LIMIT = 2
 DISABLED_AGENT_TOOLS = frozenset({"locate"})
+STRUCTURED_SIDE_EFFECTS = frozenset(
+    {
+        "click",
+        "type_text",
+        "press_key",
+        "press_shortcut",
+        "activate_app",
+    }
+)
 
 
 class AgentRunner:
@@ -221,6 +236,7 @@ class AgentRunner:
             self._emit_status(str(state.get("status") or "thinking"), state)
 
             try:
+                state = await self._prime_ui_observation(state)
                 result = await self._graph.ainvoke(state)
             except Exception as exc:
                 self._emit_event(
@@ -243,6 +259,32 @@ class AgentRunner:
             self._recorder = None
             self._session = None
             current_session_id.reset(token)
+
+    async def _prime_ui_observation(self, state: AgentState) -> AgentState:
+        """在首轮 Think 前建立当前截图与结构化 UI 快照。
+
+        返回：带最新截图、桌面身份和 native UI 摘要的状态；AX 不可用时保留视觉后备，
+        不阻断任务启动。副作用：仅截取当前屏幕，绝不启动或置前独立浏览器。
+        """
+        context = _task_context(state)
+        desktop_observation = observe_desktop_identity()
+        output = await self.registry.invoke("screenshot", {})
+        if not isinstance(output, ToolResult) or not output.ok or not output.images:
+            return state
+        frame = active_view_frame()
+        if frame is None or not frame.image_path.is_file():
+            return state
+        desktop_observation = observe_desktop_identity()
+        context["latest_observation"] = {"path": str(output.images[-1]), "source": "tool"}
+        context = replace_desktop_snapshot(
+            context, frame_path=str(frame.image_path), observation=desktop_observation
+        )
+        context = await self._replace_structured_ui_snapshot(
+            context,
+            frame_path=str(frame.image_path),
+            desktop_observation=desktop_observation,
+        )
+        return {**state, "task_context": context}
 
     async def think(self, state: AgentState) -> AgentState:
         """调用模型。有工具调用则进入 `acting`，否则 `done`；超迭代或推理失败为 `error`。
@@ -456,6 +498,8 @@ class AgentRunner:
             name = str(fn.get("name") or "")
             call_id = str(call.get("id") or name)
             arguments = _tool_arguments(fn.get("arguments"))
+            expectation = arguments.pop("expectation", None)
+            intent = arguments.pop("intent", None)
             frame_before = _active_frame_path()
             target_label = _target_label_for_move(context, name, arguments, frame_before)
             side_effect = self.registry.is_side_effect(name)
@@ -494,7 +538,12 @@ class AgentRunner:
             elif self._tool_guard and (guard_reason := self._tool_guard(name, arguments)):
                 output = ToolResult(text=guard_reason, ok=False, code="evaluation_safety_blocked")
             else:
-                output = await self.registry.invoke(name, fn.get("arguments"))
+                output = await self.registry.invoke(name, arguments)
+            if name in STRUCTURED_SIDE_EFFECTS and isinstance(output, ToolResult) and output.ok:
+                # 结构化动作同样必须产生一张独立后置截图，不能把 locator 成功当成任务成功。
+                post_observation = await self.registry.invoke("screenshot", {})
+                if isinstance(post_observation, ToolResult) and post_observation.ok:
+                    output.images.extend(post_observation.images)
             if side_effect:
                 side_effect_seen = True
             duration_ms = int((time.perf_counter() - started) * 1000)
@@ -552,6 +601,7 @@ class AgentRunner:
                 has_observation=has_image,
                 conclusion=_action_conclusion(name, text),
                 image_path=image_path,
+                intent=intent if name in STRUCTURED_SIDE_EFFECTS else None,
             )
             context = _update_grounded_facts_after_tool(
                 context,
@@ -565,6 +615,7 @@ class AgentRunner:
             )
             if side_effect and error is None:
                 context = require_completion(context)
+                context = register_expectation(context, expectation, source_frame_path=frame_before)
             if name == "task_complete" and error is None:
                 context = register_completion_declaration(
                     context,
@@ -675,6 +726,37 @@ class AgentRunner:
         )
         messages.extend(tool_messages)
         context = _task_context(state)
+        current_frame = _active_frame_path()
+        if current_frame and Path(current_frame).is_file():
+            desktop_observation = observe_desktop_identity()
+            context = replace_desktop_snapshot(
+                context, frame_path=current_frame, observation=desktop_observation
+            )
+            context = await self._replace_structured_ui_snapshot(
+                context,
+                frame_path=current_frame,
+                desktop_observation=desktop_observation,
+            )
+            for item in tool_messages:
+                if item.get("name") != "locate" or not isinstance(item.get("content"), dict):
+                    continue
+                try:
+                    payload = json.loads(str(item["content"].get("text") or ""))
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict) and payload.get("observation_only") is False:
+                    context = add_ui_candidates(
+                        context,
+                        frame_path=current_frame,
+                        candidates=payload.get("items"),
+                        source="locate",
+                    )
+            context = verify_current_expectation(
+                context,
+                previous_frame_path=(context.get("current_expectation") or {}).get(
+                    "source_frame_path"
+                ),
+            )
         completion_verified = bool(context.get("completion_verified"))
         declaration = context.get("completion_declaration") or {}
         if declaration and not completion_verified:
@@ -691,7 +773,12 @@ class AgentRunner:
             )
             if post:
                 path = str(post["content"]["images"][-1].get("path") or "")
-                if path and Path(path).is_file() and str(declaration.get("evidence") or "").strip():
+                if (
+                    path
+                    and Path(path).is_file()
+                    and str(declaration.get("evidence") or "").strip()
+                    and _required_progress_verified(context)
+                ):
                     context = verify_completion(
                         context,
                         summary=str(declaration.get("summary") or "独立后置观察通过"),
@@ -700,7 +787,7 @@ class AgentRunner:
                     completion_verified = True
                 else:
                     context = _completion_verification_failed(
-                        context, "后置截图不可用或声明证据不足"
+                        context, "后置截图不可用、声明证据不足或必经进度尚未验证"
                     )
             elif any(item.get("name") == "task_complete" for item in tool_messages):
                 context = _completion_verification_failed(context, "完成声明后必须获取新的截图")
@@ -744,6 +831,27 @@ class AgentRunner:
             },
         )
         return next_state
+
+    async def _replace_structured_ui_snapshot(
+        self,
+        context: TaskContext,
+        *,
+        frame_path: str,
+        desktop_observation: dict[str, Any],
+    ) -> TaskContext:
+        """按原生 AX、视觉后备顺序刷新唯一 UI 快照。
+
+        当前前台 Chrome 与其他应用一样只通过 macOS AX 观察；AX 不可用时保留视觉路径。
+        每次调用均替换 `UIRegistry` 当前版本，使上一次的元素引用立即失效。
+        """
+        native_elements = self.registry.macos_ax.observe() if self.registry.macos_ax else []
+        if native_elements:
+            snapshot = self.registry.ui_registry.replace(
+                frame_path=frame_path, context="native", elements=native_elements
+            )
+            return replace_ui_snapshot(context, snapshot.summary())
+        self.registry.ui_registry.clear()
+        return replace_ui_snapshot(context, None)
 
     def _flush_desktop_context(self) -> None:
         """把当前视图坐标系与定位表写入会话并落盘。"""
@@ -1147,6 +1255,7 @@ def _selection_diagnostics(
 
 
 _INITIAL_TOOL_NAMES = {"prepare_image", "ocr", "screenshot", "screen_info"}
+_SEMANTIC_TOOL_NAMES = STRUCTURED_SIDE_EFFECTS | {"wait"}
 
 
 def _allowed_tool_names(context: TaskContext, registry: ToolRegistry) -> set[str]:
@@ -1155,7 +1264,12 @@ def _allowed_tool_names(context: TaskContext, registry: ToolRegistry) -> set[str
     frame_ready = bool(frame is not None and frame.image_path.is_file())
     if not frame_ready:
         return registry.names() & _INITIAL_TOOL_NAMES
-    allowed = registry.names() - {"task_complete"} - DISABLED_AGENT_TOOLS
+    semantic_snapshot = _actionable_semantic_snapshot(context)
+    if semantic_snapshot:
+        # AX 元素优先供语义动作使用，但需保留截图和坐标后备处理网页未暴露的控件。
+        allowed = registry.names() - {"task_complete"} - DISABLED_AGENT_TOOLS
+    else:
+        allowed = registry.names() - {"task_complete"} - DISABLED_AGENT_TOOLS - _SEMANTIC_TOOL_NAMES
     recovery = context.get("recovery") or {}
     blocked = {str(item) for item in recovery.get("blocked_calls") or []}
     allowed -= blocked
@@ -1164,19 +1278,55 @@ def _allowed_tool_names(context: TaskContext, registry: ToolRegistry) -> set[str
     return allowed
 
 
+def _actionable_semantic_snapshot(context: TaskContext) -> bool:
+    """判断当前是否有可操作 AX 目标；browser 旧快照不再参与交互分派。"""
+    snapshot = context.get("ui_snapshot")
+    if not isinstance(snapshot, dict):
+        return False
+    return str(snapshot.get("context") or "") == "native" and bool(snapshot.get("elements"))
+
+
 def _model_tool_schemas(registry: ToolRegistry, allowed_tools: set[str]) -> list[dict[str, Any]]:
-    """导出默认模型可见 schema，并隐藏只供旧会话兼容的定位编号字段。"""
+    """导出模型 schema，隐藏旧定位字段并为副作用动作附加受限预期。"""
     schemas = registry.schemas(allowed_tools)
     for schema in schemas:
         function = schema.get("function")
-        if not isinstance(function, dict) or function.get("name") not in {
-            "mouse_move",
-            "mouse_scroll",
-        }:
+        if not isinstance(function, dict):
             continue
         parameters = function.get("parameters")
         if isinstance(parameters, dict) and isinstance(parameters.get("properties"), dict):
-            parameters["properties"].pop("target_id", None)
+            properties = parameters["properties"]
+            if function.get("name") in {"mouse_move", "mouse_scroll"}:
+                properties.pop("target_id", None)
+            name = str(function.get("name") or "")
+            if registry.is_side_effect(name):
+                properties["expectation"] = {
+                    "type": "object",
+                    "description": "可选：此动作后应在新截图中验证的结果",
+                    "properties": {
+                        "kind": {
+                            "type": "string",
+                            "enum": [
+                                "dialog_appears",
+                                "active_window_changes",
+                                "element_appears",
+                                "element_disappears",
+                                "element_selected",
+                                "screen_changed",
+                            ],
+                        },
+                        "target": {"type": "string"},
+                        "progress_id": {"type": "string"},
+                    },
+                    "required": ["kind"],
+                }
+            if name in STRUCTURED_SIDE_EFFECTS:
+                properties["intent"] = {
+                    "type": "string",
+                    "description": "可选：不超过十个词的下一步目的，不得写推理过程。",
+                    "minLength": 1,
+                    "maxLength": 120,
+                }
     return schemas
 
 
@@ -1186,6 +1336,15 @@ def _completion_verification_failed(context: TaskContext, reason: str) -> TaskCo
     updated["completion_verified"] = False
     updated["completion_verification"] = {"ok": False, "conclusion": reason[:400]}
     return updated
+
+
+def _required_progress_verified(context: TaskContext) -> bool:
+    """确认所有标为必经的进度项已由观察验证，空列表不阻断兼容任务。"""
+    return all(
+        item.get("status") == "verified"
+        for item in context.get("progress") or []
+        if isinstance(item, dict) and item.get("required")
+    )
 
 
 def _update_recovery_after_observation(

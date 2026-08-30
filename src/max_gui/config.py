@@ -29,6 +29,14 @@ class InferenceRetryConfigError(ValueError):
         super().__init__(f"MAX_GUI_INFERENCE_MAX_RETRIES 必须是 0–5 的整数，当前值：{raw!s}")
 
 
+class EnableThinkingConfigError(ValueError):
+    """上游 thinking 开关不是严格布尔值。"""
+
+    def __init__(self, raw: object) -> None:
+        """用非法配置原文构造不包含敏感信息的中文错误。"""
+        super().__init__(f"MAX_GUI_ENABLE_THINKING 必须是 true 或 false，当前值：{raw!s}")
+
+
 class ContextBudgetConfigError(ValueError):
     """主推理上下文容量与预留配置无法形成正的输入预算。"""
 
@@ -113,6 +121,7 @@ class Settings:
     context_safety_margin: int = DEFAULT_CONTEXT_SAFETY_MARGIN
     image_token_reserve: int = DEFAULT_IMAGE_TOKEN_RESERVE
     inference_max_retries: int = DEFAULT_INFERENCE_MAX_RETRIES
+    enable_thinking: bool = False
     dtype: str = "auto"
     ocr_base_url: str = DEFAULT_OCR_BASE_URL
     ocr_start_timeout: float = 180.0
@@ -143,10 +152,11 @@ def load_settings(
 
     先按 `detect_project_root` 定位根目录并载入 `.env`（不覆盖已有环境变量）。
     环境变量：`MAX_PROVIDER`、`MAX_MODELSCOPE_KEY`、`MAX_DASHSCOPE_KEY`、
-    `MAX_OPENROUTER_KEY`、`MAX_GUI_WORKSPACE`、
+    `MAX_OPENROUTER_KEY`、`MAX_QINIU_KEY`、`MAX_GUI_WORKSPACE`、
     `MAX_GUI_MAX_ITERATIONS`、`MAX_GUI_MAX_IMAGE_*`、`MAX_GUI_TOOL_TIMEOUT`、
     `MAX_GUI_MAX_MODEL_LEN`、`MAX_GUI_MAX_OUTPUT_TOKENS`、
     `MAX_GUI_CONTEXT_SAFETY_MARGIN`、`MAX_GUI_INFERENCE_MAX_RETRIES`、
+    `MAX_GUI_ENABLE_THINKING`、
     `MAX_GUI_DTYPE`、`MAX_GUI_OCR_*`、
     `MAX_GUI_OMNIPARSER_*`。
     provider 的模型、端点与能力来自 `max_gui.provider`；不读取旧共享键、
@@ -162,6 +172,7 @@ def load_settings(
     异常：
         UnknownProviderError: `MAX_PROVIDER` 非法，由 provider 模块抛出。
         InferenceRetryConfigError: 主推理重试次数不是 0–5 的整数。
+        EnableThinkingConfigError: 上游 thinking 开关不是 true 或 false。
         ContextBudgetConfigError: 主推理上下文预留无法形成正的输入预算。
     """
     root = detect_project_root()
@@ -181,6 +192,7 @@ def load_settings(
         raise InferenceRetryConfigError(retry_raw) from exc
     if not 0 <= inference_max_retries <= 5:
         raise InferenceRetryConfigError(retry_raw)
+    enable_thinking = _parse_enable_thinking(os.environ.get("MAX_GUI_ENABLE_THINKING"))
     context_safety_margin = int(
         os.environ.get("MAX_GUI_CONTEXT_SAFETY_MARGIN") or DEFAULT_CONTEXT_SAFETY_MARGIN
     )
@@ -215,6 +227,7 @@ def load_settings(
         max_output_tokens=max_output_tokens,
         context_safety_margin=context_safety_margin,
         inference_max_retries=inference_max_retries,
+        enable_thinking=enable_thinking,
         dtype=os.environ.get("MAX_GUI_DTYPE") or "auto",
         ocr_base_url=os.environ.get("MAX_GUI_OCR_BASE_URL") or DEFAULT_OCR_BASE_URL,
         ocr_start_timeout=float(os.environ.get("MAX_GUI_OCR_START_TIMEOUT") or 180),
@@ -227,6 +240,26 @@ def load_settings(
         omniparser_timeout=float(os.environ.get("MAX_GUI_OMNIPARSER_TIMEOUT") or 120),
     )
     return settings
+
+
+def _parse_enable_thinking(raw: str | None) -> bool:
+    """解析严格布尔的上游 thinking 开关。
+
+    参数：
+        raw: 环境变量原文；未设置或空白时缺省关闭。
+
+    返回：
+        `true` 对应真，`false` 或空值对应假。
+
+    异常：
+        EnableThinkingConfigError: 非空值不是 true 或 false。
+    """
+    value = (raw or "").strip().lower()
+    if not value or value == "false":
+        return False
+    if value == "true":
+        return True
+    raise EnableThinkingConfigError(raw)
 
 
 def weights_ready(path: Path) -> bool:

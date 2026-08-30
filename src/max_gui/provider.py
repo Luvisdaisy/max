@@ -10,8 +10,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
+from typing import Any, Literal
 
 DEFAULT_PROVIDER = "ollama"
+ThinkingMode = Literal["ollama", "enable_thinking", "openrouter", "qiniu"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +28,7 @@ class ProviderDefinition:
         key_label: 缺密钥时展示的凭据类型。
         context_window: 主推理上下文容量。
         replay_reasoning: 是否把历史思考回传为 `reasoning_content`。
+        thinking_mode: 上游 thinking 开关对应的请求字段模式。
         connection_hint: 网络失败时附加的中文排查提示。
 
     该对象没有副作用；真实密钥由配置加载阶段另行读取。
@@ -38,7 +41,27 @@ class ProviderDefinition:
     key_label: str
     context_window: int
     replay_reasoning: bool
+    thinking_mode: ThinkingMode
     connection_hint: str
+
+    def thinking_payload(self, enabled: bool) -> dict[str, Any]:
+        """生成控制本 provider 上游思考的顶层请求字段。
+
+        参数：
+            enabled: 为真时请求上游生成思考；为假时显式关闭。
+
+        返回：
+            可直接合并至 Chat Completions JSON 顶层的字段。
+        """
+        match self.thinking_mode:
+            case "ollama":
+                return {"think": enabled}
+            case "enable_thinking":
+                return {"enable_thinking": enabled}
+            case "openrouter":
+                return {"reasoning": {"enabled": enabled}}
+            case "qiniu":
+                return {"thinking": {"type": "enabled" if enabled else "disabled"}}
 
 
 _PROVIDER_ITEMS = (
@@ -50,6 +73,7 @@ _PROVIDER_ITEMS = (
         key_label="",
         context_window=262_144,
         replay_reasoning=False,
+        thinking_mode="ollama",
         connection_hint="请检查 WSL Ollama 服务、Windows 防火墙与局域网端口。",
     ),
     ProviderDefinition(
@@ -60,6 +84,7 @@ _PROVIDER_ITEMS = (
         key_label="魔搭 Access Token",
         context_window=32_768,
         replay_reasoning=False,
+        thinking_mode="enable_thinking",
         connection_hint="请检查网络与 MAX_MODELSCOPE_KEY。",
     ),
     ProviderDefinition(
@@ -70,6 +95,7 @@ _PROVIDER_ITEMS = (
         key_label="百炼 API Key",
         context_window=32_768,
         replay_reasoning=True,
+        thinking_mode="enable_thinking",
         connection_hint="请检查网络与 MAX_DASHSCOPE_KEY。",
     ),
     ProviderDefinition(
@@ -80,7 +106,20 @@ _PROVIDER_ITEMS = (
         key_label="OpenRouter API Key",
         context_window=32_768,
         replay_reasoning=False,
+        thinking_mode="openrouter",
         connection_hint="请检查网络与 MAX_OPENROUTER_KEY。",
+    ),
+    ProviderDefinition(
+        name="qiniu",
+        # model_name="qwen/qwen3.5-plus",
+        model_name="z-ai/glm-5.3-flash",
+        base_url="https://api.qnaigc.com/v1",
+        api_key_env="MAX_QINIU_KEY",
+        key_label="七牛 AI Token API Key",
+        context_window=32_768,
+        replay_reasoning=False,
+        thinking_mode="qiniu",
+        connection_hint="请检查网络与 MAX_QINIU_KEY。",
     ),
 )
 

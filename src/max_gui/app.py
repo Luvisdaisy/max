@@ -175,7 +175,7 @@ class MaxGuiApp(App[None]):
             self._write_message(message.role, message.content)
 
     def _write_message(self, role: str, content: dict[str, Any] | str) -> None:
-        """按角色写入一条历史。图像缺失时标「缺失附件」。"""
+        """按角色写入一条最终历史，助手思考仅在流式区域可见。"""
         payload = content if isinstance(content, dict) else {"text": str(content)}
         text = str(payload.get("text") or "")
         images = payload.get("images") or []
@@ -191,11 +191,7 @@ class MaxGuiApp(App[None]):
         elif role == "tool":
             self._log().write(f"[magenta]工具[/magenta] {text[:400]}")
         else:
-            reasoning = str(payload.get("reasoning") or "")
-            if reasoning:
-                self._log().write(f"[dim]思考[/dim] {reasoning}")
-            if text or suffix or not reasoning:
-                self._log().write(f"[bold green]助手[/bold green] {text}{suffix}")
+            self._log().write(f"[bold green]助手[/bold green] {text}{suffix}")
 
     def on_prompt_submitted(self, event: PromptSubmitted) -> None:
         """清空输入框并在后台处理提交文本。"""
@@ -580,7 +576,7 @@ class MaxGuiApp(App[None]):
         self._write_message(role, payload)
 
     def on_unmount(self) -> None:
-        """退出时尽量停掉本进程拉起的 OCR 与 OmniParser 子进程。"""
+        """退出时关闭本进程拥有的 OCR 与 OmniParser，不触及用户应用或会话。"""
         shutdown_owned_ocr()
         shutdown_owned_locate()
 

@@ -17,11 +17,13 @@ from max_gui.agent.graph import (
 from max_gui.agent.prompts import GUI_SYSTEM_PROMPT, os_contract
 from max_gui.config import Settings
 from max_gui.desktop.fake import FakeDesktopBackend
+from max_gui.desktop.ui_backends import FakeMacOSAXBackend
 from max_gui.inference.client import ChatDelta, InferenceRequestError, TokenUsage
 from max_gui.inference.retry import RetryMetadata, RetryNotice
 from max_gui.session.store import SessionStore
 from max_gui.tools.desktop import clear_desktop_context
 from max_gui.tools.registry import AutoApproveGate, build_default_registry
+from max_gui.ui import UIElement
 
 
 class ScriptedClient:
@@ -101,7 +103,7 @@ async def test_text_only_completion(settings: Settings) -> None:
     runner, store = _runner(settings, client)
     session = store.create(model="qwen3.5-2b")
     state = await runner.run(session, user_text="你好")
-    assert state["status"] == "done"
+    assert state["status"] == "done", state
     assert state["run_id"].startswith("run-")
     assert state["messages"][-1]["content"]["text"] == "世界"
     loaded = store.get(session.id)
@@ -144,7 +146,7 @@ async def test_one_tool_cycle(settings: Settings) -> None:
 
 
 async def test_dynamic_tool_schemas_follow_observation_stage(settings: Settings) -> None:
-    """初始阶段不暴露桌面副作用，取得活动截图后才开放。"""
+    """启动预观察后立即提供截图与视觉后备工具。"""
     client = ScriptedClient(
         [
             ChatDelta(
@@ -166,7 +168,7 @@ async def test_dynamic_tool_schemas_follow_observation_stage(settings: Settings)
     initial = {item["function"]["name"] for item in client.tool_requests[0]}
     observed = {item["function"]["name"] for item in client.tool_requests[1]}
     assert "screenshot" in initial
-    assert "mouse_move" not in initial
+    assert "mouse_move" in initial
     assert "task_complete" not in initial
     assert "mouse_move" in observed
     assert "task_complete" not in observed
@@ -174,6 +176,113 @@ async def test_dynamic_tool_schemas_follow_observation_stage(settings: Settings)
         item for item in client.tool_requests[1] if item["function"]["name"] == "mouse_move"
     )
     assert "target_id" not in move_schema["function"]["parameters"]["properties"]
+
+
+async def test_agent_runner_dispatches_ax_element_and_refreshes_observation(
+    settings: Settings,
+) -> None:
+    """当前前台 Chrome 的 AX 快照让 Agent 分派点击，并在动作后附加新截图。"""
+    ax = FakeMacOSAXBackend(elements=[_native_button(name="继续", app_id="chrome")])
+    client = ScriptedClient(
+        [
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "click",
+                        "type": "function",
+                        "function": {
+                            "name": "click",
+                            "arguments": (
+                                '{"element_id":"e_1","ui_version":1,'
+                                '"intent":"点击继续",'
+                                '"expectation":{"kind":"screen_changed"}}'
+                            ),
+                        },
+                    }
+                ]
+            ),
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "done",
+                        "type": "function",
+                        "function": {
+                            "name": "task_complete",
+                            "arguments": '{"summary":"已点击","evidence":"后置截图已获取"}',
+                        },
+                    }
+                ]
+            ),
+        ]
+    )
+    store = SessionStore(settings.sessions_dir)
+    runner = AgentRunner(
+        settings,
+        client,
+        build_default_registry(
+            settings,
+            gate=AutoApproveGate(),
+            desktop=FakeDesktopBackend(),
+            macos_ax=ax,
+        ),
+        store,
+    )
+    state = await runner.run(store.create(model="qwen3.5-2b"), user_text="点击继续")
+    assert state["task_context"].get("ui_snapshot"), state["task_context"]
+    initial_tools = {item["function"]["name"] for item in client.tool_requests[0]}
+    assert "click" in initial_tools, initial_tools
+    assert "mouse_move" in initial_tools, initial_tools
+    assert "mouse_click" in initial_tools, initial_tools
+    click_schema = next(
+        item for item in client.tool_requests[0] if item["function"]["name"] == "click"
+    )
+    assert "intent" in click_schema["function"]["parameters"]["properties"]
+    assert state["status"] == "done", state
+    assert ax.calls == [("press", "e_1")]
+    history = state["task_context"]["action_history"]
+    assert history[0]["intent"] == "点击继续"
+    click_result = next(item for item in state["messages"] if item.get("tool_call_id") == "click")
+    assert click_result["content"]["images"]
+
+
+async def test_chrome_ax_snapshot_uses_native_context(settings: Settings) -> None:
+    """日常 Chrome 的 AX 控件生成 native 快照，不连接网页 DOM。"""
+    ax = FakeMacOSAXBackend(elements=[_native_button()])
+    store = SessionStore(settings.sessions_dir)
+    runner = AgentRunner(
+        settings,
+        ScriptedClient([]),
+        build_default_registry(settings, gate=AutoApproveGate(), macos_ax=ax),
+        store,
+    )
+    context = await runner._replace_structured_ui_snapshot(
+        new_task_context("上传文件"),
+        frame_path="picker.png",
+        desktop_observation={
+            "active_app": {"id": "44", "name": "Google Chrome", "role": "application"},
+            "active_dialog": {},
+        },
+    )
+    assert context["ui_snapshot"]["context"] == "native"
+    assert context["ui_snapshot"]["elements"][0]["backend"] == "macos_ax"
+
+
+def _native_button(*, name: str = "打开", app_id: str = "44") -> UIElement:
+    """构造原生文件选择器的最小 AX 按钮元素。"""
+    return UIElement(
+        id="",
+        role="button",
+        name=name,
+        text=None,
+        visible=True,
+        enabled=True,
+        editable=False,
+        focused=False,
+        app_id=app_id,
+        window_id="picker",
+        backend="macos_ax",
+        locator={"fake": True},
+    )
 
 
 async def test_one_side_effect_per_response_pairs_all_tool_calls(settings: Settings) -> None:
@@ -376,6 +485,73 @@ async def test_side_effect_requires_task_complete_after_plain_text(settings: Set
     assert "task_complete" in after_action
 
 
+async def test_side_effect_expectation_verifies_required_progress(settings: Settings) -> None:
+    """副作用附带 expectation 时，后置观察确认后才允许必经进度通过完成门。"""
+    settings.max_iterations = 5
+    client = ScriptedClient(
+        [
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "shot",
+                        "type": "function",
+                        "function": {"name": "screenshot", "arguments": "{}"},
+                    }
+                ]
+            ),
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "move",
+                        "type": "function",
+                        "function": {"name": "mouse_move", "arguments": '{"x":8,"y":8}'},
+                    }
+                ]
+            ),
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "click",
+                        "type": "function",
+                        "function": {
+                            "name": "mouse_click",
+                            "arguments": (
+                                '{"expectation":{"kind":"screen_changed",'
+                                '"progress_id":"open-upload","target":"上传"}}'
+                            ),
+                        },
+                    }
+                ]
+            ),
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "done",
+                        "type": "function",
+                        "function": {
+                            "name": "task_complete",
+                            "arguments": '{"summary":"已打开上传","evidence":"后置截图已获取"}',
+                        },
+                    }
+                ]
+            ),
+        ]
+    )
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+
+    state = await runner.run(session, user_text="打开上传")
+
+    assert state["status"] == "done"
+    assert state["task_context"]["progress"] == [
+        {"id": "open-upload", "label": "上传", "status": "verified", "required": True}
+    ]
+    click_schema = next(
+        item for item in client.tool_requests[2] if item["function"]["name"] == "mouse_click"
+    )
+    assert "expectation" in click_schema["function"]["parameters"]["properties"]
+
+
 def test_completion_evidence_accepts_separate_post_action_screenshot() -> None:
     """动作自身截图失败后，后续独立截图也可作为完成门的后置观察。"""
     context = {
@@ -498,7 +674,7 @@ async def test_screenshot_tool_image_reaches_think(settings: Settings) -> None:
 
 
 async def test_next_turn_invalidates_saved_view_frame(settings: Settings) -> None:
-    """新桌面任务不复用上回合截图坐标，必须重新观察。"""
+    """新桌面任务刷新上回合截图坐标，不复用旧帧。"""
     client = ScriptedClient(
         [
             ChatDelta(
@@ -521,12 +697,14 @@ async def test_next_turn_invalidates_saved_view_frame(settings: Settings) -> Non
     session = store.get(session.id)
     assert session is not None
     assert session.view_frame is not None
+    first_frame_path = session.view_frame["image_path"]
     clear_desktop_context()
     second = await runner.run(session, user_text="移动")
     assert second["status"] == "done"
     initial_tools = {item["function"]["name"] for item in client.tool_requests[-1]}
-    assert "mouse_move" not in initial_tools
-    assert session.view_frame is None
+    assert "mouse_move" in initial_tools
+    assert session.view_frame is not None
+    assert session.view_frame["image_path"] != first_frame_path
     assert session.locate_hits == {}
 
 
@@ -540,8 +718,8 @@ def test_os_contract_darwin_not_windows() -> None:
 
 
 def test_system_prompt_separates_user_reply_from_native_tools() -> None:
-    """提示词让普通正文回答用户，工具调用不再要求正文 JSON 协议。"""
-    assert "直接用简短、完整的自然语言回答用户" in GUI_SYSTEM_PROMPT
+    """提示词要求单步原生调用，且不要求正文 JSON 协议。"""
+    assert "选择恰好一个下一步动作" in GUI_SYSTEM_PROMPT
     assert "原生 tool calling" in GUI_SYSTEM_PROMPT
     assert "每次回复必须严格按以下 JSON 格式输出" not in GUI_SYSTEM_PROMPT
     assert '"thought"' not in GUI_SYSTEM_PROMPT
@@ -559,11 +737,10 @@ async def test_think_injects_system_not_persisted(settings: Settings) -> None:
     assert "locate" not in content
     assert "target_id" not in content
     assert "ocr_locate" not in content
-    assert "view_width" in content
-    assert "逻辑坐标" in content
+    assert "当前截图视图是" in content
+    assert "element_id" in content
     assert "红十字" in content
-    assert "键鼠" in content
-    assert "核验" in content
+    assert "后置观察" in content
     loaded = store.get(session.id)
     assert loaded is not None
     assert all(msg.role != "system" for msg in loaded.messages)
@@ -899,7 +1076,7 @@ async def test_progress_and_incremental_persist(settings: Settings) -> None:
     async def gated_invoke(name: str, arguments: dict | str | None = None):
         nonlocal calls
         calls += 1
-        if calls == 2:
+        if calls == 3:
             await second_gate.wait()
         return await original(name, arguments)
 
@@ -914,7 +1091,7 @@ async def test_progress_and_incremental_persist(settings: Settings) -> None:
             first_tool_roles.extend(msg.role for msg in loaded.messages)
             assert first_tool_roles.count("assistant") == 1
             assert first_tool_roles.count("tool") == 1
-            assert calls == 1
+            assert calls == 2
             second_gate.set()
 
     state = await runner.run(

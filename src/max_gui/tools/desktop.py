@@ -22,6 +22,7 @@ from PIL import Image, ImageDraw
 
 from max_gui.config import Settings
 from max_gui.desktop.backend import DesktopBackend, DesktopPermissionError
+from max_gui.desktop.observation import observe_desktop_identity
 from max_gui.desktop.pyautogui_backend import ACCESSIBILITY_HELP, SCREEN_RECORDING_HELP
 from max_gui.inference.images import prepare_image
 from max_gui.tools.protocol import Tool, ToolError, ToolResult
@@ -60,6 +61,18 @@ DANGEROUS_HOTKEYS = {
 FOREGROUND_HINT = (
     "输入会打到当前前台窗口，可能是终端本身。可先把目标窗口置于前台，或设置 delay_ms。"
 )
+
+
+def _foreground_observation_hint() -> str:
+    """返回只读前台观察诊断，不改变现有输入门禁或输入目标。"""
+    observation = observe_desktop_identity()
+    app = (observation.get("active_app") or {}).get("name")
+    window = (observation.get("active_window") or {}).get("name")
+    if app or window:
+        return f"当前观察到前台：{app or '未知应用'}／{window or '未知窗口'}。"
+    return "当前前台窗口状态未知；" + FOREGROUND_HINT
+
+
 VIEW_COORD_HINT = "坐标是你看到的最近一张截图上的像素，必须落在该图宽高内，原点在图左上角。"
 
 
@@ -705,7 +718,7 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
         else:
             await _call(backend.write, text, interval)
             method = "write"
-        action = f"已用{method}输入 {len(text)} 个字符。{FOREGROUND_HINT}"
+        action = f"已用{method}输入 {len(text)} 个字符。{_foreground_observation_hint()}"
         return await _attach_new_frame(action)
 
     async def keyboard_press(args: dict) -> ToolResult:
@@ -722,7 +735,7 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
             await _call(backend.hotkey, *keys)
             if interval:
                 await asyncio.sleep(interval)
-        action = f"已按下 {'+'.join(keys)}。{FOREGROUND_HINT}"
+        action = f"已按下 {'+'.join(keys)}。{_foreground_observation_hint()}"
         return await _attach_new_frame(action)
 
     return [

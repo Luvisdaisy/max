@@ -2,7 +2,7 @@
 
 ## Purpose
 
-本地单用户 GUI Agent 的运行身份、结构化事件、JSONL 持久化与 TUI 监控边界。
+规定本地单用户 GUI Agent 的运行身份、结构化事件、JSONL 持久化和 TUI 监控边界，使运行状态可观察且不泄露敏感正文。
 ## Requirements
 ### Requirement: 为每次用户任务建立运行身份
 
@@ -133,4 +133,3 @@
 #### Scenario: 正常完成不伪造模型结束原因
 - **WHEN** 运行正常完成但 provider 没有返回 `finish_reason`
 - **THEN** 终态汇总仍为正常完成，最后模型结束原因省略或为 `null`，不得写成虚构值
-
