@@ -12,6 +12,69 @@ RECENT_ACTION_LIMIT = 6
 GROUNDED_FACT_LIMIT = 6
 GROUNDED_FACT_TEXT_LIMIT = 120
 GROUNDED_FACT_SUMMARY_LIMIT = 600
+UI_ELEMENT_LIMIT = 8
+PROGRESS_LIMIT = 12
+
+ExpectationKind = Literal[
+    "dialog_appears",
+    "active_window_changes",
+    "element_appears",
+    "element_disappears",
+    "element_selected",
+    "screen_changed",
+]
+ProgressStatus = Literal["pending", "in_progress", "verified", "blocked"]
+
+
+class DesktopIdentity(TypedDict):
+    """只读桌面身份；未知字段用 `None`，绝不由视觉推测补写。"""
+
+    id: str | None
+    name: str | None
+    role: str | None
+
+
+class UIElementCandidate(TypedDict):
+    """与单张观察帧绑定的非执行性 UI 候选。"""
+
+    id: str
+    label: str
+    role: str | None
+    source: str
+    clickable: bool
+    editable: bool
+
+
+class DesktopSnapshot(TypedDict):
+    """当前观察帧上的轻量桌面状态，不能作为坐标或输入授权。"""
+
+    frame_path: str
+    captured_at: str
+    active_app: DesktopIdentity
+    active_window: DesktopIdentity
+    focused_element: DesktopIdentity
+    active_dialog: DesktopIdentity
+    ui_elements: list[UIElementCandidate]
+    observation_status: str
+
+
+class ProgressItem(TypedDict):
+    """一项可验证的任务进度。"""
+
+    id: str
+    label: str
+    status: ProgressStatus
+    required: bool
+
+
+class ActionExpectation(TypedDict):
+    """一次桌面副作用后的受限、可确定性验证预期。"""
+
+    kind: ExpectationKind
+    target: str | None
+    progress_id: str | None
+    source_frame_path: str
+    conclusion: str
 
 
 class ActionSummary(TypedDict):
@@ -54,6 +117,10 @@ class TaskContext(TypedDict, total=False):
     recovery: dict[str, Any]
     completion_declaration: dict[str, Any]
     completion_verification: dict[str, Any]
+    desktop_snapshot: DesktopSnapshot
+    progress: list[ProgressItem]
+    current_expectation: ActionExpectation
+    ui_snapshot: dict[str, Any]
 
 
 def new_task_context(
@@ -82,6 +149,7 @@ def new_task_context(
         },
         "completion_declaration": {},
         "completion_verification": {},
+        "progress": [],
     }
     paths = list(image_paths)
     if paths:
@@ -134,6 +202,16 @@ def restore_task_context(value: Any, messages: list[dict[str, Any]]) -> TaskCont
         verification = value.get("completion_verification")
         if isinstance(verification, dict):
             context["completion_verification"] = _restore_completion_verification(verification)
+        snapshot = sanitize_desktop_snapshot(value.get("desktop_snapshot"))
+        if snapshot is not None:
+            context["desktop_snapshot"] = snapshot
+        context["progress"] = sanitize_progress(value.get("progress"))
+        expectation = sanitize_expectation(value.get("current_expectation"))
+        if expectation is not None:
+            context["current_expectation"] = expectation
+        ui_snapshot = sanitize_ui_snapshot(value.get("ui_snapshot"))
+        if ui_snapshot is not None:
+            context["ui_snapshot"] = ui_snapshot
         observation = value.get("conversation_observation")
         if isinstance(observation, dict) and observation.get("path"):
             context["conversation_observation"] = {
@@ -155,6 +233,165 @@ def update_task_context(
     updated["status"] = status
     updated["plan"] = list(plan)
     updated["current_subtask"] = current_subtask
+    return updated
+
+
+def replace_desktop_snapshot(
+    context: TaskContext, *, frame_path: str, observation: Any
+) -> TaskContext:
+    """以当前帧的只读观察替换桌面快照，并失效上一帧候选与预期。
+
+    参数：
+        context: 当前任务胶囊。
+        frame_path: 已成功写入的当前观察帧路径。
+        observation: 平台观察适配器的字典结果；坏字段安全降级为未知。
+
+    返回：
+        绑定新帧的胶囊副本。待验证预期会保留，供 `observe` 对动作前后两帧进行核验。
+    """
+    updated = dict(context)
+    raw = observation if isinstance(observation, dict) else {}
+    snapshot: DesktopSnapshot = {
+        "frame_path": str(frame_path),
+        "captured_at": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+        "active_app": _identity(raw.get("active_app")),
+        "active_window": _identity(raw.get("active_window")),
+        "focused_element": _identity(raw.get("focused_element")),
+        "active_dialog": _identity(raw.get("active_dialog")),
+        "ui_elements": [],
+        "observation_status": str(raw.get("observation_status") or "unknown")[:80],
+    }
+    updated["desktop_snapshot"] = snapshot
+    updated.pop("ui_snapshot", None)
+    return updated
+
+
+def replace_ui_snapshot(context: TaskContext, summary: Any) -> TaskContext:
+    """写入当前 UI 快照的脱敏摘要，并让新版本取代旧元素引用。
+
+    参数：`summary` 仅可来自 `UISnapshot.summary()`；坏数据会清空旧摘要。
+    返回：带当前版本、上下文和有限元素标签的胶囊副本。
+    """
+    updated = dict(context)
+    cleaned = sanitize_ui_snapshot(summary)
+    if cleaned is None:
+        updated.pop("ui_snapshot", None)
+    else:
+        updated["ui_snapshot"] = cleaned
+    return updated
+
+
+def add_ui_candidates(
+    context: TaskContext, *, frame_path: str, candidates: Any, source: str
+) -> TaskContext:
+    """把当前帧唯一可信的语义候选加入快照，不保留坐标或定位编号。"""
+    updated = dict(context)
+    snapshot = sanitize_desktop_snapshot(context.get("desktop_snapshot"))
+    if (
+        snapshot is None
+        or snapshot["frame_path"] != str(frame_path)
+        or not isinstance(candidates, list)
+    ):
+        return updated
+    items = list(snapshot["ui_elements"])
+    for index, raw in enumerate(candidates):
+        if len(items) >= UI_ELEMENT_LIMIT or not isinstance(raw, dict):
+            break
+        label = str(raw.get("label") or raw.get("text") or "").strip()
+        if not label:
+            continue
+        role = str(raw.get("role") or "").strip() or None
+        item = {
+            "id": f"{source}-{index + 1}",
+            "label": label[:120],
+            "role": role[:60] if role else None,
+            "source": source[:40],
+            "clickable": bool(raw.get("clickable", True)),
+            "editable": bool(raw.get("editable", False)),
+        }
+        if not any(
+            existing["label"] == item["label"] and existing["role"] == item["role"]
+            for existing in items
+        ):
+            items.append(item)
+    snapshot["ui_elements"] = items[:UI_ELEMENT_LIMIT]
+    updated["desktop_snapshot"] = snapshot
+    return updated
+
+
+def register_expectation(
+    context: TaskContext, value: Any, *, source_frame_path: str | None
+) -> TaskContext:
+    """登记模型随副作用提交的受限预期；非法输入只写入恢复提示。"""
+    updated = dict(context)
+    if not isinstance(value, dict) or not source_frame_path:
+        return updated
+    kind = str(value.get("kind") or "")
+    if kind not in {
+        "dialog_appears",
+        "active_window_changes",
+        "element_appears",
+        "element_disappears",
+        "element_selected",
+        "screen_changed",
+    }:
+        return updated
+    target = str(value.get("target") or "").strip() or None
+    progress_id = str(value.get("progress_id") or "").strip() or None
+    updated["current_expectation"] = {
+        "kind": kind,  # type: ignore[typeddict-item]
+        "target": target[:120] if target else None,
+        "progress_id": progress_id[:80] if progress_id else None,
+        "source_frame_path": str(source_frame_path),
+        "conclusion": "等待动作后的独立观察",
+    }
+    if progress_id:
+        updated["progress"] = _ensure_progress_item(context.get("progress"), progress_id, target)
+    return updated
+
+
+def verify_current_expectation(
+    context: TaskContext, *, previous_frame_path: str | None
+) -> TaskContext:
+    """用当前快照与预期来源帧确定性验证动作效果，并只在成功时推进进度。"""
+    updated = dict(context)
+    expectation = sanitize_expectation(context.get("current_expectation"))
+    snapshot = sanitize_desktop_snapshot(context.get("desktop_snapshot"))
+    if expectation is None or snapshot is None:
+        return updated
+    if (
+        expectation["source_frame_path"] == snapshot["frame_path"]
+        or previous_frame_path != expectation["source_frame_path"]
+    ):
+        expectation["conclusion"] = "缺少动作前后不同观察帧，无法验证预期"
+        updated["current_expectation"] = expectation
+        return updated
+    kind = expectation["kind"]
+    target = (expectation["target"] or "").casefold()
+    candidates = snapshot["ui_elements"]
+    labels = [item["label"].casefold() for item in candidates]
+    if kind == "dialog_appears":
+        observed = snapshot["active_dialog"]["name"] or ""
+        ok = bool(observed and (not target or target in observed.casefold()))
+    elif kind == "active_window_changes":
+        ok = snapshot["active_window"]["id"] is not None
+    elif kind == "element_appears":
+        ok = bool(target and any(target in label for label in labels))
+    elif kind == "element_disappears":
+        ok = bool(target and not any(target in label for label in labels))
+    elif kind == "element_selected":
+        focused = snapshot["focused_element"]["name"] or ""
+        ok = bool(target and target in focused.casefold())
+    else:
+        ok = True
+    if ok:
+        progress_id = expectation["progress_id"]
+        if progress_id:
+            updated["progress"] = _mark_progress(context.get("progress"), progress_id, "verified")
+        updated.pop("current_expectation", None)
+    else:
+        expectation["conclusion"] = "后置观察未确认预期，进度未推进"
+        updated["current_expectation"] = expectation
     return updated
 
 
@@ -424,10 +661,38 @@ def task_context_message(context: TaskContext, *, current_frame_path: str | None
         )
     else:
         completion = "当前未要求副作用完成声明"
+    snapshot = sanitize_desktop_snapshot(context.get("desktop_snapshot"))
+    desktop = "当前桌面状态未知"
+    if snapshot is not None and snapshot["frame_path"] == current_frame_path:
+        app = snapshot["active_app"]["name"] or "未知应用"
+        window = snapshot["active_window"]["name"] or "未知窗口"
+        dialog = snapshot["active_dialog"]["name"] or "无已知弹窗"
+        desktop = f"当前桌面：{app}／{window}；弹窗：{dialog}"
+    ui_snapshot = sanitize_ui_snapshot(context.get("ui_snapshot"))
+    ui_text = "无结构化 UI 快照"
+    if ui_snapshot is not None and ui_snapshot["frame_path"] == current_frame_path:
+        labels = "；".join(
+            f"{item['id']} {item['role']}「{item['label']}」" for item in ui_snapshot["elements"]
+        )
+        ui_text = (
+            f"UI 快照 v{ui_snapshot['version']}（{ui_snapshot['context']}）：{labels or '无元素'}。"
+            "语义动作必须携带 element_id 与 ui_version，不能传坐标或 locator"
+        )
+    progress = (
+        "；".join(
+            f"{item['label']}（{item['status']}）"
+            for item in sanitize_progress(context.get("progress"))
+        )
+        or "无"
+    )
+    expectation = sanitize_expectation(context.get("current_expectation"))
+    expectation_text = "无待验证预期"
+    if expectation is not None:
+        expectation_text = f"待验证：{expectation['kind']}（{expectation['conclusion']}）"
     return (
         f"任务状态：{context.get('status') or 'thinking'}。当前子任务：{current}。"
         f"计划：{plan}。近期动作：{actions}。{latest}。历史观察：{history}。当前有效事实：{facts}。{recovery_text}。"
-        f"完成门：{completion}。"
+        f"{desktop}。{ui_text}。进度：{progress}。{expectation_text}。完成门：{completion}。"
     )
 
 
@@ -458,6 +723,175 @@ def sanitize_grounded_facts(value: Any) -> list[GroundedFact]:
         if fact is not None:
             restored.append(fact)
     return restored
+
+
+def sanitize_desktop_snapshot(value: Any) -> DesktopSnapshot | None:
+    """清洗持久化桌面快照；坏字段降级为未知，候选不保留坐标。"""
+    if not isinstance(value, dict) or not value.get("frame_path"):
+        return None
+    items: list[UIElementCandidate] = []
+    for raw in value.get("ui_elements") or []:
+        if not isinstance(raw, dict):
+            continue
+        label = str(raw.get("label") or "").strip()
+        item_id = str(raw.get("id") or "").strip()
+        if not label or not item_id:
+            continue
+        items.append(
+            {
+                "id": item_id[:80],
+                "label": label[:120],
+                "role": str(raw.get("role") or "").strip()[:60] or None,
+                "source": str(raw.get("source") or "unknown")[:40],
+                "clickable": bool(raw.get("clickable")),
+                "editable": bool(raw.get("editable")),
+            }
+        )
+        if len(items) >= UI_ELEMENT_LIMIT:
+            break
+    return {
+        "frame_path": str(value["frame_path"]),
+        "captured_at": str(value.get("captured_at") or "")[:80],
+        "active_app": _identity(value.get("active_app")),
+        "active_window": _identity(value.get("active_window")),
+        "focused_element": _identity(value.get("focused_element")),
+        "active_dialog": _identity(value.get("active_dialog")),
+        "ui_elements": items,
+        "observation_status": str(value.get("observation_status") or "unknown")[:80],
+    }
+
+
+def sanitize_ui_snapshot(value: Any) -> dict[str, Any] | None:
+    """清洗可持久化 UI 摘要，删除 locator、坐标和不支持的后端字段。"""
+    if not isinstance(value, dict):
+        return None
+    try:
+        version = int(value.get("version"))
+    except (TypeError, ValueError):
+        return None
+    frame_path = str(value.get("frame_path") or "").strip()
+    context = str(value.get("context") or "")
+    if version < 1 or not frame_path or context not in {"browser", "native", "vision"}:
+        return None
+    elements: list[dict[str, Any]] = []
+    for raw in value.get("elements") or []:
+        if not isinstance(raw, dict):
+            continue
+        item_id = str(raw.get("id") or "").strip()
+        label = str(raw.get("label") or "").strip()
+        backend = str(raw.get("backend") or "")
+        if not item_id or not label or backend not in {"browser", "macos_ax", "vision"}:
+            continue
+        elements.append(
+            {
+                "id": item_id[:40],
+                "role": str(raw.get("role") or "unknown")[:60],
+                "label": label[:120],
+                "clickable": bool(raw.get("clickable")),
+                "editable": bool(raw.get("editable")),
+                "backend": backend,
+            }
+        )
+        if len(elements) >= UI_ELEMENT_LIMIT:
+            break
+    return {
+        "version": version,
+        "frame_path": frame_path,
+        "context": context,
+        "url": str(value.get("url"))[:200] if value.get("url") else None,
+        "elements": elements,
+    }
+
+
+def sanitize_progress(value: Any) -> list[ProgressItem]:
+    """只恢复有限且枚举合法的进度项。"""
+    if not isinstance(value, list):
+        return []
+    items: list[ProgressItem] = []
+    for raw in value[-PROGRESS_LIMIT:]:
+        if not isinstance(raw, dict):
+            continue
+        item_id = str(raw.get("id") or "").strip()
+        label = str(raw.get("label") or "").strip()
+        status = str(raw.get("status") or "pending")
+        if (
+            not item_id
+            or not label
+            or status not in {"pending", "in_progress", "verified", "blocked"}
+        ):
+            continue
+        items.append(
+            {
+                "id": item_id[:80],
+                "label": label[:120],
+                "status": status,  # type: ignore[typeddict-item]
+                "required": bool(raw.get("required")),
+            }
+        )
+    return items
+
+
+def sanitize_expectation(value: Any) -> ActionExpectation | None:
+    """恢复受限 expectation；未知类型不可进入后续验证。"""
+    if not isinstance(value, dict):
+        return None
+    kind = str(value.get("kind") or "")
+    frame = str(value.get("source_frame_path") or "").strip()
+    if (
+        kind
+        not in {
+            "dialog_appears",
+            "active_window_changes",
+            "element_appears",
+            "element_disappears",
+            "element_selected",
+            "screen_changed",
+        }
+        or not frame
+    ):
+        return None
+    return {
+        "kind": kind,  # type: ignore[typeddict-item]
+        "target": str(value.get("target") or "").strip()[:120] or None,
+        "progress_id": str(value.get("progress_id") or "").strip()[:80] or None,
+        "source_frame_path": frame,
+        "conclusion": str(value.get("conclusion") or "")[:240],
+    }
+
+
+def _identity(value: Any) -> DesktopIdentity:
+    """将平台观察结果收敛为可持久化的非敏感身份摘要。"""
+    raw = value if isinstance(value, dict) else {}
+    return {
+        "id": str(raw.get("id") or "").strip()[:120] or None,
+        "name": str(raw.get("name") or "").strip()[:120] or None,
+        "role": str(raw.get("role") or "").strip()[:60] or None,
+    }
+
+
+def _ensure_progress_item(value: Any, item_id: str, label: str | None) -> list[ProgressItem]:
+    """按 ID 复用进度项，缺失时创建进行中项。"""
+    items = sanitize_progress(value)
+    if any(item["id"] == item_id for item in items):
+        return items
+    items.append(
+        {
+            "id": item_id[:80],
+            "label": (label or item_id)[:120],
+            "status": "in_progress",
+            "required": True,
+        }
+    )
+    return items[-PROGRESS_LIMIT:]
+
+
+def _mark_progress(value: Any, item_id: str, status: ProgressStatus) -> list[ProgressItem]:
+    """返回指定项更新后的进度列表；不存在的 ID 保持原样。"""
+    result = sanitize_progress(value)
+    for item in result:
+        if item["id"] == item_id:
+            item["status"] = status
+    return result
 
 
 def _first_user_instruction(messages: list[dict[str, Any]]) -> str:

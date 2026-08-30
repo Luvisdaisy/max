@@ -9,7 +9,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from max_gui.agent.context import sanitize_grounded_facts
+from max_gui.agent.context import (
+    sanitize_desktop_snapshot,
+    sanitize_expectation,
+    sanitize_grounded_facts,
+    sanitize_progress,
+    sanitize_ui_snapshot,
+)
 
 
 def _optional_dict(value: Any) -> dict[str, Any] | None:
@@ -39,6 +45,26 @@ def _task_context(value: Any) -> dict[str, Any] | None:
         return None
     if "grounded_facts" in context:
         context["grounded_facts"] = sanitize_grounded_facts(context["grounded_facts"])
+    if "desktop_snapshot" in context:
+        snapshot = sanitize_desktop_snapshot(context["desktop_snapshot"])
+        if snapshot is None:
+            context.pop("desktop_snapshot", None)
+        else:
+            context["desktop_snapshot"] = snapshot
+    if "progress" in context:
+        context["progress"] = sanitize_progress(context["progress"])
+    if "current_expectation" in context:
+        expectation = sanitize_expectation(context["current_expectation"])
+        if expectation is None:
+            context.pop("current_expectation", None)
+        else:
+            context["current_expectation"] = expectation
+    if "ui_snapshot" in context:
+        snapshot = sanitize_ui_snapshot(context["ui_snapshot"])
+        if snapshot is None:
+            context.pop("ui_snapshot", None)
+        else:
+            context["ui_snapshot"] = snapshot
     return context
 
 

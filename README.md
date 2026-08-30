@@ -11,9 +11,10 @@ max-gui 通过屏幕截图理解当前桌面状态，并以键盘、鼠标和图
 ## Features
 
 - Textual 交互界面与 LangGraph ReAct 执行循环。
-- 截图、OCR、控件定位、键盘和鼠标等桌面工具。
+- 首轮先建立当前截图与 UI 快照，优先使用受控 Chrome 的 DOM／locator 或 macOS AX 结构化工具；不可用时回退到截图、OCR、控件定位和坐标键鼠。
 - Ollama、ModelScope、DashScope、OpenRouter 等 OpenAI 兼容推理后端。
-- 会话、运行事件和截图的本地记录。
+- 基于最新截图的桌面状态快照、动作预期与验证驱动进度。
+- 会话、运行事件和截图的本地记录；无权限时前台状态明确降级为未知，不猜测输入目标。
 - 可选的 10 条或 100 条本地 Web GUI 评测。
 
 ## Architecture
@@ -29,15 +30,15 @@ flowchart LR
     AG --> BENCH[Web GUI 评测场]
 ```
 
-- `agent`：组织思考、动作与观察循环。
+- `agent`：首轮建立观察基线，组织思考、动作、观察、状态快照与后置验证循环。
 - `inference` 与 `provider`：统一调用模型服务。
-- `tools` 与 `desktop`：执行桌面操作和图像处理。
+- `tools`、`ui` 与 `desktop`：按当前 UI 快照优先分派 DOM／AX 语义操作，视觉坐标只作后备。
 - `session` 与 `observability`：保存会话及运行事件。
 - `benchmark` 与 `frontend/benchmark-arena`：提供本地评测服务和界面。
 
 ## Tech Stack
 
-Python 3.12+、Textual、LangGraph、Pydantic、HTTPX、PyAutoGUI、Pillow、FastAPI、Vue、Vite、PyTorch、Transformers、PEFT。
+Python 3.12+、Textual、LangGraph、Pydantic、HTTPX、Playwright、PyAutoGUI、Pillow、FastAPI、Vue、Vite、PyTorch、Transformers、PEFT。
 
 ## Project Structure
 

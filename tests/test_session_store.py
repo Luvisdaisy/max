@@ -209,3 +209,53 @@ def test_task_context_discards_invalid_grounded_facts(settings: Settings) -> Non
             "target_id": 1,
         }
     ]
+
+
+def test_task_context_roundtrips_sanitized_state_layer(settings: Settings) -> None:
+    """状态层持久化只保留脱敏快照、合法进度与受限预期。"""
+    store = SessionStore(settings.sessions_dir)
+    session = store.create(model="qwen3.5-2b")
+    session.task_context = {
+        "task_id": "task-state",
+        "user_instruction": "上传文件",
+        "desktop_snapshot": {
+            "frame_path": "/tmp/current.png",
+            "captured_at": "now",
+            "active_app": {"id": "chrome", "name": "Chrome", "role": "application"},
+            "active_window": {"id": "1", "name": "报销", "role": "window"},
+            "focused_element": {},
+            "active_dialog": {},
+            "ui_elements": [{"id": "u1", "label": "上传", "role": "button", "x": 20}],
+            "observation_status": "ok",
+        },
+        "progress": [
+            {"id": "pick", "label": "打开选择器", "status": "in_progress", "required": True},
+            {"id": "bad", "label": "坏项", "status": "unknown"},
+        ],
+        "current_expectation": {
+            "kind": "dialog_appears",
+            "target": "file picker",
+            "source_frame_path": "/tmp/current.png",
+            "coordinate": [1, 2],
+        },
+    }
+    store.save(session)
+
+    loaded = store.get(session.id)
+
+    assert loaded is not None and loaded.task_context is not None
+    snapshot = loaded.task_context["desktop_snapshot"]
+    assert snapshot["ui_elements"] == [
+        {
+            "id": "u1",
+            "label": "上传",
+            "role": "button",
+            "source": "unknown",
+            "clickable": False,
+            "editable": False,
+        }
+    ]
+    assert loaded.task_context["progress"] == [
+        {"id": "pick", "label": "打开选择器", "status": "in_progress", "required": True}
+    ]
+    assert "coordinate" not in loaded.task_context["current_expectation"]
