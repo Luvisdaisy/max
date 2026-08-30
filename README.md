@@ -97,6 +97,11 @@ max-gui --benchmark
 代码级与构建验证；真实模型和桌面批次仍需在具备浏览器、推理服务和必要模型配置的 macOS 环境中执行，
 不能用单元测试替代真实评测证据。
 
+另有 `max --baseline`（兼容 `max-gui --baseline`）真实桌面基线评测，固定覆盖天气检索、Terminal、
+Calculator、Reminders 和微信文件传输助手五题。它要求用户在开始前显式确认，并把每题的最终截图交给一次
+独立无工具评审；结果目录包含逐题指标和可离线打开的 `dashboard.html`。提醒与微信属于真实个人写入，默认只
+运行一轮，且不会自动重试、撤回或清理。使用前请阅读[真实桌面基线评测](docs/baseline-desktop-evaluation.md)。
+
 ## Results / Demo
 
 实际效果依赖本机权限、屏幕环境与所选模型；暂无可公开复现的端到端评测结果或公开演示素材。

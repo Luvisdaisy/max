@@ -29,6 +29,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace", type=Path, default=None, help="工作区根目录，默认当前目录")
     parser.add_argument("--new", action="store_true", help="强制创建新会话")
     parser.add_argument("--benchmark", action="store_true", help="启动本地 GUI 评测首页")
+    parser.add_argument("--baseline", action="store_true", help="运行五题真实 macOS 基线评测")
+    parser.add_argument(
+        "-report",
+        dest="baseline_report",
+        nargs="+",
+        type=Path,
+        help="读取 1–5 份基线运行 JSON 并生成对比图表报告",
+    )
+    parser.add_argument(
+        "-clean", dest="baseline_clean", action="store_true", help="清理基线评测目录内的记录和报告"
+    )
+    parser.add_argument(
+        "--baseline-runs", type=int, default=1, help="基线评测轮次数；默认 1，超过 1 会重复个人写入"
+    )
     sub = parser.add_subparsers(dest="command")
 
     tui = sub.add_parser("tui", help="启动 Textual REPL（默认）")
@@ -69,6 +83,8 @@ def main(argv: list[str] | None = None) -> None:
     """
     parser = build_parser()
     args = parser.parse_args(argv)
+    if (args.baseline_report or args.baseline_clean) and not args.baseline:
+        parser.error("-report 与 -clean 必须配合 --baseline 使用")
     command = args.command or "tui"
     try:
         settings = load_settings(workspace=getattr(args, "workspace", None))
@@ -100,6 +116,35 @@ def main(argv: list[str] | None = None) -> None:
         from max_gui.benchmark.service import run_benchmark_server
 
         run_benchmark_server(settings)
+        return
+    if args.baseline:
+        from max_gui.baseline import run_baseline
+        from max_gui.baseline.comparison import write_comparison_report
+        from max_gui.baseline.report import write_run_report
+
+        if args.baseline_clean and args.baseline_report:
+            parser.error("-clean 与 -report 不能同时使用")
+        if args.baseline_clean:
+            root = settings.project_root / "artifacts" / "evaluations" / "baseline-desktop"
+            report = cleanup_record_directories(settings.project_root, {"基线评测": root})
+            print(f"基线评测记录：已清理 {report.removed['基线评测']} 项。")
+            return
+        if args.baseline_report:
+            if len(args.baseline_report) > 5:
+                parser.error("-report 最多携带 5 份 summary.json")
+            output = write_comparison_report(
+                args.baseline_report,
+                settings.project_root / "artifacts" / "evaluations" / "baseline-desktop-reports",
+            )
+            print(f"基线对比报告已写入：{output}")
+            return
+        output = run_baseline(settings, rounds=args.baseline_runs)
+        print(f"基线评测结果已写入：{output}")
+        report = write_run_report(
+            output,
+            settings.project_root / "artifacts" / "evaluations" / "baseline-desktop-reports",
+        )
+        print(f"基线图表报告已写入：{report}")
         return
     try:
         require_provider_key(get_provider(settings.provider), settings.api_key)
