@@ -85,6 +85,7 @@ class ActionSummary(TypedDict):
     outcome: str
     has_observation: bool
     conclusion: str
+    intent: str | None
 
 
 class GroundedFact(TypedDict):
@@ -404,6 +405,7 @@ def append_action_summary(
     has_observation: bool,
     conclusion: str,
     image_path: str | None,
+    intent: str | None = None,
 ) -> TaskContext:
     """追加脱敏动作摘要，并在有新图时覆盖最新观察。"""
     updated = dict(context)
@@ -415,6 +417,7 @@ def append_action_summary(
             "outcome": "failed" if error else "success",
             "has_observation": has_observation,
             "conclusion": conclusion[:400],
+            "intent": _short_intent(intent),
         }
     )
     updated["action_history"] = history[-RECENT_ACTION_LIMIT:]
@@ -632,27 +635,15 @@ def record_cursor_verification(
 
 
 def task_context_message(context: TaskContext, *, current_frame_path: str | None = None) -> str:
-    """生成不含敏感正文的简短任务状态文本，供模型理解当前执行位置。"""
+    """生成八段脱敏 Policy 上下文，供模型只基于当前状态选择一步。"""
     current = context.get("current_subtask") or "未指定"
     plan = "；".join(context.get("plan") or [])[:600] or "未指定"
-    latest = "有最新观察" if latest_observation_path(context) else "尚无有效观察"
-    history_path = conversation_observation_path(context)
-    history = "无"
-    if history_path:
-        history = "有一张仅供理解的历史观察；不得用它的坐标、编号或界面状态执行桌面动作"
-    actions = (
-        "；".join(
-            f"{item['name']}（{item['outcome']}）" for item in context.get("action_history") or []
-        )
-        or "无"
-    )
+    actions = list(context.get("action_history") or [])[-RECENT_ACTION_LIMIT:]
     facts = grounded_facts_message(context, current_frame_path=current_frame_path)
     recovery = context.get("recovery") or {}
     recovery_text = str(recovery.get("recovery_hint") or "")
     if recovery_text:
-        recovery_text = (
-            f"恢复护栏：{recovery_text}（连续 {int(recovery.get('failure_count') or 0)} 次）"
-        )
+        recovery_text = f"{recovery_text}（连续 {int(recovery.get('failure_count') or 0)} 次）"
     if context.get("completion_verified"):
         completion = "已通过 task_complete 完成验证"
     elif context.get("completion_required"):
@@ -662,37 +653,57 @@ def task_context_message(context: TaskContext, *, current_frame_path: str | None
     else:
         completion = "当前未要求副作用完成声明"
     snapshot = sanitize_desktop_snapshot(context.get("desktop_snapshot"))
-    desktop = "当前桌面状态未知"
+    desktop = "桌面状态未知"
     if snapshot is not None and snapshot["frame_path"] == current_frame_path:
         app = snapshot["active_app"]["name"] or "未知应用"
         window = snapshot["active_window"]["name"] or "未知窗口"
         dialog = snapshot["active_dialog"]["name"] or "无已知弹窗"
-        desktop = f"当前桌面：{app}／{window}；弹窗：{dialog}"
+        desktop = f"应用：{app}；窗口：{window}；弹窗：{dialog}"
     ui_snapshot = sanitize_ui_snapshot(context.get("ui_snapshot"))
     ui_text = "无结构化 UI 快照"
     if ui_snapshot is not None and ui_snapshot["frame_path"] == current_frame_path:
         labels = "；".join(
-            f"{item['id']} {item['role']}「{item['label']}」" for item in ui_snapshot["elements"]
+            f"[{item['id']}] {item['role']}「{item['label']}」"
+            for item in _ordered_ui_elements(ui_snapshot["elements"], current)
         )
         ui_text = (
-            f"UI 快照 v{ui_snapshot['version']}（{ui_snapshot['context']}）：{labels or '无元素'}。"
-            "语义动作必须携带 element_id 与 ui_version，不能传坐标或 locator"
+            f"上下文：{ui_snapshot['context']}；快照 v{ui_snapshot['version']}；{labels or '无元素'}。"
+            "只能使用这里列出的 element_id，不能传坐标或内部定位信息"
         )
+    progress_symbols = {"verified": "✓", "in_progress": "→", "pending": "○", "blocked": "?"}
     progress = (
         "；".join(
-            f"{item['label']}（{item['status']}）"
+            f"{progress_symbols[item['status']]} {item['label']}"
             for item in sanitize_progress(context.get("progress"))
         )
         or "无"
     )
     expectation = sanitize_expectation(context.get("current_expectation"))
-    expectation_text = "无待验证预期"
+    expectation_text = "无"
     if expectation is not None:
-        expectation_text = f"待验证：{expectation['kind']}（{expectation['conclusion']}）"
-    return (
-        f"任务状态：{context.get('status') or 'thinking'}。当前子任务：{current}。"
-        f"计划：{plan}。近期动作：{actions}。{latest}。历史观察：{history}。当前有效事实：{facts}。{recovery_text}。"
-        f"{desktop}。{ui_text}。进度：{progress}。{expectation_text}。完成门：{completion}。"
+        expectation_text = f"{expectation['kind']}：{expectation['conclusion']}"
+    action_text = "无"
+    if actions:
+        action_text = "；".join(
+            f"{item['name']}（{item['outcome']}）"
+            + (f"：{item['intent']}" if item.get("intent") else "")
+            for item in actions
+        )
+    last_result = recovery_text or (actions[-1]["conclusion"] if actions else "无")
+    memory = facts
+    if conversation_observation_path(context):
+        memory = f"{memory}；历史观察仅供理解，不可执行"
+    return "\n".join(
+        [
+            f"TASK\n{context.get('user_instruction') or '未指定'}",
+            f"CURRENT SUBGOAL\n{current}；计划：{plan}",
+            f"PROGRESS\n{progress}；待验证：{expectation_text}；完成门：{completion}",
+            f"ENVIRONMENT\n{desktop}",
+            f"VISIBLE UI\n{ui_text}",
+            f"WORKING MEMORY\n{memory}",
+            f"RECENT ACTIONS\n{action_text}",
+            f"LAST RESULT\n{last_result}",
+        ]
     )
 
 
@@ -771,7 +782,7 @@ def sanitize_ui_snapshot(value: Any) -> dict[str, Any] | None:
         return None
     frame_path = str(value.get("frame_path") or "").strip()
     context = str(value.get("context") or "")
-    if version < 1 or not frame_path or context not in {"browser", "native", "vision"}:
+    if version < 1 or not frame_path or context not in {"native", "vision"}:
         return None
     elements: list[dict[str, Any]] = []
     for raw in value.get("elements") or []:
@@ -780,7 +791,7 @@ def sanitize_ui_snapshot(value: Any) -> dict[str, Any] | None:
         item_id = str(raw.get("id") or "").strip()
         label = str(raw.get("label") or "").strip()
         backend = str(raw.get("backend") or "")
-        if not item_id or not label or backend not in {"browser", "macos_ax", "vision"}:
+        if not item_id or not label or backend not in {"macos_ax", "vision"}:
             continue
         elements.append(
             {
@@ -789,6 +800,7 @@ def sanitize_ui_snapshot(value: Any) -> dict[str, Any] | None:
                 "label": label[:120],
                 "clickable": bool(raw.get("clickable")),
                 "editable": bool(raw.get("editable")),
+                "focused": bool(raw.get("focused")),
                 "backend": backend,
             }
         )
@@ -915,6 +927,7 @@ def _restore_action(value: dict[str, Any]) -> ActionSummary:
         "outcome": str(value.get("outcome") or "success"),
         "has_observation": bool(value.get("has_observation")),
         "conclusion": str(value.get("conclusion") or "")[:400],
+        "intent": _short_intent(value.get("intent")),
     }
 
 
@@ -968,6 +981,8 @@ def _short_fact_text(value: str) -> str:
 def _safe_arguments(name: str, arguments: Any) -> dict[str, Any]:
     """脱敏并截断工具参数，确保任务摘要不会保存输入正文。"""
     parsed = _parse_arguments(arguments)
+    parsed.pop("intent", None)
+    parsed.pop("expectation", None)
     if name == "keyboard_type":
         return {"text_chars": len(str(parsed.get("text") or ""))}
     encoded = json.dumps(parsed, ensure_ascii=False, default=str)
@@ -987,3 +1002,26 @@ def _parse_arguments(arguments: Any) -> dict[str, Any]:
             return {"raw_chars": len(arguments)}
         return dict(parsed) if isinstance(parsed, dict) else {"value": str(parsed)[:200]}
     return {}
+
+
+def _short_intent(value: Any) -> str | None:
+    """清洗短动作目的，避免把模型推理或敏感正文写入任务状态。"""
+    if not isinstance(value, str):
+        return None
+    words = value.strip().split()
+    if not words:
+        return None
+    return " ".join(words[:10])[:120]
+
+
+def _ordered_ui_elements(elements: list[dict[str, Any]], subtask: str) -> list[dict[str, Any]]:
+    """按焦点、当前子任务文字匹配和可操作性排序有限 UI 摘要。"""
+    keywords = {part.casefold() for part in subtask.replace("，", " ").split() if len(part) > 1}
+
+    def score(item: dict[str, Any]) -> tuple[int, int, int]:
+        """为当前帧元素计算稳定排序键，不改变元素 ID 或后端定位。"""
+        label = str(item.get("label") or "").casefold()
+        relevant = any(keyword in label for keyword in keywords)
+        return (not bool(item.get("focused")), not relevant, not bool(item.get("clickable")))
+
+    return sorted(elements, key=score)

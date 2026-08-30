@@ -14,9 +14,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Label, RichLog, Static
 
 from max_gui.agent.graph import AgentRunner
-from max_gui.browser import PlaywrightBrowserBackend
 from max_gui.config import Settings, load_settings
-from max_gui.desktop.chrome_session import ControlledChromeSession
 from max_gui.inference.client import ConnectionFailedError, InferenceClient
 from max_gui.inference.images import SUPPORTED_SUFFIXES, ImagePrepError
 from max_gui.inference.ocr import shutdown_owned_ocr
@@ -109,8 +107,6 @@ class MaxGuiApp(App[None]):
         self.session: Session | None = None
         self.pending_images: list[Path] = []
         self.runner: AgentRunner | None = None
-        self.chrome_session: ControlledChromeSession | None = None
-        self.browser_backend: PlaywrightBrowserBackend | None = None
         self._turn_active = False
         self._stream_text = ""
         self._stream_reasoning = ""
@@ -136,13 +132,6 @@ class MaxGuiApp(App[None]):
         self.session = self.store.open_or_create(
             model=self.settings.model_name, force_new=self.force_new
         )
-        try:
-            self.chrome_session = ControlledChromeSession()
-            endpoint = self.chrome_session.start()
-            self.browser_backend = PlaywrightBrowserBackend(endpoint)
-        except RuntimeError:
-            self.chrome_session = None
-            self.browser_backend = None
         self._rebuild_runner()
         self.query_one(PromptInput).focus()
         self._render_session()
@@ -153,9 +142,7 @@ class MaxGuiApp(App[None]):
     def _rebuild_runner(self) -> None:
         """按当前设置重建工具表、推理客户端与 `AgentRunner`。"""
         gate: ConfirmationGate = TuiConfirmationGate(self)
-        registry: ToolRegistry = build_default_registry(
-            self.settings, gate=gate, browser=self.browser_backend
-        )
+        registry: ToolRegistry = build_default_registry(self.settings, gate=gate)
         client = InferenceClient(self.settings)
         self.runner = AgentRunner(self.settings, client, registry, self.store)
 
@@ -188,7 +175,7 @@ class MaxGuiApp(App[None]):
             self._write_message(message.role, message.content)
 
     def _write_message(self, role: str, content: dict[str, Any] | str) -> None:
-        """按角色写入一条历史。图像缺失时标「缺失附件」。"""
+        """按角色写入一条最终历史，助手思考仅在流式区域可见。"""
         payload = content if isinstance(content, dict) else {"text": str(content)}
         text = str(payload.get("text") or "")
         images = payload.get("images") or []
@@ -204,11 +191,7 @@ class MaxGuiApp(App[None]):
         elif role == "tool":
             self._log().write(f"[magenta]工具[/magenta] {text[:400]}")
         else:
-            reasoning = str(payload.get("reasoning") or "")
-            if reasoning:
-                self._log().write(f"[dim]思考[/dim] {reasoning}")
-            if text or suffix or not reasoning:
-                self._log().write(f"[bold green]助手[/bold green] {text}{suffix}")
+            self._log().write(f"[bold green]助手[/bold green] {text}{suffix}")
 
     def on_prompt_submitted(self, event: PromptSubmitted) -> None:
         """清空输入框并在后台处理提交文本。"""
@@ -593,10 +576,7 @@ class MaxGuiApp(App[None]):
         self._write_message(role, payload)
 
     def on_unmount(self) -> None:
-        """退出时关闭本进程拥有的 Chrome、OCR 与 OmniParser，不触及用户会话。"""
-        if self.chrome_session is not None:
-            self.chrome_session.close()
-            self.chrome_session = None
+        """退出时关闭本进程拥有的 OCR 与 OmniParser，不触及用户应用或会话。"""
         shutdown_owned_ocr()
         shutdown_owned_locate()
 

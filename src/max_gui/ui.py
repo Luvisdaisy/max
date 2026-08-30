@@ -9,8 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-UIBackendName = Literal["browser", "macos_ax", "vision"]
-UIContext = Literal["browser", "native", "vision"]
+UIBackendName = Literal["macos_ax", "vision"]
+UIContext = Literal["native", "vision"]
 
 
 class StaleUIError(RuntimeError):
@@ -46,6 +46,7 @@ class UIElement:
             "label": (self.name or self.text or self.role)[:120],
             "clickable": self.enabled and self.role not in {"text", "static_text"},
             "editable": self.editable,
+            "focused": self.focused,
             "backend": self.backend,
         }
 

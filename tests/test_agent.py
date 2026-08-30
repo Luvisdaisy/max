@@ -17,7 +17,7 @@ from max_gui.agent.graph import (
 from max_gui.agent.prompts import GUI_SYSTEM_PROMPT, os_contract
 from max_gui.config import Settings
 from max_gui.desktop.fake import FakeDesktopBackend
-from max_gui.desktop.ui_backends import FakeBrowserBackend, FakeMacOSAXBackend
+from max_gui.desktop.ui_backends import FakeMacOSAXBackend
 from max_gui.inference.client import ChatDelta, InferenceRequestError, TokenUsage
 from max_gui.inference.retry import RetryMetadata, RetryNotice
 from max_gui.session.store import SessionStore
@@ -178,31 +178,11 @@ async def test_dynamic_tool_schemas_follow_observation_stage(settings: Settings)
     assert "target_id" not in move_schema["function"]["parameters"]["properties"]
 
 
-async def test_agent_runner_dispatches_browser_element_and_refreshes_observation(
+async def test_agent_runner_dispatches_ax_element_and_refreshes_observation(
     settings: Settings,
 ) -> None:
-    """受控 browser 快照让 Agent 调 locator 点击，并在动作后附加新截图。"""
-    browser = FakeBrowserBackend(
-        observation=(
-            "https://example.test",
-            [
-                UIElement(
-                    id="",
-                    role="button",
-                    name="继续",
-                    text=None,
-                    visible=True,
-                    enabled=True,
-                    editable=False,
-                    focused=False,
-                    app_id="chrome",
-                    window_id="window-1",
-                    backend="browser",
-                    locator={"fake": True},
-                )
-            ],
-        )
-    )
+    """当前前台 Chrome 的 AX 快照让 Agent 分派点击，并在动作后附加新截图。"""
+    ax = FakeMacOSAXBackend(elements=[_native_button(name="继续", app_id="chrome")])
     client = ScriptedClient(
         [
             ChatDelta(
@@ -214,6 +194,7 @@ async def test_agent_runner_dispatches_browser_element_and_refreshes_observation
                             "name": "click",
                             "arguments": (
                                 '{"element_id":"e_1","ui_version":1,'
+                                '"intent":"点击继续",'
                                 '"expectation":{"kind":"screen_changed"}}'
                             ),
                         },
@@ -242,7 +223,7 @@ async def test_agent_runner_dispatches_browser_element_and_refreshes_observation
             settings,
             gate=AutoApproveGate(),
             desktop=FakeDesktopBackend(),
-            browser=browser,
+            macos_ax=ax,
         ),
         store,
     )
@@ -250,66 +231,54 @@ async def test_agent_runner_dispatches_browser_element_and_refreshes_observation
     assert state["task_context"].get("ui_snapshot"), state["task_context"]
     initial_tools = {item["function"]["name"] for item in client.tool_requests[0]}
     assert "click" in initial_tools, initial_tools
+    assert "mouse_move" in initial_tools, initial_tools
+    assert "mouse_click" in initial_tools, initial_tools
+    click_schema = next(
+        item for item in client.tool_requests[0] if item["function"]["name"] == "click"
+    )
+    assert "intent" in click_schema["function"]["parameters"]["properties"]
     assert state["status"] == "done", state
-    assert browser.calls == [("click", "e_1")]
+    assert ax.calls == [("press", "e_1")]
+    history = state["task_context"]["action_history"]
+    assert history[0]["intent"] == "点击继续"
     click_result = next(item for item in state["messages"] if item.get("tool_call_id") == "click")
     assert click_result["content"]["images"]
 
 
-async def test_native_file_picker_snapshot_overrides_browser_content(settings: Settings) -> None:
-    """文件选择器前台且 AX 可读时，只向下一轮提供 native 元素而非网页 DOM。"""
-    browser = FakeBrowserBackend(observation=("https://example.test", [_browser_button()]))
+async def test_chrome_ax_snapshot_uses_native_context(settings: Settings) -> None:
+    """日常 Chrome 的 AX 控件生成 native 快照，不连接网页 DOM。"""
     ax = FakeMacOSAXBackend(elements=[_native_button()])
     store = SessionStore(settings.sessions_dir)
     runner = AgentRunner(
         settings,
         ScriptedClient([]),
-        build_default_registry(settings, gate=AutoApproveGate(), browser=browser, macos_ax=ax),
+        build_default_registry(settings, gate=AutoApproveGate(), macos_ax=ax),
         store,
     )
     context = await runner._replace_structured_ui_snapshot(
         new_task_context("上传文件"),
         frame_path="picker.png",
         desktop_observation={
-            "active_app": {"id": "44", "name": "Finder", "role": "application"},
-            "active_dialog": {"id": "picker", "name": "选择文件", "role": "dialog"},
+            "active_app": {"id": "44", "name": "Google Chrome", "role": "application"},
+            "active_dialog": {},
         },
     )
     assert context["ui_snapshot"]["context"] == "native"
     assert context["ui_snapshot"]["elements"][0]["backend"] == "macos_ax"
-    assert browser.calls == []
 
 
-def _browser_button() -> UIElement:
-    """构造 browser 通道选择测试的最小可点击元素。"""
-    return UIElement(
-        id="",
-        role="button",
-        name="网页上传",
-        text=None,
-        visible=True,
-        enabled=True,
-        editable=False,
-        focused=False,
-        app_id="chrome",
-        window_id="window-1",
-        backend="browser",
-        locator={"fake": True},
-    )
-
-
-def _native_button() -> UIElement:
+def _native_button(*, name: str = "打开", app_id: str = "44") -> UIElement:
     """构造原生文件选择器的最小 AX 按钮元素。"""
     return UIElement(
         id="",
         role="button",
-        name="打开",
+        name=name,
         text=None,
         visible=True,
         enabled=True,
         editable=False,
         focused=False,
-        app_id="44",
+        app_id=app_id,
         window_id="picker",
         backend="macos_ax",
         locator={"fake": True},
@@ -749,8 +718,8 @@ def test_os_contract_darwin_not_windows() -> None:
 
 
 def test_system_prompt_separates_user_reply_from_native_tools() -> None:
-    """提示词让普通正文回答用户，工具调用不再要求正文 JSON 协议。"""
-    assert "直接用简短、完整的自然语言回答用户" in GUI_SYSTEM_PROMPT
+    """提示词要求单步原生调用，且不要求正文 JSON 协议。"""
+    assert "选择恰好一个下一步动作" in GUI_SYSTEM_PROMPT
     assert "原生 tool calling" in GUI_SYSTEM_PROMPT
     assert "每次回复必须严格按以下 JSON 格式输出" not in GUI_SYSTEM_PROMPT
     assert '"thought"' not in GUI_SYSTEM_PROMPT
@@ -768,11 +737,10 @@ async def test_think_injects_system_not_persisted(settings: Settings) -> None:
     assert "locate" not in content
     assert "target_id" not in content
     assert "ocr_locate" not in content
-    assert "view_width" in content
-    assert "逻辑坐标" in content
+    assert "当前截图视图是" in content
+    assert "element_id" in content
     assert "红十字" in content
-    assert "键鼠" in content
-    assert "核验" in content
+    assert "后置观察" in content
     loaded = store.get(session.id)
     assert loaded is not None
     assert all(msg.role != "system" for msg in loaded.messages)

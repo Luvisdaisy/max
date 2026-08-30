@@ -40,6 +40,15 @@ async def test_unknown_command_does_not_call_model(settings: Settings) -> None:
         await pilot.pause()
 
 
+async def test_mount_does_not_start_controlled_chrome(settings: Settings) -> None:
+    """交互 TUI 挂载只装配桌面 Agent，不创建临时 Chrome 或调试端口。"""
+    app = MaxGuiApp(settings, force_new=True)
+    async with app.run_test() as pilot:
+        assert not hasattr(app, "chrome_session")
+        assert not hasattr(app, "browser_backend")
+        await pilot.pause()
+
+
 async def test_model_command_is_unknown(settings: Settings) -> None:
     """`/model` 按未知命令处理，不改变当前模型。"""
     app = MaxGuiApp(settings, force_new=True)
@@ -130,9 +139,10 @@ async def test_enter_sends_nonempty_and_ignores_empty(settings: Settings) -> Non
 
 
 async def test_stream_tokens_stay_on_one_message(settings: Settings) -> None:
-    """流式 token 先聚在记录框内的 `#live`，flush 后只写入一条历史。"""
+    """流式思考可见，flush 后记录区只保留助手正文。"""
     app = MaxGuiApp(settings, force_new=True)
     async with app.run_test() as pilot:
+        app._append_reasoning("先检查屏幕")
         app._append_token("已成功", started=False)
         app._append_token("执行", started=True)
         app._append_token(":", started=True)
@@ -143,6 +153,7 @@ async def test_stream_tokens_stay_on_one_message(settings: Settings) -> None:
         live = app.query_one("#live", Static)
         assert live.parent is not None and live.parent.id == "record"
         assert app.query_one("#transcript").parent is live.parent
+        assert "思考 先检查屏幕" in str(live.content)
         assert "已成功执行:1. **Screen Shot**:" in str(live.content)
         log = app.query_one("#transcript", RichLog)
         rendered = "\n".join(strip.text for strip in log.lines)
@@ -151,8 +162,10 @@ async def test_stream_tokens_stay_on_one_message(settings: Settings) -> None:
         await pilot.pause()
         rendered = "\n".join(strip.text for strip in log.lines)
         assert "已成功执行:1. **Screen Shot**:" in rendered
+        assert "先检查屏幕" not in rendered
         assert rendered.count("已成功执行") == 1
         assert app._stream_text == ""
+        assert app._stream_reasoning == ""
 
 
 def _transcript(app: MaxGuiApp) -> str:
@@ -162,7 +175,7 @@ def _transcript(app: MaxGuiApp) -> str:
 
 
 async def test_live_reasoning_and_commit_two_thinks(settings: Settings) -> None:
-    """思考进 live；两轮 think 落成两条助手；工具在回合内可见；状态含执行工具。"""
+    """思考仅在 live；两轮回复与工具结果写入记录区；状态含执行工具。"""
     app = MaxGuiApp(settings, force_new=True)
     recorded: list[str] = []
     async with app.run_test() as pilot:
@@ -217,7 +230,7 @@ async def test_live_reasoning_and_commit_two_thinks(settings: Settings) -> None:
         assert app._stream_text == ""
         assert str(live.content) in {"", "None"} or not live.display
         rendered = _transcript(app)
-        assert "先截图" in rendered
+        assert "先截图" not in rendered
         assert rendered.count("调用工具") == 1
         assert "已单击left (1, 2)" in rendered
         assert "完成了" in rendered
@@ -226,8 +239,8 @@ async def test_live_reasoning_and_commit_two_thinks(settings: Settings) -> None:
         assert any("执行工具" in item for item in recorded)
 
 
-async def test_restore_shows_reasoning(settings: Settings) -> None:
-    """恢复会话时展示思考字段；无该字段的旧消息只显示正文。"""
+async def test_restore_hides_reasoning(settings: Settings) -> None:
+    """恢复会话时隐藏思考字段；无该字段的旧消息仍显示正文。"""
     store = SessionStore(settings.sessions_dir)
     session = store.create(model="qwen3.5-2b")
     store.append_messages(
@@ -244,7 +257,7 @@ async def test_restore_shows_reasoning(settings: Settings) -> None:
     app = MaxGuiApp(settings, force_new=False)
     async with app.run_test() as pilot:
         rendered = _transcript(app)
-        assert "这是问候" in rendered
+        assert "这是问候" not in rendered
         assert "你好" in rendered
         assert "旧回复" in rendered
         await pilot.pause()

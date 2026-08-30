@@ -11,6 +11,7 @@ from PIL import Image
 
 from max_gui.config import (
     ContextBudgetConfigError,
+    EnableThinkingConfigError,
     InferenceRetryConfigError,
     Settings,
     load_settings,
@@ -49,6 +50,28 @@ def test_load_settings_defaults_to_ollama(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert settings.provider == "ollama"
     assert settings.model_name == "qwen3-vl:8b"
     assert settings.inference_max_retries == 5
+    assert not settings.enable_thinking
+
+
+@pytest.mark.parametrize("value", ["true", "TRUE", "TrUe"])
+def test_load_settings_enables_upstream_thinking(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, value: str
+) -> None:
+    """严格布尔开关接受任意大小写的 true。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_GUI_ENABLE_THINKING", value)
+    assert load_settings(workspace=tmp_path).enable_thinking
+
+
+@pytest.mark.parametrize("value", ["auto", "1", "yes"])
+def test_load_settings_rejects_invalid_upstream_thinking(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, value: str
+) -> None:
+    """上游 thinking 开关只接受 true 或 false。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_GUI_ENABLE_THINKING", value)
+    with pytest.raises(EnableThinkingConfigError, match="MAX_GUI_ENABLE_THINKING"):
+        load_settings(workspace=tmp_path)
 
 
 @pytest.mark.parametrize("value", [0, 5])
@@ -391,6 +414,31 @@ def test_openrouter_uses_registered_config(monkeypatch: pytest.MonkeyPatch, tmp_
     assert settings.model_name == "qwen/qwen3.5-plus"
     assert settings.base_url == "https://openrouter.ai/api/v1"
     assert settings.api_key == "or-token"
+
+
+def test_qiniu_uses_registered_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """七牛使用固定模型、端点与自己的密钥环境变量。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", "qiniu")
+    monkeypatch.setenv("MAX_QINIU_KEY", "qiniu-token")
+    monkeypatch.setenv("MODEL_NAME", "ignored-model")
+    settings = load_settings(workspace=tmp_path)
+    assert settings.provider == "qiniu"
+    assert settings.model_name == "z-ai/glm-5.3-flash"
+    assert settings.base_url == "https://api.qnaigc.com/v1"
+    assert settings.api_key == "qiniu-token"
+    assert settings.context_window == 32_768
+
+
+def test_qiniu_api_key_env_is_not_used(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """仅有非项目约定的 `QINIU_API_KEY` 时仍视为缺密钥。"""
+    _isolate_root(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAX_PROVIDER", "qiniu")
+    monkeypatch.setenv("QINIU_API_KEY", "qiniu-token")
+    settings = load_settings(workspace=tmp_path)
+    assert not has_provider_key(settings.api_key)
+    with pytest.raises(MissingProviderKeyError, match="MAX_QINIU_KEY"):
+        require_provider_key(get_provider(settings.provider), settings.api_key)
 
 
 def test_prepare_oversized_image(tmp_path: Path, settings: Settings) -> None:
@@ -1136,6 +1184,153 @@ async def test_openrouter_sends_registered_model_key_and_tools(
         "tools": tools,
         "tool_choice": "auto",
     }
+
+
+async def test_qiniu_sends_registered_model_key_and_tools(settings: Settings) -> None:
+    """七牛复用统一兼容请求，并发送固定模型、Bearer 密钥和工具。"""
+    definition = PROVIDERS["qiniu"]
+    settings.provider = definition.name
+    settings.base_url = definition.base_url
+    settings.model_name = definition.model_name
+    settings.api_key = "qiniu-token"
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        seen["url"] = str(request.url)
+        seen["authorization"] = request.headers.get("authorization")
+        seen["model"] = payload["model"]
+        seen["tools"] = payload.get("tools")
+        seen["tool_choice"] = payload.get("tool_choice")
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_sse(["ok"]).encode(),
+        )
+
+    tools = [{"type": "function", "function": {"name": "screenshot", "parameters": {}}}]
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
+    result = await client.stream([{"role": "user", "content": "hi"}], tools=tools)
+    assert result.text == "ok"
+    assert seen == {
+        "url": "https://api.qnaigc.com/v1/chat/completions",
+        "authorization": "Bearer qiniu-token",
+        "model": "z-ai/glm-5.3-flash",
+        "tools": tools,
+        "tool_choice": "auto",
+    }
+
+
+async def test_qiniu_missing_key_skips_http(settings: Settings) -> None:
+    """七牛缺 `MAX_QINIU_KEY` 时不发 HTTP 请求。"""
+    definition = PROVIDERS["qiniu"]
+    settings.provider = definition.name
+    settings.base_url = definition.base_url
+    settings.model_name = definition.model_name
+    settings.api_key = ""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("must not send HTTP without key")
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
+    with pytest.raises(MissingProviderKeyError, match="MAX_QINIU_KEY"):
+        await client.stream([{"role": "user", "content": "hi"}])
+
+
+async def test_qiniu_connection_error_has_key_hint(settings: Settings) -> None:
+    """七牛连不上时提示专属密钥且不建议本地 serve。"""
+    definition = PROVIDERS["qiniu"]
+    settings.provider = definition.name
+    settings.base_url = definition.base_url
+    settings.model_name = definition.model_name
+    settings.api_key = "qiniu-token"
+    settings.inference_max_retries = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
+    with pytest.raises(ConnectionFailedError, match="MAX_QINIU_KEY") as exc_info:
+        await client.stream([{"role": "user", "content": "hi"}])
+    assert "max-gui serve" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("provider_name", "enabled", "expected"),
+    [
+        ("ollama", False, {"think": False}),
+        ("ollama", True, {"think": True}),
+        ("modelscope", False, {"enable_thinking": False}),
+        ("modelscope", True, {"enable_thinking": True}),
+        ("dashscope", False, {"enable_thinking": False}),
+        ("dashscope", True, {"enable_thinking": True}),
+        ("openrouter", False, {"reasoning": {"enabled": False}}),
+        ("openrouter", True, {"reasoning": {"enabled": True}}),
+        ("qiniu", False, {"thinking": {"type": "disabled"}}),
+        ("qiniu", True, {"thinking": {"type": "enabled"}}),
+    ],
+)
+async def test_provider_sends_mapped_upstream_thinking_payload(
+    settings: Settings,
+    provider_name: str,
+    enabled: bool,
+    expected: dict[str, object],
+) -> None:
+    """每个 provider 都在请求顶层按统一开关发送自己的 thinking 字段。"""
+    definition = PROVIDERS[provider_name]
+    settings.provider = definition.name
+    settings.base_url = definition.base_url
+    settings.model_name = definition.model_name
+    settings.api_key = "token" if definition.api_key_env is not None else "EMPTY"
+    settings.enable_thinking = enabled
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["payload"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_sse(["ok"]).encode(),
+        )
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
+    result = await client.stream([{"role": "user", "content": "hi"}])
+    assert result.text == "ok"
+    payload = seen["payload"]
+    assert isinstance(payload, dict)
+    for key, value in expected.items():
+        assert payload[key] == value
+    assert "extra_body" not in payload
+
+
+async def test_rejected_thinking_payload_is_not_downgraded_or_retried(settings: Settings) -> None:
+    """上游拒绝关闭 thinking 时保留错误，不移除字段或改成开启后重试。"""
+    definition = PROVIDERS["qiniu"]
+    settings.provider = definition.name
+    settings.base_url = definition.base_url
+    settings.model_name = definition.model_name
+    settings.api_key = "qiniu-token"
+    settings.enable_thinking = False
+    settings.inference_max_retries = 5
+    payloads: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content))
+        return httpx.Response(400, json={"error": "thinking disabled is unsupported"})
+
+    client = InferenceClient(settings, transport=httpx.MockTransport(handler))
+    with pytest.raises(InferenceRequestError, match="400"):
+        await client.stream([{"role": "user", "content": "hi"}])
+    assert payloads == [
+        {
+            "model": "z-ai/glm-5.3-flash",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "max_tokens": settings.max_output_tokens,
+            "thinking": {"type": "disabled"},
+        }
+    ]
 
 
 def _sse_tool_calls() -> str:

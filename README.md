@@ -11,9 +11,9 @@ max-gui 通过屏幕截图理解当前桌面状态，并以键盘、鼠标和图
 ## Features
 
 - Textual 交互界面与 LangGraph ReAct 执行循环。
-- 首轮先建立当前截图与 UI 快照，优先使用受控 Chrome 的 DOM／locator 或 macOS AX 结构化工具；不可用时回退到截图、OCR、控件定位和坐标键鼠。
-- Ollama、ModelScope、DashScope、OpenRouter 等 OpenAI 兼容推理后端。
-- 基于最新截图的桌面状态快照、动作预期与验证驱动进度。
+- 每轮以“当前状态 → 一个语义动作 → 后置观察”决策；优先使用受控 Chrome 或 macOS AX 的统一元素工具，不向模型暴露 locator、AX 或坐标后端细节。
+- Ollama、ModelScope、DashScope、OpenRouter、七牛等 OpenAI 兼容推理后端。
+- 基于最新截图的桌面状态快照、动作 intent、受限 expectation 与验证驱动进度；工具分派成功不等于任务成功。
 - 会话、运行事件和截图的本地记录；无权限时前台状态明确降级为未知，不猜测输入目标。
 - 可选的 10 条或 100 条本地 Web GUI 评测。
 
@@ -30,15 +30,15 @@ flowchart LR
     AG --> BENCH[Web GUI 评测场]
 ```
 
-- `agent`：首轮建立观察基线，组织思考、动作、观察、状态快照与后置验证循环。
+- `agent`：首轮建立观察基线，向模型提供任务、子目标、进度、环境、可见 UI、工作记忆、近期动作和上次结果，组织单步思考、动作、观察与后置验证循环。
 - `inference` 与 `provider`：统一调用模型服务。
-- `tools`、`ui` 与 `desktop`：按当前 UI 快照优先分派 DOM／AX 语义操作，视觉坐标只作后备。
+- `tools`、`ui` 与 `desktop`：`ToolRegistry` 统一分派语义动作到 DOM／AX 后端；快照覆盖目标时隐藏等价坐标动作，视觉坐标只在缺少可靠语义目标时作后备，并保留移鼠、截图与无坐标点击门禁。
 - `session` 与 `observability`：保存会话及运行事件。
 - `benchmark` 与 `frontend/benchmark-arena`：提供本地评测服务和界面。
 
 ## Tech Stack
 
-Python 3.12+、Textual、LangGraph、Pydantic、HTTPX、Playwright、PyAutoGUI、Pillow、FastAPI、Vue、Vite、PyTorch、Transformers、PEFT。
+Python 3.12+、Textual、LangGraph、Pydantic、HTTPX、PyAutoGUI、Pillow、FastAPI、Vue、Vite、PyTorch、Transformers、PEFT。
 
 ## Project Structure
 
@@ -70,7 +70,10 @@ uv sync --group dev
 cp .env.example .env
 ```
 
-在 `.env` 中设置 `MAX_PROVIDER`；使用云端提供方时填写相应 API Key。
+在 `.env` 中设置 `MAX_PROVIDER`；使用云端提供方时填写相应 API Key。七牛使用
+`MAX_PROVIDER=qiniu` 与 `MAX_QINIU_KEY`，固定调用 `z-ai/glm-5.3-flash`。
+`MAX_GUI_ENABLE_THINKING=false` 为默认值，控制上游模型是否生成思考；设为 `true` 开启。
+该开关不隐藏服务端已经返回的 reasoning，个别仅思考模型可能拒绝关闭请求。
 
 运行：
 

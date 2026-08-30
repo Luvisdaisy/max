@@ -11,7 +11,7 @@ from max_gui.config import Settings
 from max_gui.desktop.backend import DesktopBackend
 from max_gui.desktop.macos_ax import MacOSAXUIBackend
 from max_gui.desktop.pyautogui_backend import PyAutoGUIBackend
-from max_gui.desktop.ui_backends import BrowserBackend, MacOSAXBackend
+from max_gui.desktop.ui_backends import MacOSAXBackend
 from max_gui.inference.ocr import OcrRuntime
 from max_gui.inference.omniparser import LocateRuntime
 from max_gui.tools.desktop import desktop_tools
@@ -81,7 +81,6 @@ class ToolRegistry:
         gate: ConfirmationGate | None = None,
         timeout: float = 30.0,
         ui_registry: UIRegistry | None = None,
-        browser: BrowserBackend | None = None,
         macos_ax: MacOSAXBackend | None = None,
     ) -> None:
         """参数：`tools` 列表；`gate` 缺省自动批准；`timeout` 限制单次实现调用。"""
@@ -89,7 +88,6 @@ class ToolRegistry:
         self.gate = gate or AutoApproveGate()
         self.timeout = float(timeout)
         self.ui_registry = ui_registry or UIRegistry()
-        self.browser = browser
         self.macos_ax = macos_ax
 
     def get(self, name: str) -> Tool | None:
@@ -146,7 +144,6 @@ def build_default_registry(
     desktop: DesktopBackend | None = None,
     ocr: OcrRuntime | None = None,
     locate: LocateRuntime | None = None,
-    browser: BrowserBackend | None = None,
     macos_ax: MacOSAXBackend | None = None,
 ) -> ToolRegistry:
     """装配图像预处理、OCR、界面定位与桌面工具。
@@ -157,6 +154,7 @@ def build_default_registry(
         desktop: 桌面后端；缺省 `PyAutoGUIBackend`。
         ocr: OCR 运行时；缺省按配置懒启动。
         locate: 可选的 OmniParser 运行时；仅显式注入时注册定位器，默认 Agent 不暴露该工具。
+        macos_ax: 可选的当前前台应用 AX 后端；未注入时使用系统实现。
     """
     backend = desktop or PyAutoGUIBackend()
     ui_registry = UIRegistry()
@@ -169,9 +167,7 @@ def build_default_registry(
         *semantic_tools(
             SemanticResolver(
                 ui_registry,
-                browser=browser,
                 macos_ax=ax_backend,
-                workspace=settings.workspace,
                 desktop=backend,
             )
         ),
@@ -184,7 +180,6 @@ def build_default_registry(
         gate=gate,
         timeout=settings.tool_timeout,
         ui_registry=ui_registry,
-        browser=browser,
         macos_ax=ax_backend,
     )
 

@@ -10,6 +10,7 @@ from max_gui.agent.context import (
     new_task_context,
     register_expectation,
     replace_desktop_snapshot,
+    task_context_message,
     verify_current_expectation,
 )
 from max_gui.desktop import observation
@@ -79,3 +80,61 @@ def test_non_macos_observation_is_explicitly_unknown(monkeypatch) -> None:
     assert result["observation_status"] == "unsupported_platform"
     assert result["active_app"]["name"] is None
     assert result["active_window"]["name"] is None
+
+
+def test_policy_context_uses_eight_sections_and_hides_sensitive_arguments() -> None:
+    """动态 Policy 上下文保持八段结构，不暴露输入正文、坐标或 locator。"""
+    context = new_task_context("在报销页上传文件")
+    context["current_subtask"] = "上传文件"
+    context["ui_snapshot"] = {
+        "version": 1,
+        "frame_path": "/tmp/current.png",
+        "context": "native",
+        "url": None,
+        "elements": [
+            {
+                "id": "e_1",
+                "role": "button",
+                "label": "取消",
+                "clickable": True,
+                "editable": False,
+                "focused": False,
+                "backend": "macos_ax",
+            },
+            {
+                "id": "e_2",
+                "role": "button",
+                "label": "上传文件",
+                "clickable": True,
+                "editable": False,
+                "focused": True,
+                "backend": "macos_ax",
+            },
+        ],
+    }
+    context["action_history"] = [
+        {
+            "name": "type_text",
+            "arguments": {"text": "secret"},
+            "outcome": "success",
+            "has_observation": True,
+            "conclusion": "已执行键盘输入",
+            "intent": "填写金额",
+        }
+    ]
+    message = task_context_message(context, current_frame_path="/tmp/current.png")
+    for section in (
+        "TASK",
+        "CURRENT SUBGOAL",
+        "PROGRESS",
+        "ENVIRONMENT",
+        "VISIBLE UI",
+        "WORKING MEMORY",
+        "RECENT ACTIONS",
+        "LAST RESULT",
+    ):
+        assert section in message
+    assert "填写金额" in message
+    assert "secret" not in message
+    assert "locator" not in message
+    assert message.index("[e_2]") < message.index("[e_1]")

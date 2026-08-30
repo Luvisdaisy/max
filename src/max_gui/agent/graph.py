@@ -60,15 +60,9 @@ DISABLED_AGENT_TOOLS = frozenset({"locate"})
 STRUCTURED_SIDE_EFFECTS = frozenset(
     {
         "click",
-        "double_click",
         "type_text",
-        "select_option",
-        "set_file_input",
-        "scroll",
-        "open_url",
         "press_key",
         "press_shortcut",
-        "drag",
         "activate_app",
     }
 )
@@ -269,25 +263,17 @@ class AgentRunner:
     async def _prime_ui_observation(self, state: AgentState) -> AgentState:
         """在首轮 Think 前建立当前截图与结构化 UI 快照。
 
-        返回：带最新截图、桌面身份和 browser/native UI 摘要的状态；浏览器或 AX
-        不可用时保留视觉后备，不阻断任务启动。副作用：会截取一张当前屏幕，并
-        让受控浏览器页在非原生模态场景下置前以保证 DOM 与截图属于同一界面。
+        返回：带最新截图、桌面身份和 native UI 摘要的状态；AX 不可用时保留视觉后备，
+        不阻断任务启动。副作用：仅截取当前屏幕，绝不启动或置前独立浏览器。
         """
         context = _task_context(state)
         desktop_observation = observe_desktop_identity()
-        native_elements = self.registry.macos_ax.observe() if self.registry.macos_ax else []
-        active_dialog = desktop_observation.get("active_dialog") or {}
-        has_native_modal = bool(active_dialog.get("id") or active_dialog.get("name"))
-        if not has_native_modal and not native_elements and self.registry.browser is not None:
-            # 先置受控页，再截图；否则 DOM 可能来自受控 Chrome，而截图仍是用户浏览器。
-            await self.registry.browser.observe()
         output = await self.registry.invoke("screenshot", {})
         if not isinstance(output, ToolResult) or not output.ok or not output.images:
             return state
         frame = active_view_frame()
         if frame is None or not frame.image_path.is_file():
             return state
-        # 置前受控页可能改变前台应用；必须用截图同一时刻的身份选择通道。
         desktop_observation = observe_desktop_identity()
         context["latest_observation"] = {"path": str(output.images[-1]), "source": "tool"}
         context = replace_desktop_snapshot(
@@ -513,6 +499,7 @@ class AgentRunner:
             call_id = str(call.get("id") or name)
             arguments = _tool_arguments(fn.get("arguments"))
             expectation = arguments.pop("expectation", None)
+            intent = arguments.pop("intent", None)
             frame_before = _active_frame_path()
             target_label = _target_label_for_move(context, name, arguments, frame_before)
             side_effect = self.registry.is_side_effect(name)
@@ -614,6 +601,7 @@ class AgentRunner:
                 has_observation=has_image,
                 conclusion=_action_conclusion(name, text),
                 image_path=image_path,
+                intent=intent if name in STRUCTURED_SIDE_EFFECTS else None,
             )
             context = _update_grounded_facts_after_tool(
                 context,
@@ -851,29 +839,12 @@ class AgentRunner:
         frame_path: str,
         desktop_observation: dict[str, Any],
     ) -> TaskContext:
-        """按原生模态、受控浏览器、视觉后备顺序刷新唯一 UI 快照。
+        """按原生 AX、视觉后备顺序刷新唯一 UI 快照。
 
-        原生对话框优先于网页 DOM，以避免文件选择器或权限窗口被同名网页控件覆盖。
+        当前前台 Chrome 与其他应用一样只通过 macOS AX 观察；AX 不可用时保留视觉路径。
         每次调用均替换 `UIRegistry` 当前版本，使上一次的元素引用立即失效。
         """
-        active_dialog = desktop_observation.get("active_dialog") or {}
         native_elements = self.registry.macos_ax.observe() if self.registry.macos_ax else []
-        has_native_modal = bool(active_dialog.get("id") or active_dialog.get("name"))
-        active_app = (desktop_observation.get("active_app") or {}).get("name")
-        chrome_is_frontmost = "chrome" in str(active_app or "").casefold()
-        if native_elements and (has_native_modal or not chrome_is_frontmost):
-            snapshot = self.registry.ui_registry.replace(
-                frame_path=frame_path, context="native", elements=native_elements
-            )
-            return replace_ui_snapshot(context, snapshot.summary())
-        if self.registry.browser is not None:
-            browser_observation = await self.registry.browser.observe()
-            if browser_observation is not None:
-                url, elements = browser_observation
-                snapshot = self.registry.ui_registry.replace(
-                    frame_path=frame_path, context="browser", elements=elements, url=url
-                )
-                return replace_ui_snapshot(context, snapshot.summary())
         if native_elements:
             snapshot = self.registry.ui_registry.replace(
                 frame_path=frame_path, context="native", elements=native_elements
@@ -1284,6 +1255,7 @@ def _selection_diagnostics(
 
 
 _INITIAL_TOOL_NAMES = {"prepare_image", "ocr", "screenshot", "screen_info"}
+_SEMANTIC_TOOL_NAMES = STRUCTURED_SIDE_EFFECTS | {"wait"}
 
 
 def _allowed_tool_names(context: TaskContext, registry: ToolRegistry) -> set[str]:
@@ -1292,27 +1264,26 @@ def _allowed_tool_names(context: TaskContext, registry: ToolRegistry) -> set[str
     frame_ready = bool(frame is not None and frame.image_path.is_file())
     if not frame_ready:
         return registry.names() & _INITIAL_TOOL_NAMES
-    allowed = registry.names() - {"task_complete"} - DISABLED_AGENT_TOOLS
-    if not context.get("ui_snapshot"):
-        allowed -= {
-            "click",
-            "double_click",
-            "type_text",
-            "select_option",
-            "set_file_input",
-            "scroll",
-            "open_url",
-            "drag",
-            "press_key",
-            "press_shortcut",
-            "activate_app",
-        }
+    semantic_snapshot = _actionable_semantic_snapshot(context)
+    if semantic_snapshot:
+        # AX 元素优先供语义动作使用，但需保留截图和坐标后备处理网页未暴露的控件。
+        allowed = registry.names() - {"task_complete"} - DISABLED_AGENT_TOOLS
+    else:
+        allowed = registry.names() - {"task_complete"} - DISABLED_AGENT_TOOLS - _SEMANTIC_TOOL_NAMES
     recovery = context.get("recovery") or {}
     blocked = {str(item) for item in recovery.get("blocked_calls") or []}
     allowed -= blocked
     if context.get("completion_required") and not context.get("completion_verified"):
         allowed.add("task_complete")
     return allowed
+
+
+def _actionable_semantic_snapshot(context: TaskContext) -> bool:
+    """判断当前是否有可操作 AX 目标；browser 旧快照不再参与交互分派。"""
+    snapshot = context.get("ui_snapshot")
+    if not isinstance(snapshot, dict):
+        return False
+    return str(snapshot.get("context") or "") == "native" and bool(snapshot.get("elements"))
 
 
 def _model_tool_schemas(registry: ToolRegistry, allowed_tools: set[str]) -> list[dict[str, Any]]:
@@ -1327,7 +1298,8 @@ def _model_tool_schemas(registry: ToolRegistry, allowed_tools: set[str]) -> list
             properties = parameters["properties"]
             if function.get("name") in {"mouse_move", "mouse_scroll"}:
                 properties.pop("target_id", None)
-            if registry.is_side_effect(str(function.get("name") or "")):
+            name = str(function.get("name") or "")
+            if registry.is_side_effect(name):
                 properties["expectation"] = {
                     "type": "object",
                     "description": "可选：此动作后应在新截图中验证的结果",
@@ -1347,6 +1319,13 @@ def _model_tool_schemas(registry: ToolRegistry, allowed_tools: set[str]) -> list
                         "progress_id": {"type": "string"},
                     },
                     "required": ["kind"],
+                }
+            if name in STRUCTURED_SIDE_EFFECTS:
+                properties["intent"] = {
+                    "type": "string",
+                    "description": "可选：不超过十个词的下一步目的，不得写推理过程。",
+                    "minLength": 1,
+                    "maxLength": 120,
                 }
     return schemas
 
