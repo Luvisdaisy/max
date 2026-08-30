@@ -45,3 +45,13 @@ TBD - created by archiving change refactor-vue-vite-benchmark-arena. Update Purp
 - **WHEN** 运行器或浏览器请求旧版任务集或旧版业务路由
 - **THEN** 系统不加载、重定向或兼容执行旧版内容，并只接受 v2 评测场的任务与路由
 
+### Requirement: 可点击的关联详情工作流
+
+Vue 评测场 SHALL 提供项目到关联任务、任务到详情抽屉、详情到编辑与反馈的可点击路径。业务页面 MUST 通过
+站内可见控件记录导航来源，且不能在客户端持有评分断言或任务答案。
+
+#### Scenario: 通过项目入口编辑关联任务
+
+- **WHEN** Agent 从项目卡片打开关联任务并在详情抽屉保存编辑
+- **THEN** Vue 页面呈现项目上下文、保存反馈与更新后的任务数据，后端记录有效的站内导航和业务变化
+

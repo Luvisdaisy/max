@@ -2,7 +2,7 @@
 
 ## Purpose
 
-LangGraph ReAct 循环、状态、JSON 检查点、中断恢复。
+规定 LangGraph ReAct 循环的状态、桌面观察、动作执行、JSON 检查点和中断恢复边界，确保每个回合可安全追溯。
 ## Requirements
 ### Requirement: 系统契约引导复用当前帧定位
 
@@ -282,11 +282,13 @@ Agent MUST 接受来自 TUI 的中断。中断状态 MUST 写入该会话 JSON �
 
 ### Requirement: ReAct 观察选择单一主 UI 通道
 
-每个 `observe` MUST 先获得前台身份和截图，再按以下顺序选择一个主 UI 上下文：存在原生模态对话框时选择 `native`；否则受控浏览器页面可用时选择 `browser`；否则选择 `vision`。系统 MUST 将选中的有限 UI 快照、版本和状态摘要注入下一次 `think`，MUST NOT 同时把完整 browser 与 native 元素集合交给模型。
+每个 `observe` MUST 先获得前台身份和截图，再按以下顺序选择一个主 UI 上下文：存在原生模态对话框时选择
+`native`；否则当前前台应用存在可操作的 macOS AX 元素时选择 `native`；否则选择 `vision`。系统 MUST 将选中的
+有限 UI 快照、版本和状态摘要注入下一次 `think`，MUST NOT 创建、连接或置前受控浏览器页面。
 
-#### Scenario: 受控网页无原生弹窗
-- **WHEN** Chrome 为前台、Playwright 页面可用且没有原生模态对话框
-- **THEN** 下一次 `think` 得到 browser UI 快照摘要
+#### Scenario: 当前 Chrome 有 AX 控件
+- **WHEN** Chrome 为前台、没有原生模态对话框且取得可操作的 macOS AX 元素
+- **THEN** 下一次 `think` 得到 native UI 快照摘要，且系统不连接 Playwright 页面
 
 #### Scenario: 原生弹窗覆盖网页上下文
 - **WHEN** Chrome 前台但观察到文件选择器
@@ -294,8 +296,55 @@ Agent MUST 接受来自 TUI 的中断。中断状态 MUST 写入该会话 JSON �
 
 ### Requirement: 通道动作触发统一后置观察
 
-BrowserBackend、MacOSAXBackend 和视觉后备的每一个成功副作用 MUST 经 `observe` 创建新观察、更新或作废 UI 快照，并用既有 expectation／progress 机制判断动作效果。通道不可用或动作失败 MUST 向下一次 `think` 提供不含敏感定位信息的恢复诊断。
+MacOSAXBackend 和视觉后备的每一个成功副作用 MUST 经 `observe` 创建新观察、更新或作废 UI 快照，并用既有
+expectation／progress 机制判断动作效果。通道不可用或动作失败 MUST 向下一次 `think` 提供不含敏感定位信息的
+恢复诊断。
 
 #### Scenario: AXPress 后快照刷新
 - **WHEN** AXPress 成功执行
 - **THEN** Agent 进入 `observe`，旧 AX 元素失效并依据新观察验证动作预期
+
+### Requirement: 新回合区分理解观察与执行观察
+
+Agent MUST 在新用户回合构造任务上下文时把会话级历史观察标为只读背景。若用户请求桌面副作用，Agent MUST 要求当前回合先取得新的可执行截图；若用户仅询问历史画面内容，Agent MAY 基于该历史观察直接回答。
+
+#### Scenario: 追问截图内容
+- **WHEN** 新回合只询问上一张截图显示的内容
+- **THEN** Agent 不执行桌面动作，并基于只读历史观察回答
+
+#### Scenario: 新回合请求移动鼠标
+- **WHEN** 新回合要求将鼠标移动到历史截图中的应用图标
+- **THEN** Agent 先取得当前截图，再进行定位和移动
+
+### Requirement: ReAct 观察节点更新状态层
+`observe` 节点 MUST 在每次成功观察后更新任务状态快照、最近动作结论、待验证预期和进度，并在下一次 `think` 前注入脱敏状态摘要。Agent MUST 将无法验证的预期作为恢复信息回传模型，MUST NOT 仅因为桌面工具未报错就推进计划或进度。现有 `plan` 与 `current_subtask` 仍可用，但不得与已验证进度冲突。
+
+#### Scenario: 后置观察后更新模型上下文
+- **WHEN** 一次桌面副作用完成并获得后置截图
+- **THEN** 下一次 `think` 收到该截图绑定的状态摘要和预期结论
+
+#### Scenario: 未验证预期阻止自动推进
+- **WHEN** 当前进度项存在未验证预期
+- **THEN** Agent 不得仅依据助手文本中的“子任务完成”或工具成功自动将该项标为已验证
+
+### Requirement: think 使用结构化单步 Policy 上下文
+每次 `think` MUST 使用稳定的中文 Policy system 契约和当前任务的动态状态摘要。system MUST 要求模型只选择一个下一步、优先语义元素、优先活动模态、不得编造 element_id、不得原样重复失败动作，且只有当前可见证据支持时才调用 `task_complete`。动态摘要 MUST 依次提供任务、当前子任务、进度、环境、可见 UI、工作记忆、近期动作与上次结果；这些内容 MUST 与当前有效观察绑定，且不写入会话消息历史。
+
+#### Scenario: 模态界面先于背景页面
+- **WHEN** 当前桌面状态表明存在活动原生模态
+- **THEN** 下一次 think 的 system 与动态摘要要求模型先处理模态，且可见 UI 不以背景浏览器元素为主
+
+#### Scenario: Policy 上下文不持久化为会话消息
+- **WHEN** 当前回合结束并保存会话
+- **THEN** 会话消息中不包含 system 契约或完整动态状态摘要
+
+### Requirement: 语义动作携带可验证 Policy 元数据
+Agent MUST 从副作用语义工具调用中提取可选短 `intent` 和受限 `expectation`，在分派前将二者与工具实现参数隔离。`act` MUST 将 intent 以脱敏动作摘要传给状态层，`observe` MUST 以动作前后状态验证 expectation；工具成功本身不得推进 progress 或完成任务。expectation 不满足时，下一轮 think MUST 看到恢复提示与上次结果，并继续遵守既有恢复上限和阶段门禁。
+
+#### Scenario: 工具实现不接收 intent
+- **WHEN** 模型为 `click` 同时提交 element_id、ui_version、intent 和 expectation
+- **THEN** click resolver 只接收元素引用，Agent 仍在观察阶段记录并验证 intent 与 expectation
+
+#### Scenario: 完成声明不能替代验证
+- **WHEN** 语义动作返回成功但其 expectation 尚未满足
+- **THEN** Agent 不得将关联 progress 标为已验证，也不得仅据此以 task_complete 结束

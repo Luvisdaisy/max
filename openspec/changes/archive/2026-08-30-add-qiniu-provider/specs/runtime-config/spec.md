@@ -71,6 +71,8 @@ provider 定义。既有可调字段 `MAX_GUI_MAX_ITERATIONS`、`MAX_GUI_MAX_IMA
 - **WHEN** `.env` 已同时保存各云端 provider 的专属密钥
 - **THEN** 用户只修改 `MAX_PROVIDER` 即可选择 Ollama 或对应云端 provider 的模型、端点与密钥
 
+## ADDED Requirements
+
 ### Requirement: 七牛 provider 配置
 
 系统 MUST 支持 `MAX_PROVIDER=qiniu`。其模型 MUST 为 `z-ai/glm-5.3-flash`，OpenAI 兼容

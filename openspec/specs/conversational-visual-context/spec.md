@@ -1,0 +1,25 @@
+# conversational-visual-context Specification
+
+## Purpose
+TBD - created by archiving change add-conversational-visual-context-and-semantic-locate. Update Purpose after archive.
+## Requirements
+### Requirement: 会话级只读视觉上下文
+
+系统 MUST 在会话中持久化有限的只读视觉上下文，包含最近一张仍存在的观察图引用、来源和时间，以及有限的非 reasoning 对话摘要。该上下文 MUST NOT 包含可执行 `target_id`、逻辑坐标、OCR / caption 正文、键盘输入正文、图像字节或工具原始 JSON；旧会话缺少该字段 MUST 正常加载为空。
+
+#### Scenario: 后续追问可见最近观察
+- **WHEN** 用户上一回合成功取得一张截图，下一回合没有附件且询问截图内容
+- **THEN** 模型请求包含该历史图和其仅供理解的来源说明
+
+#### Scenario: 缺失历史图安全降级
+- **WHEN** 会话级历史观察引用的文件已被删除
+- **THEN** 系统不发送该图，仍正常处理当前用户消息
+
+### Requirement: 历史观察不可授权桌面动作
+
+系统 MUST 将会话级历史观察与当前任务执行帧分离。开始新桌面任务时 MUST 清空旧 `ViewFrame`、定位命中和可执行事实；模型不得仅凭历史观察调用依赖当前帧的 `target_id` 或坐标动作，必须先成功取得新截图。
+
+#### Scenario: 新动作不能复用旧编号
+- **WHEN** 上一回合的截图曾产生 `target_id=3`，用户在新回合要求点击某控件
+- **THEN** 新回合的 `mouse_move(target_id=3)` 被拒绝或模型先取得新截图，旧编号不会驱动鼠标
+

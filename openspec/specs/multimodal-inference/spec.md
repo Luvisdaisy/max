@@ -23,7 +23,7 @@ OpenAI 兼容客户端（本机 vLLM、魔搭 API-Inference 或阿里云百炼�
 
 #### Scenario: 云端服务不可达
 
-- **WHEN** `MAX_PROVIDER` 为 `modelscope`、`dashscope` 或 `openrouter` 且端点拒绝连接
+- **WHEN** `MAX_PROVIDER` 为 `modelscope`、`dashscope`、`openrouter` 或 `qiniu` 且端点拒绝连接
 - **THEN** 客户端报告对应 provider 的网络与专属密钥检查提示，且不提示 `max-gui serve`
 
 #### Scenario: 流式 HTTP 错误可读
@@ -120,8 +120,8 @@ OpenAI 兼容客户端（本机 vLLM、魔搭 API-Inference 或阿里云百炼�
 
 系统 MUST 从独立 Python provider 定义取得当前模型名，运行时 `MODEL_NAME` MUST NOT
 覆盖该值。`ollama` 模型 MUST 为 `qwen3.5:9b`，`openrouter` 模型 MUST 为
-`qwen/qwen3.5-plus`。系统 MUST NOT 提供 TUI `/model` 或 CLI `--model`，也 MUST NOT
-检查主推理模型的本地权重目录。
+`qwen/qwen3.5-plus`，`qiniu` 模型 MUST 为 `z-ai/glm-5.3-flash`。系统 MUST NOT 提供
+TUI `/model` 或 CLI `--model`，也 MUST NOT 检查主推理模型的本地权重目录。
 
 #### Scenario: Ollama 默认模型
 
@@ -133,6 +133,11 @@ OpenAI 兼容客户端（本机 vLLM、魔搭 API-Inference 或阿里云百炼�
 - **WHEN** `MAX_PROVIDER=openrouter`
 - **THEN** 请求使用 model id `qwen/qwen3.5-plus`
 
+#### Scenario: 七牛默认模型
+
+- **WHEN** `MAX_PROVIDER=qiniu`
+- **THEN** 请求使用 model id `z-ai/glm-5.3-flash`
+
 #### Scenario: 环境变量不覆盖模型
 
 - **WHEN** `MAX_PROVIDER=openrouter` 且环境中另有 `MODEL_NAME=other-model`
@@ -140,13 +145,14 @@ OpenAI 兼容客户端（本机 vLLM、魔搭 API-Inference 或阿里云百炼�
 
 ### Requirement: 双推理后端
 
-系统 MUST 根据 `MAX_PROVIDER` 从单一注册表选择 `ollama`、`modelscope`、`dashscope` 或
-`openrouter`。所有 provider MUST 使用定义中的 OpenAI 兼容根端点与模型，并共用
-`/chat/completions`、消息编码、SSE 解析、工具调用和 token 用量链路。具有密钥环境变量
-的 provider MUST 在启动 TUI 或首次请求前校验专属密钥；缺密钥 MUST 中文报错且不提示
+系统 MUST 根据 `MAX_PROVIDER` 从单一注册表选择 `ollama`、`modelscope`、`dashscope`、
+`openrouter` 或 `qiniu`。所有 provider MUST 使用定义中的 OpenAI 兼容根端点与模型，并共用
+`/chat/completions`、消息编码、SSE 解析、工具调用和 token 用量链路。具有密钥环境变量的
+provider MUST 在启动 TUI 或首次请求前校验专属密钥；缺密钥 MUST 中文报错且不提示
 `max-gui serve`。`ollama` MUST 使用 `http://192.168.1.158:11434/v1`、`qwen3.5:9b`，
 不发送 Authorization 头；`openrouter` MUST 使用 `https://openrouter.ai/api/v1`、
-`qwen/qwen3.5-plus` 与 `MAX_OPENROUTER_KEY`。
+`qwen/qwen3.5-plus` 与 `MAX_OPENROUTER_KEY`；`qiniu` MUST 使用
+`https://api.qnaigc.com/v1`、`z-ai/glm-5.3-flash` 与 `MAX_QINIU_KEY`。
 
 #### Scenario: Ollama 不发送认证头
 
@@ -167,6 +173,11 @@ OpenAI 兼容客户端（本机 vLLM、魔搭 API-Inference 或阿里云百炼�
 
 - **WHEN** `MAX_PROVIDER=openrouter` 且 `MAX_OPENROUTER_KEY` 非空
 - **THEN** 客户端向 `https://openrouter.ai/api/v1/chat/completions` 发请求，模型为 `qwen/qwen3.5-plus`，带 Bearer 密钥且不检查主推理本地权重
+
+#### Scenario: qiniu 发送兼容请求
+
+- **WHEN** `MAX_PROVIDER=qiniu` 且 `MAX_QINIU_KEY` 非空
+- **THEN** 客户端向 `https://api.qnaigc.com/v1/chat/completions` 发请求，模型为 `z-ai/glm-5.3-flash`，带 Bearer 密钥且不检查主推理本地权重
 
 #### Scenario: 云端缺专属密钥
 
@@ -276,4 +287,52 @@ NOT 带 `reasoning_content`。其它已注册 provider MUST NOT 把思考编进�
 
 - **WHEN** 一次请求从四条完整工具链中按预算选择最近三条
 - **THEN** `model.started` 或 `model.completed` 记录纳入三条、裁剪一条及预算数值，且不含工具结果正文
+
+### Requirement: 单图优先级包含只读历史观察
+
+主推理请求 MUST 至多编码一张本地图像，优先级依次为本轮用户附件、当前任务最新观察、会话级最近历史观察。历史观察仅在更高优先级图不存在且文件有效时编码为 `image_url`，并计入唯一图像 token 预留。
+
+#### Scenario: 当前附件覆盖历史观察
+- **WHEN** 会话有最近历史截图且用户本轮附带一张新图片
+- **THEN** 请求仅编码用户新图片，不编码历史截图
+
+### Requirement: provider 上游思考开关映射
+
+客户端每次向已注册 provider 发起 `/chat/completions` 请求时，MUST 根据
+`Settings.enable_thinking` 与 provider 定义在 JSON 顶层加入控制上游生成思考的字段：
+`ollama` 使用 `think` 布尔值；`modelscope` 与 `dashscope` 使用 `enable_thinking` 布尔值；
+`openrouter` 使用 `reasoning.enabled` 布尔值；`qiniu` 使用 `thinking.type`，其值为
+`enabled` 或 `disabled`。客户端 MUST NOT 使用 `extra_body` 包装这些字段。该配置 MUST NOT
+改变 reasoning 的 SSE 解析、展示或既有 DashScope 历史 `reasoning_content` 回传行为。
+
+#### Scenario: 默认关闭七牛上游思考
+
+- **WHEN** `MAX_PROVIDER=qiniu` 且未设置 `MAX_GUI_ENABLE_THINKING`
+- **THEN** POST 请求的 JSON 含 `thinking` 为 `{ "type": "disabled" }`
+
+#### Scenario: 开启 OpenRouter 上游思考
+
+- **WHEN** `MAX_PROVIDER=openrouter` 且 `MAX_GUI_ENABLE_THINKING=true`
+- **THEN** POST 请求的 JSON 含 `reasoning` 为 `{ "enabled": true }`
+
+#### Scenario: 映射 DashScope 开关
+
+- **WHEN** `MAX_PROVIDER=dashscope` 且 `MAX_GUI_ENABLE_THINKING=false`
+- **THEN** POST 请求的 JSON 顶层含 `enable_thinking` 为 `false`
+
+#### Scenario: 上游拒绝关闭字段
+
+- **WHEN** 上游以非 2xx 响应拒绝该 provider 的关闭思考字段
+- **THEN** 客户端沿用现有 HTTP 错误链路展示状态码与截断后的响应体，且 MUST NOT 静默改为开启思考或移除字段重试
+
+### Requirement: 七牛请求复用工具 schema
+
+当 `MAX_PROVIDER=qiniu` 且 Agent 工具注册表非空时，客户端 MUST 在 `/chat/completions`
+请求中包含 `tools` 数组与 `tool_choice=auto`，并 MUST 按现有 SSE 规则拼装
+`delta.tool_calls`；系统 MUST NOT 为七牛改用正文 JSON 工具调用协议。
+
+#### Scenario: 七牛请求带 tools
+
+- **WHEN** `MAX_PROVIDER=qiniu` 且注册表含桌面工具 schema
+- **THEN** POST `https://api.qnaigc.com/v1/chat/completions` 的 JSON 含 `tools` 数组与 `tool_choice` 为 `auto`
 

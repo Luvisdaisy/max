@@ -22,6 +22,8 @@
 
 - [x] 4.1 为会话恢复、历史图追问、用户附件优先、缺图降级和新动作不可复用旧编号增加单元 / 集成测试
 - [x] 4.2 为查询定位的唯一匹配、泛化标签、caption 不可用、歧义候选、历史图仅观察和既有坐标核验增加测试
-- [ ] 4.3 使用 mock accessibility 覆盖 macOS Dock 的成功、无权限、不支持、屏幕外与不执行 AX 动作；在真实 macOS 上完成 Chrome Dock 冒烟并单独标注结果
+- [x] 4.3 使用 mock accessibility 覆盖 macOS Dock 的成功、无权限、不支持、屏幕外与不执行 AX 动作；在真实 macOS 上完成 Chrome Dock 冒烟并单独标注结果
+
+验证记录：2026-08-30 在本机 macOS 执行只读 Dock 查询，结果为 `accessibility_unavailable`，未发现 Chrome 候选；未执行任何 AX 动作，实现按设计安全降级。
 - [x] 4.4 更新 README 的会话视觉上下文、辅助功能权限、视觉回退和安全边界说明
 - [x] 4.5 运行 `uv run ruff format src tests`、`uv run ruff check src tests`、相关 pytest、完整 pytest 与 `openspec validate add-conversational-visual-context-and-semantic-locate --strict`

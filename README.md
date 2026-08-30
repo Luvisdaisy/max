@@ -73,7 +73,8 @@ cp .env.example .env
 在 `.env` 中设置 `MAX_PROVIDER`；使用云端提供方时填写相应 API Key。七牛使用
 `MAX_PROVIDER=qiniu` 与 `MAX_QINIU_KEY`，固定调用 `z-ai/glm-5.3-flash`。
 `MAX_GUI_ENABLE_THINKING=false` 为默认值，控制上游模型是否生成思考；设为 `true` 开启。
-该开关不隐藏服务端已经返回的 reasoning，个别仅思考模型可能拒绝关闭请求。
+该开关不改变服务端 reasoning 的接收与持久化；TUI 仅在流式阶段显示思考，最终记录只显示助手正文。
+个别仅思考模型可能拒绝关闭请求。
 
 运行：
 

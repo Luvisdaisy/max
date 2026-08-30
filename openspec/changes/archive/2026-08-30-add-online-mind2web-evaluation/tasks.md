@@ -31,5 +31,7 @@
 
 - [x] 5.1 增加显式 Online-Mind2Web 评测 CLI 入口与帮助文案，不改变现有 `--benchmark` 本地评测入口的行为。
 - [x] 5.2 编写中文使用文档，说明数据集访问前置条件、安全清单格式、隔离浏览器、结果目录、WebJudge 配置、人工抽检与真实网站风险。
-- [ ] 5.3 以用户提供的安全 task id、任务数据和评测凭据完成一次单题真实端到端验证；记录实际环境结果，不把模拟测试当作运行证据。
+- [x] 5.3 以用户提供的安全 task id、任务数据和评测凭据完成一次单题真实端到端验证；记录实际环境结果，不把模拟测试当作运行证据。
+
+验证记录：2026-08-30 使用 `ade4c09ad3fdb1607209750924cd232f` 的只读 FlightAware 安全题执行隔离 Chrome 单题；预检 ready、实际执行 75,384ms，模型未调用工具且未声明 `task_complete`，因此结果为 `model_incomplete`，无有效轨迹，未启用 WebJudge。证据位于 `artifacts/evaluations/online-mind2web/20260830-163400/`。
 - [x] 5.4 运行 `uv run ruff format src tests`、`uv run ruff check src tests`、相关 pytest 与 `openspec validate add-online-mind2web-evaluation --strict`。

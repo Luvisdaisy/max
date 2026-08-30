@@ -22,5 +22,7 @@
 ## 4. 受控验证与文档
 
 - [x] 4.1 更新中文使用文档，说明完成门控、未判分语义、显式 Judge 参数和站点拦截分类。
-- [ ] 4.2 使用现有安全清单执行一条允许的真实任务，人工检查浏览器可见性、轨迹、任务终态和报告；若开启 Judge，记录真实凭据外部依赖结果。
+- [x] 4.2 使用现有安全清单执行一条允许的真实任务，人工检查浏览器可见性、轨迹、任务终态和报告；若开启 Judge，记录真实凭据外部依赖结果。
+
+验证记录：2026-08-30 使用现有 FlightAware 只读安全清单执行一题。隔离 Chrome 可观察、预检 ready，汇总报告将未完成声明准确归类为 `model_incomplete`，未生成 `result.json` 或有效轨迹；未启用 Judge，端到端成功率保持 `null`。证据位于 `artifacts/evaluations/online-mind2web/20260830-163400/summary.json`。
 - [x] 4.3 运行 `uv run ruff format src tests`、`uv run ruff check src tests`、相关 pytest、全量 pytest 与 `openspec validate fix-online-mind2web-evaluation-completion --strict`。

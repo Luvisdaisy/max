@@ -27,4 +27,6 @@
 验证记录：2026-08-30 在本机 macOS 执行只读观察，结果为 `frontmost_app_unavailable`；实现按设计安全降级为未知身份，未执行任何辅助功能动作。
 
 - [x] 4.4 更新 README 既定章节中的状态层、权限降级和验证边界说明
-- [ ] 4.5 运行 `uv run ruff format src tests`、`uv run ruff check src tests`、相关 pytest、完整 pytest 与 `openspec validate strengthen-desktop-agent-state --strict`
+- [x] 4.5 运行 `uv run ruff format src tests`、`uv run ruff check src tests`、相关 pytest、完整 pytest 与 `openspec validate strengthen-desktop-agent-state --strict`
+
+验证记录：2026-08-30 Ruff format/check 通过；全量 pytest 为 `301 passed, 1 warning`。严格 OpenSpec 校验将在归档前对所有变更统一执行。
