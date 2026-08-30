@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
@@ -35,6 +36,10 @@ class TaskResult:
     invalid_actions: int
     violations: tuple[str, ...]
     total_tokens: int | None
+    difficulty: str = "unknown"
+    category: str = "unknown"
+    capabilities: tuple[str, ...] = ()
+    task_family: str = "unknown"
 
 
 def termination_reason(
@@ -45,6 +50,7 @@ def termination_reason(
     violations: list[str],
     timed_out: bool,
     environment_error: bool = False,
+    limit_hit: bool = False,
 ) -> TerminationReason:
     """按优先级把运行状态归一为可区分终止原因。"""
     if environment_error:
@@ -53,7 +59,7 @@ def termination_reason(
         return "violation"
     if timed_out:
         return "timeout"
-    if tool_calls > limit:
+    if limit_hit or tool_calls > limit:
         return "tool_limit"
     if agent_status == "interrupted":
         return "interrupted"
@@ -63,7 +69,11 @@ def termination_reason(
 
 
 def write_report(
-    results: list[TaskResult], path: Path, *, requested_tasks: int
+    results: list[TaskResult],
+    path: Path,
+    *,
+    requested_tasks: int,
+    manifest: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """写入逐题 JSON 和同路径 Markdown 汇总，保留计划评测规模。
 
@@ -76,8 +86,13 @@ def write_report(
     total = len(measured)
     summary = {
         "requested_tasks": requested_tasks,
+        "executed_tasks": len(results),
         "tasks": len(results),
         "measured_tasks": total,
+        "environment_errors": sum(
+            item.termination_reason == "environment_error" for item in results
+        ),
+        "not_started_tasks": max(requested_tasks - len(results), 0),
         "task_success_rate": sum(item.strict_success for item in measured) / total
         if total
         else 0.0,
@@ -99,12 +114,28 @@ def write_report(
         else 0.0,
         "violation_rate": sum(bool(item.violations) for item in measured) / total if total else 0.0,
         "known_token_samples": sum(item.total_tokens is not None for item in results),
-        "total_tokens": sum(item.total_tokens or 0 for item in results),
+        "known_total_tokens": sum(
+            item.total_tokens for item in results if item.total_tokens is not None
+        ),
+        "total_tokens": (
+            sum(item.total_tokens for item in results if item.total_tokens is not None)
+            if any(item.total_tokens is not None for item in results)
+            else None
+        ),
+        "by_difficulty": _grouped_success(measured, lambda item: item.difficulty),
+        "by_category": _grouped_success(measured, lambda item: item.category),
+        "by_capability": _capability_success(measured),
+        "by_task_family": _grouped_success(measured, lambda item: item.task_family),
+        "termination_reasons": _counts(results, lambda item: item.termination_reason),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
-            {"summary": summary, "results": [asdict(item) for item in results]},
+            {
+                "manifest": manifest or {},
+                "summary": summary,
+                "results": [asdict(item) for item in results],
+            },
             ensure_ascii=False,
             indent=2,
         )
@@ -118,3 +149,44 @@ def write_report(
         encoding="utf-8",
     )
     return summary
+
+
+def _counts(results: list[TaskResult], key: Callable[[TaskResult], object]) -> dict[str, int]:
+    """按可读键汇总结果，供报告显示终态分布。"""
+    counts: dict[str, int] = {}
+    for item in results:
+        value = str(key(item))
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def _grouped_success(
+    results: list[TaskResult], key: Callable[[TaskResult], object]
+) -> dict[str, dict[str, float | int]]:
+    """按任务元数据输出样本数与严格成功率。"""
+    groups: dict[str, list[TaskResult]] = {}
+    for item in results:
+        value = str(key(item))
+        groups.setdefault(value, []).append(item)
+    return {
+        value: {
+            "tasks": len(items),
+            "success_rate": sum(item.strict_success for item in items) / len(items),
+        }
+        for value, items in groups.items()
+    }
+
+
+def _capability_success(results: list[TaskResult]) -> dict[str, dict[str, float | int]]:
+    """按能力标签复用逐题结果，避免把一题错误地拆成多个分母。"""
+    groups: dict[str, list[TaskResult]] = {}
+    for item in results:
+        for capability in item.capabilities:
+            groups.setdefault(capability, []).append(item)
+    return {
+        value: {
+            "tasks": len(items),
+            "success_rate": sum(item.strict_success for item in items) / len(items),
+        }
+        for value, items in groups.items()
+    }

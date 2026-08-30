@@ -15,12 +15,13 @@ from max_gui.tools.desktop import (
     clear_desktop_context,
     current_locate_hits,
     current_view_frame,
+    reject_if_outside_view,
     restore_desktop_context,
     snapshot_desktop_context,
     store_locate_hits,
     store_view_frame,
 )
-from max_gui.tools.protocol import Tool, ToolResult
+from max_gui.tools.protocol import Tool, ToolError, ToolResult
 from max_gui.tools.registry import DenyGate, SessionScopedGate, ToolRegistry, build_default_registry
 
 
@@ -37,6 +38,27 @@ async def test_unknown_tool_and_screenshot_skips_gate(settings: Settings) -> Non
     shot = await registry.invoke("screenshot", {})
     assert isinstance(shot, ToolResult)
     assert shot.images
+
+
+async def test_locate_is_disabled_in_default_registry(settings: Settings) -> None:
+    """默认 Agent 工具集合不暴露 locate，旧名称只能得到未知工具错误。"""
+    registry = build_default_registry(settings, desktop=FakeDesktopBackend())
+    assert "locate" not in registry.names()
+    assert "locate" not in {item["function"]["name"] for item in registry.schemas()}
+    result = await registry.invoke("locate", {})
+    assert isinstance(result, ToolResult)
+    assert result.code == "unknown_tool"
+
+
+def test_outside_view_error_only_requests_current_screenshot_pixels(tmp_path) -> None:
+    """越界坐标错误不再把模型引向已经停用的定位编号。"""
+    frame = ViewFrame(0, 0, 100, 100, 50, 50, tmp_path / "current.png")
+    with pytest.raises(ToolError) as error:
+        reject_if_outside_view(50, 0, frame)
+    text = str(error.value)
+    assert "图内视图像素" in text
+    assert "locate" not in text
+    assert "target_id" not in text
 
 
 def test_registry_filters_strict_schemas_and_marks_side_effects(settings: Settings) -> None:

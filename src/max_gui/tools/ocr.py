@@ -10,7 +10,7 @@ from max_gui.tools.protocol import Tool, ToolError
 
 OCR_DESCRIPTION = (
     "当看不清截图上的文字或需要精确抄录时，对一张已有图像做整图 OCR。"
-    "不要在每次 screenshot 之后无条件调用。点控件请用 locate，不要用本工具画框。"
+    "不要在每次 screenshot 之后无条件调用。点控件请根据最新截图使用视图像素，不要把 OCR 当作点击工具。"
     "path 可以是截图目录或工作区内的图像。"
 )
 

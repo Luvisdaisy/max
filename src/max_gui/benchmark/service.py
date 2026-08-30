@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import threading
 from typing import Any
 
@@ -100,18 +101,41 @@ class BenchmarkController:
                 self.store.reset(task.id)
                 with self._lock:
                     self._status.update(completed=index - 1, current_task=task.id)
-                open_benchmark_browser(f"{self.base_url}/arena/home")
-                await asyncio.sleep(1)
-                results.append(
-                    await run_task(
-                        runner,
-                        sessions,
-                        self.suite,
-                        task,
-                        self._read_state,
-                        model=self.settings.model_name,
+                try:
+                    with open_benchmark_browser(f"{self.base_url}/arena/home"):
+                        await asyncio.sleep(1)
+                        results.append(
+                            await run_task(
+                                runner,
+                                sessions,
+                                self.suite,
+                                task,
+                                self._read_state,
+                                model=self.settings.model_name,
+                            )
+                        )
+                except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                    results.append(
+                        TaskResult(
+                            task.id,
+                            self.suite.version,
+                            self.settings.model_name,
+                            False,
+                            0,
+                            len(task.success),
+                            "environment_error",
+                            0,
+                            0,
+                            0,
+                            0,
+                            (str(exc),),
+                            None,
+                            task.difficulty,
+                            task.category,
+                            task.capabilities,
+                            task.task_family,
+                        )
                     )
-                )
                 if self._interrupt_requested.is_set():
                     break
             task_count = len(tasks)
@@ -121,7 +145,26 @@ class BenchmarkController:
                 / "reports"
                 / f"web-gui-eval-{task_count}.json"
             )
-            write_report(results, report, requested_tasks=task_count)
+            write_report(
+                results,
+                report,
+                requested_tasks=task_count,
+                manifest={
+                    "suite_version": self.suite.version,
+                    "model": self.settings.model_name,
+                    "browser": {
+                        "profile": "per-task",
+                        "window_size": "1440x960",
+                        "device_scale_factor": 1,
+                        "language": "zh-CN",
+                        "start_route": "/arena/home",
+                    },
+                    "limits": {
+                        "max_iterations": self.settings.max_iterations,
+                        "task_execution": "serial",
+                    },
+                },
+            )
             with self._lock:
                 self._status.update(
                     status="interrupted" if self._interrupt_requested.is_set() else "completed",

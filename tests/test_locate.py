@@ -206,7 +206,7 @@ async def test_historical_retina_image_is_observation_only(settings: Settings) -
     assert "logical" not in payload["items"][0]
     assert active_locate_hits() == {}
     moved = await registry.invoke("mouse_move", {"target_id": 1})
-    assert "请先调用 locate" in moved
+    assert "改用当前截图的视图坐标" in moved
 
 
 async def test_overlay_copy_is_observation_only(settings: Settings) -> None:

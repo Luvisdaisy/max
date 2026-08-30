@@ -28,6 +28,15 @@ REQUIRED_CAPABILITIES = {
     "validation",
     "workflow",
 }
+REQUIRED_WORKFLOWS = {
+    "project_context",
+    "member_workload",
+    "empty_filter",
+    "validation_recovery",
+    "undo",
+    "subtasks",
+    "fact_driven_edit",
+}
 FORBIDDEN_FIELDS = {"copies_per_template", "templates", "variants"}
 
 
@@ -49,6 +58,9 @@ class BenchmarkTask:
     expected_steps: int
     required_checkpoints: tuple[str, ...]
     smoke: bool
+    task_family: str
+    information_dependency: str | None
+    recovery_path: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +98,25 @@ def load_task_suite(path: Path = DEFAULT_SUITE) -> TaskSuite:
     smoke_capabilities = {capability for task in smoke for capability in task.capabilities}
     if not REQUIRED_CAPABILITIES.issubset(smoke_capabilities):
         raise ValueError("冒烟任务缺少规定的能力覆盖")
+    workflows = {
+        label
+        for task in tasks
+        for label in (task.task_family, task.information_dependency, task.recovery_path)
+        if label
+    }
+    if not REQUIRED_WORKFLOWS.issubset(workflows):
+        missing = "、".join(sorted(REQUIRED_WORKFLOWS - workflows))
+        raise ValueError(f"任务集缺少复杂工作流覆盖：{missing}")
+    smoke_workflows = {
+        label
+        for task in smoke
+        for label in (task.task_family, task.information_dependency, task.recovery_path)
+        if label
+    }
+    required_smoke = {"fact_driven_edit", "validation_recovery", "undo", "subtasks"}
+    if not required_smoke.issubset(smoke_workflows):
+        missing = "、".join(sorted(required_smoke - smoke_workflows))
+        raise ValueError(f"冒烟任务缺少关键复杂路径：{missing}")
     return TaskSuite(version=raw["version"], tasks=tasks)
 
 
@@ -117,6 +148,9 @@ def _task_from_dict(raw: Any) -> BenchmarkTask:
         "expected_steps",
         "required_checkpoints",
         "smoke",
+        "task_family",
+        "information_dependency",
+        "recovery_path",
     }
     if not required.issubset(raw):
         raise ValueError("任务字段不完整")
@@ -152,6 +186,15 @@ def _task_from_dict(raw: Any) -> BenchmarkTask:
         raise ValueError("中等任务至少组合两种能力")
     if raw["difficulty"] == "hard" and sum(item.startswith("visited_") for item in checkpoints) < 2:
         raise ValueError("高级任务至少包含两个跨页导航检查点")
+    task_family = raw["task_family"]
+    dependency = raw["information_dependency"]
+    recovery = raw["recovery_path"]
+    if not isinstance(task_family, str) or not task_family:
+        raise ValueError("任务族必须为非空字符串")
+    if dependency is not None and not isinstance(dependency, str):
+        raise ValueError("信息依赖必须为字符串或 null")
+    if recovery is not None and not isinstance(recovery, str):
+        raise ValueError("恢复路径必须为字符串或 null")
     return BenchmarkTask(
         id=str(raw["id"]),
         route=str(raw["route"]),
@@ -167,4 +210,7 @@ def _task_from_dict(raw: Any) -> BenchmarkTask:
         expected_steps=expected_steps,
         required_checkpoints=tuple(checkpoints),
         smoke=bool(raw["smoke"]),
+        task_family=task_family,
+        information_dependency=dependency,
+        recovery_path=recovery,
     )

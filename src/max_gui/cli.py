@@ -37,6 +37,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     cleanup = sub.add_parser("cleanup", help="清除截图、运行和会话记录")
     cleanup.add_argument("--workspace", type=Path, default=None)
+
+    mind2web = sub.add_parser("online-mind2web", help="预检或运行隔离的 Online-Mind2Web 评测")
+    mind2web.add_argument("--workspace", type=Path, default=None)
+    mind2web.add_argument("--tasks", type=Path, required=True, help="用户已授权的任务 JSON")
+    mind2web.add_argument("--safety", type=Path, required=True, help="显式安全清单 JSON")
+    mind2web.add_argument(
+        "--output",
+        type=Path,
+        default=Path("artifacts/evaluations/online-mind2web"),
+        help="结果根目录",
+    )
+    mind2web.add_argument("--run", action="store_true", help="明确启动真实隔离浏览器；默认仅预检")
+    mind2web.add_argument("--chrome-path", default=None, help="Chrome 可执行文件路径")
+    mind2web.add_argument("--judge", action="store_true", help="显式调用 WebJudge；默认仅导出轨迹")
+    mind2web.add_argument("--judge-model", default=None, help="WebJudge 使用的模型名")
+    mind2web.add_argument(
+        "--judge-api-key-env", default="OPENAI_API_KEY", help="WebJudge 凭据环境变量名"
+    )
     return parser
 
 
@@ -60,6 +78,24 @@ def main(argv: list[str] | None = None) -> None:
 
     if command == "cleanup":
         raise SystemExit(_run_cleanup(settings))
+    if command == "online-mind2web":
+        from max_gui.mind2web.service import evaluate
+
+        output = evaluate(
+            settings,
+            tasks_path=args.tasks,
+            safety_path=args.safety,
+            output_root=args.output
+            if args.output.is_absolute()
+            else settings.project_root / args.output,
+            run=args.run,
+            chrome_path=args.chrome_path,
+            judge=args.judge,
+            judge_model=args.judge_model,
+            judge_api_key_env=args.judge_api_key_env,
+        )
+        print(f"Online-Mind2Web 结果已写入：{output}")
+        return
     if args.benchmark:
         from max_gui.benchmark.service import run_benchmark_server
 

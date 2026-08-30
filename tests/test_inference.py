@@ -47,7 +47,7 @@ def test_load_settings_defaults_to_ollama(monkeypatch: pytest.MonkeyPatch, tmp_p
     _isolate_root(monkeypatch, tmp_path)
     settings = load_settings(workspace=tmp_path)
     assert settings.provider == "ollama"
-    assert settings.model_name == "qwen3.5:9b"
+    assert settings.model_name == "qwen3-vl:30b"
     assert settings.inference_max_retries == 5
 
 
@@ -196,7 +196,7 @@ def test_process_env_overrides_dotenv(monkeypatch: pytest.MonkeyPatch, tmp_path:
     (tmp_path / ".env").write_text("MAX_PROVIDER=modelscope\n", encoding="utf-8")
     settings = load_settings(workspace=tmp_path)
     assert settings.provider == "ollama"
-    assert settings.model_name == "qwen3.5:9b"
+    assert settings.model_name == "qwen3-vl:30b"
 
 
 @pytest.mark.parametrize("provider", ["local", "remote"])
@@ -245,7 +245,7 @@ async def test_ollama_uses_registered_config_without_auth_and_with_tools(
     assert seen == {
         "url": "http://192.168.1.158:11434/v1/chat/completions",
         "authorization": None,
-        "model": "qwen3.5:9b",
+        "model": "qwen3-vl:30b",
         "tools": tools,
         "tool_choice": "auto",
         "max_tokens": 8192,

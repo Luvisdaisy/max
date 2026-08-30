@@ -1,6 +1,6 @@
 """独立 OCR 推理：懒启动 vLLM、Chat Completions，以及 transformers 回退。
 
-整图任务使用提示词 `OCR:`。界面画框改由 OmniParser `locate` 提供。
+整图任务使用提示词 `OCR:`。默认 Agent 使用截图视图像素操作；OmniParser 仅保留为显式调试能力。
 """
 
 from __future__ import annotations

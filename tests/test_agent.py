@@ -7,12 +7,17 @@ import json
 
 import pytest
 
-from max_gui.agent.graph import ITERATION_LIMIT_MESSAGE, AgentRunner, _completion_evidence_ready
+from max_gui.agent.context import grounded_facts_message, new_task_context
+from max_gui.agent.graph import (
+    ITERATION_LIMIT_MESSAGE,
+    AgentRunner,
+    _completion_evidence_ready,
+    _update_recovery_after_observation,
+)
 from max_gui.agent.prompts import GUI_SYSTEM_PROMPT, os_contract
 from max_gui.config import Settings
 from max_gui.desktop.fake import FakeDesktopBackend
 from max_gui.inference.client import ChatDelta, InferenceRequestError, TokenUsage
-from max_gui.inference.omniparser import DetectedBox, LocateRuntime
 from max_gui.inference.retry import RetryMetadata, RetryNotice
 from max_gui.session.store import SessionStore
 from max_gui.tools.desktop import clear_desktop_context
@@ -80,23 +85,6 @@ def _runner(settings: Settings, client) -> tuple[AgentRunner, SessionStore]:
     store = SessionStore(settings.sessions_dir)
     registry = build_default_registry(
         settings, gate=AutoApproveGate(), desktop=FakeDesktopBackend()
-    )
-    return AgentRunner(settings, client, registry, store), store
-
-
-async def _locate_safari(_path) -> list[DetectedBox]:
-    """为短期事实测试返回一个带稳定标签的可点击 Dock 图标。"""
-    return [DetectedBox(x1=0, y1=0, x2=20, y2=20, label="Safari", role="icon", score=1.0)]
-
-
-def _runner_with_locate(settings: Settings, client) -> tuple[AgentRunner, SessionStore]:
-    """装配含确定性定位结果的 Runner，验证真实工具到上下文的链路。"""
-    store = SessionStore(settings.sessions_dir)
-    registry = build_default_registry(
-        settings,
-        gate=AutoApproveGate(),
-        desktop=FakeDesktopBackend(),
-        locate=LocateRuntime(settings, parse_fn=_locate_safari),
     )
     return AgentRunner(settings, client, registry, store), store
 
@@ -182,6 +170,10 @@ async def test_dynamic_tool_schemas_follow_observation_stage(settings: Settings)
     assert "task_complete" not in initial
     assert "mouse_move" in observed
     assert "task_complete" not in observed
+    move_schema = next(
+        item for item in client.tool_requests[1] if item["function"]["name"] == "mouse_move"
+    )
+    assert "target_id" not in move_schema["function"]["parameters"]["properties"]
 
 
 async def test_one_side_effect_per_response_pairs_all_tool_calls(settings: Settings) -> None:
@@ -242,6 +234,92 @@ async def test_one_side_effect_per_response_pairs_all_tool_calls(settings: Setti
     assert set(paired) == {"move", "type"}
     assert paired["move"]["exec"]["code"] == "ok"
     assert paired["type"]["exec"]["code"] == "action_batch_blocked"
+    assert "只提交一个副作用调用" in paired["type"]["text"]
+    assert "动作后的截图" in paired["type"]["text"]
+
+
+def test_action_batch_blocked_recovery_counts_one_per_response() -> None:
+    """同一回复的多条批次阻断只累计一次，截图可清除护栏。"""
+    context = new_task_context("测试批次恢复")
+    blocked_batch = [
+        {
+            "name": "mouse_click",
+            "content": {"text": "已阻断", "exec": {"code": "action_batch_blocked"}},
+        },
+        {
+            "name": "keyboard_type",
+            "content": {"text": "已阻断", "exec": {"code": "action_batch_blocked"}},
+        },
+    ]
+    context = _update_recovery_after_observation(context, blocked_batch)
+    assert context["recovery"]["failure_count"] == 1
+    assert "只提交一个副作用调用" in str(context["recovery"]["recovery_hint"])
+    context = _update_recovery_after_observation(context, blocked_batch)
+    assert context["recovery"]["failure_count"] == 2
+    context = _update_recovery_after_observation(
+        context,
+        [{"name": "screenshot", "content": {"text": "截图成功", "exec": {"ok": True}}}],
+    )
+    assert context["recovery"]["failure_count"] == 0
+
+
+async def test_repeated_action_batches_end_with_recovery_exhausted(settings: Settings) -> None:
+    """模型连续重复多副作用批次时在恢复阈值内终止，而不是耗尽迭代。"""
+    settings.max_iterations = 4
+    duplicate_batch = [
+        {
+            "id": "move",
+            "type": "function",
+            "function": {"name": "mouse_move", "arguments": '{"x":8,"y":8}'},
+        },
+        {
+            "id": "click",
+            "type": "function",
+            "function": {"name": "mouse_click", "arguments": "{}"},
+        },
+    ]
+    client = ScriptedClient(
+        [
+            ChatDelta(
+                tool_calls=[
+                    {
+                        "id": "shot",
+                        "type": "function",
+                        "function": {"name": "screenshot", "arguments": "{}"},
+                    }
+                ]
+            ),
+            ChatDelta(tool_calls=duplicate_batch),
+            ChatDelta(tool_calls=duplicate_batch),
+        ]
+    )
+    runner, store = _runner(settings, client)
+    session = store.create(model="qwen3.5-2b")
+    state = await runner.run(session, user_text="移动并点击")
+    assert state["status"] == "error"
+    assert state["error"] == "recovery_exhausted"
+    assert state["iteration"] == 3
+    loaded = store.get(session.id)
+    assert loaded is not None
+    events = _run_events(settings, state["run_id"])
+    assert events[-1]["event_type"] == "run.failed"
+    assert events[-1]["data"]["terminal_reason"] == "recovery_exhausted"
+
+
+def test_grounded_facts_omit_legacy_locate_entries() -> None:
+    """历史定位事实可恢复但不能再作为默认模型提示的一部分。"""
+    context = new_task_context("测试旧定位事实")
+    context["grounded_facts"] = [
+        {
+            "kind": "locate",
+            "label": "Safari",
+            "status": "valid",
+            "source_path": "/tmp/current.png",
+            "conclusion": "旧事实",
+            "target_id": 7,
+        }
+    ]
+    assert grounded_facts_message(context, current_frame_path="/tmp/current.png") == "无"
 
 
 async def test_side_effect_requires_task_complete_after_plain_text(settings: Settings) -> None:
@@ -478,7 +556,8 @@ async def test_think_injects_system_not_persisted(settings: Settings) -> None:
     assert client.requests[0][0]["role"] == "system"
     content = client.requests[0][0]["content"]
     assert "screenshot" in content
-    assert "locate" in content
+    assert "locate" not in content
+    assert "target_id" not in content
     assert "ocr_locate" not in content
     assert "view_width" in content
     assert "逻辑坐标" in content
@@ -925,14 +1004,13 @@ async def test_task_context_rolls_actions_and_redacts_keyboard_text(settings: Se
     assert secret not in json.dumps(loaded.task_context, ensure_ascii=False)
 
 
-async def test_grounded_facts_reuse_target_then_require_click_verification(
+async def test_coordinate_move_then_require_click_verification(
     settings: Settings,
 ) -> None:
-    """当前帧定位进入摘要，移鼠后的新帧仅保留无坐标点击核验事实。"""
+    """禁用定位器后仍可用截图视图像素移动，并进入无坐标点击核验链路。"""
     calls = [
         ("shot", "screenshot", {}),
-        ("locate", "locate", {}),
-        ("move", "mouse_move", {"target_id": 1}),
+        ("move", "mouse_move", {"x": 10, "y": 10}),
     ]
     client = ScriptedClient(
         [
@@ -963,24 +1041,21 @@ async def test_grounded_facts_reuse_target_then_require_click_verification(
         ]
     )
     settings.max_iterations = 4
-    runner, store = _runner_with_locate(settings, client)
+    runner, store = _runner(settings, client)
     session = store.create(model="qwen3.5-2b")
     state = await runner.run(session, user_text="打开 Safari")
-    move_request = client.requests[2]
+    assert state["status"] == "done"
+    move_request = client.requests[1]
     move_user = next(item for item in move_request if item.get("role") == "user")
     assert "Safari" in str(move_user["content"])
-    assert "target_id=1" in str(move_user["content"])
-    click_request = client.requests[3]
+    assert "target_id" not in str(move_user["content"])
+    click_request = client.requests[2]
     click_user = next(item for item in click_request if item.get("role") == "user")
     assert "Safari" in str(click_user["content"])
-    assert "无参数 mouse_click" in str(click_user["content"])
-    facts = state["task_context"]["grounded_facts"]
-    assert len(facts) == 1
-    assert facts[0]["kind"] == "cursor_verification"
-    assert facts[0]["target_id"] is None
+    assert "task_complete" in str(click_user["content"])
     loaded = store.get(session.id)
     assert loaded is not None and loaded.task_context is not None
-    assert loaded.task_context["grounded_facts"][0]["label"] == "Safari"
+    assert loaded.task_context["grounded_facts"] == []
 
 
 async def test_context_diagnostics_count_without_copying_user_text(settings: Settings) -> None:

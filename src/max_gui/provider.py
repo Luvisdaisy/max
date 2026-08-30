@@ -44,7 +44,7 @@ class ProviderDefinition:
 _PROVIDER_ITEMS = (
     ProviderDefinition(
         name="ollama",
-        model_name="qwen3.5:9b",
+        model_name="qwen3-vl:8b",
         base_url="http://192.168.1.158:11434/v1",
         api_key_env=None,
         key_label="",

@@ -27,7 +27,10 @@
       "required_checkpoints": [
         "visited_inbox"
       ],
-      "smoke": true
+      "smoke": true,
+      "task_family": "navigation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-002",
@@ -55,7 +58,10 @@
       "required_checkpoints": [
         "visited_projects"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "navigation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-003",
@@ -85,7 +91,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": true
+      "smoke": true,
+      "task_family": "navigation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-004",
@@ -113,7 +122,10 @@
       "required_checkpoints": [
         "visited_calendar"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "navigation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-005",
@@ -141,7 +153,10 @@
       "required_checkpoints": [
         "visited_automation"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "navigation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-006",
@@ -169,7 +184,10 @@
       "required_checkpoints": [
         "visited_team"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "navigation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-007",
@@ -197,7 +215,10 @@
       "required_checkpoints": [
         "visited_reports"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "navigation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-008",
@@ -225,7 +246,10 @@
       "required_checkpoints": [
         "visited_settings"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "navigation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-009",
@@ -255,7 +279,10 @@
       "required_checkpoints": [
         "visited_inbox"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "detail_observation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-010",
@@ -285,7 +312,10 @@
       "required_checkpoints": [
         "visited_inbox"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "detail_observation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-011",
@@ -315,7 +345,10 @@
       "required_checkpoints": [
         "visited_inbox"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "detail_observation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-012",
@@ -345,7 +378,10 @@
       "required_checkpoints": [
         "visited_inbox"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "detail_observation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-013",
@@ -375,7 +411,10 @@
       "required_checkpoints": [
         "visited_inbox"
       ],
-      "smoke": true
+      "smoke": true,
+      "task_family": "detail_observation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-014",
@@ -405,7 +444,10 @@
       "required_checkpoints": [
         "visited_inbox"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "detail_observation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-015",
@@ -435,7 +477,10 @@
       "required_checkpoints": [
         "visited_inbox"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "detail_observation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-016",
@@ -465,7 +510,10 @@
       "required_checkpoints": [
         "visited_inbox"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "detail_observation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-017",
@@ -495,7 +543,10 @@
       "required_checkpoints": [
         "visited_inbox"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "detail_observation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-018",
@@ -525,7 +576,10 @@
       "required_checkpoints": [
         "visited_inbox"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "detail_observation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-019",
@@ -555,7 +609,10 @@
       "required_checkpoints": [
         "visited_inbox"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "detail_observation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-020",
@@ -585,37 +642,44 @@
       "required_checkpoints": [
         "visited_inbox"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "detail_observation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-021",
       "route": "/arena/home",
-      "instruction": "打开任务页面，在列表中查看“支付接口偶发超时”的详细信息。",
+      "instruction": "进入任务页面，在搜索框输入一个不存在的任务关键词，确认页面显示空结果后清除筛选。",
       "initial_state": {
         "theme": "浅色",
         "compact": false
       },
       "success": {
         "visited_tasks": true,
-        "viewed_item": "支付接口偶发超时"
+        "empty_filter": true
       },
       "forbidden_actions": [
         "address_bar_navigation"
       ],
       "max_tool_calls": 10,
       "timeout_seconds": 90,
-      "category": "observe",
+      "category": "filter",
       "difficulty": "easy",
       "capabilities": [
         "navigation",
         "click",
-        "observe"
+        "text_input",
+        "filter"
       ],
-      "expected_steps": 2,
+      "expected_steps": 3,
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "filtering",
+      "information_dependency": null,
+      "recovery_path": "empty_filter"
     },
     {
       "id": "arena-022",
@@ -645,7 +709,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "detail_observation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-023",
@@ -675,7 +742,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "detail_observation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-024",
@@ -705,7 +775,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "detail_observation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-025",
@@ -735,7 +808,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "detail_observation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-026",
@@ -765,7 +841,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "detail_observation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-027",
@@ -795,7 +874,10 @@
       "required_checkpoints": [
         "visited_automation"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "automation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-028",
@@ -825,7 +907,10 @@
       "required_checkpoints": [
         "visited_automation"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "automation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-029",
@@ -855,7 +940,10 @@
       "required_checkpoints": [
         "visited_automation"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "automation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-030",
@@ -884,7 +972,10 @@
       "required_checkpoints": [
         "visited_settings"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "settings",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-031",
@@ -918,7 +1009,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": true
+      "smoke": true,
+      "task_family": "task_editing",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-032",
@@ -952,7 +1046,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_editing",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-033",
@@ -986,7 +1083,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_editing",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-034",
@@ -1020,7 +1120,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_editing",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-035",
@@ -1054,7 +1157,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_editing",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-036",
@@ -1088,7 +1194,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_editing",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-037",
@@ -1122,7 +1231,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_editing",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-038",
@@ -1156,7 +1268,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_editing",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-039",
@@ -1190,7 +1305,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_editing",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-040",
@@ -1224,7 +1342,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_editing",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-041",
@@ -1258,7 +1379,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_editing",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-042",
@@ -1292,7 +1416,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_editing",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-043",
@@ -1326,7 +1453,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": true
+      "smoke": true,
+      "task_family": "task_creation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-044",
@@ -1360,7 +1490,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_creation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-045",
@@ -1394,7 +1527,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_creation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-046",
@@ -1428,7 +1564,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_creation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-047",
@@ -1462,7 +1601,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_creation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-048",
@@ -1496,7 +1638,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_creation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-049",
@@ -1530,7 +1675,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_creation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-050",
@@ -1564,7 +1712,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_creation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-051",
@@ -1598,7 +1749,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_creation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-052",
@@ -1632,7 +1786,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_creation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-053",
@@ -1666,7 +1823,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_creation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-054",
@@ -1700,7 +1860,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "task_creation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-055",
@@ -1737,7 +1900,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "batch_operation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-056",
@@ -1774,7 +1940,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "batch_operation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-057",
@@ -1811,7 +1980,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "batch_operation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-058",
@@ -1848,7 +2020,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "batch_operation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-059",
@@ -1885,7 +2060,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "batch_operation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-060",
@@ -1922,7 +2100,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "batch_operation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-061",
@@ -1959,7 +2140,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "batch_operation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-062",
@@ -1996,7 +2180,10 @@
       "required_checkpoints": [
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "batch_operation",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-063",
@@ -2031,7 +2218,10 @@
         "visited_automation",
         "visited_settings"
       ],
-      "smoke": true
+      "smoke": true,
+      "task_family": "automation_settings",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-064",
@@ -2066,7 +2256,10 @@
         "visited_automation",
         "visited_settings"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "automation_settings",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-065",
@@ -2101,7 +2294,10 @@
         "visited_automation",
         "visited_settings"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "automation_settings",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-066",
@@ -2136,7 +2332,10 @@
         "visited_automation",
         "visited_settings"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "automation_settings",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-067",
@@ -2171,7 +2370,10 @@
         "visited_automation",
         "visited_settings"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "automation_settings",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-068",
@@ -2206,7 +2408,10 @@
         "visited_automation",
         "visited_settings"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "automation_settings",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-069",
@@ -2241,7 +2446,10 @@
         "visited_automation",
         "visited_settings"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "automation_settings",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-070",
@@ -2276,22 +2484,37 @@
         "visited_automation",
         "visited_settings"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "automation_settings",
+      "information_dependency": null,
+      "recovery_path": null
     },
     {
       "id": "arena-071",
       "route": "/arena/home",
-      "instruction": "先到报表确认哪个项目的逾期任务最多，再进入任务列表找到“支付接口偶发超时”，把负责人改为王晨、状态改为“已完成”并保存。",
+      "instruction": "先从工作台打开项目，查看“北极星”详情中的风险任务和成员负载。再从该项目打开风险任务“支付接口偶发超时”，将负责人改为王晨、状态改为“已完成”，把截止日期设为 2026-09-10，标签改为“风险、已核验”，子任务改为“复核超时、通知负责人”，并写入评论草稿“风险已确认”，然后保存。",
       "initial_state": {
         "theme": "浅色",
         "compact": false
       },
       "success": {
-        "visited_reports": true,
-        "visited_tasks": true,
+        "visited_projects": true,
+        "observed_project_北极星": true,
+        "observed_risk_task": "支付接口偶发超时",
+        "project_task_source": "北极星",
         "updated_item": "支付接口偶发超时",
         "updated_owner": "王晨",
-        "updated_status": "已完成"
+        "updated_status": "已完成",
+        "updated_due_date": "2026-09-10",
+        "updated_tags": [
+          "风险",
+          "已核验"
+        ],
+        "updated_subtasks": [
+          "复核超时",
+          "通知负责人"
+        ],
+        "updated_comment_draft": "风险已确认"
       },
       "forbidden_actions": [
         "address_bar_navigation"
@@ -2307,14 +2530,19 @@
         "click",
         "edit",
         "selection",
-        "workflow"
+        "workflow",
+        "subtasks"
       ],
       "expected_steps": 8,
       "required_checkpoints": [
-        "visited_reports",
-        "visited_tasks"
+        "visited_projects",
+        "visited_tasks",
+        "project_task_source"
       ],
-      "smoke": true
+      "smoke": true,
+      "task_family": "fact_driven_edit",
+      "information_dependency": "member_workload",
+      "recovery_path": "subtasks"
     },
     {
       "id": "arena-072",
@@ -2352,7 +2580,10 @@
         "visited_reports",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "fact_driven_edit",
+      "information_dependency": "fact_driven_edit",
+      "recovery_path": null
     },
     {
       "id": "arena-073",
@@ -2390,7 +2621,10 @@
         "visited_reports",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "fact_driven_edit",
+      "information_dependency": "fact_driven_edit",
+      "recovery_path": null
     },
     {
       "id": "arena-074",
@@ -2428,7 +2662,10 @@
         "visited_reports",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "fact_driven_edit",
+      "information_dependency": "fact_driven_edit",
+      "recovery_path": null
     },
     {
       "id": "arena-075",
@@ -2466,7 +2703,10 @@
         "visited_reports",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "fact_driven_edit",
+      "information_dependency": "fact_driven_edit",
+      "recovery_path": null
     },
     {
       "id": "arena-076",
@@ -2504,7 +2744,10 @@
         "visited_reports",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "fact_driven_edit",
+      "information_dependency": "fact_driven_edit",
+      "recovery_path": null
     },
     {
       "id": "arena-077",
@@ -2542,7 +2785,10 @@
         "visited_reports",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "fact_driven_edit",
+      "information_dependency": "fact_driven_edit",
+      "recovery_path": null
     },
     {
       "id": "arena-078",
@@ -2580,7 +2826,10 @@
         "visited_reports",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "fact_driven_edit",
+      "information_dependency": "fact_driven_edit",
+      "recovery_path": null
     },
     {
       "id": "arena-079",
@@ -2618,7 +2867,10 @@
         "visited_reports",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "fact_driven_edit",
+      "information_dependency": "fact_driven_edit",
+      "recovery_path": null
     },
     {
       "id": "arena-080",
@@ -2656,7 +2908,10 @@
         "visited_reports",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "fact_driven_edit",
+      "information_dependency": "fact_driven_edit",
+      "recovery_path": null
     },
     {
       "id": "arena-081",
@@ -2696,12 +2951,15 @@
         "visited_projects",
         "visited_tasks"
       ],
-      "smoke": true
+      "smoke": true,
+      "task_family": "project_context",
+      "information_dependency": "project_context",
+      "recovery_path": "validation_recovery"
     },
     {
       "id": "arena-082",
       "route": "/arena/home",
-      "instruction": "先打开项目页面查看各项目进度，再从项目进入任务列表，新建“建立曙光风险台账”，分配给王晨，设为普通优先级和“进行中”后保存。",
+      "instruction": "先打开项目页面查看相关项目进度，再从项目进入任务列表，新建“建立曙光风险台账”，分配给王晨，设为普通优先级和“进行中”，截止日期设为 2026-09-12，标签填写“风险、曙光”，子任务填写“核对风险、同步研发”，并保存。",
       "initial_state": {
         "theme": "浅色",
         "compact": false
@@ -2712,7 +2970,16 @@
         "created_name": "建立曙光风险台账",
         "created_owner": "王晨",
         "created_priority": "normal",
-        "created_status": "进行中"
+        "created_status": "进行中",
+        "created_due_date": "2026-09-12",
+        "created_tags": [
+          "风险",
+          "曙光"
+        ],
+        "created_subtasks": [
+          "核对风险",
+          "同步研发"
+        ]
       },
       "forbidden_actions": [
         "address_bar_navigation"
@@ -2729,17 +2996,20 @@
         "selection",
         "workflow"
       ],
-      "expected_steps": 8,
+      "expected_steps": 10,
       "required_checkpoints": [
         "visited_projects",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "project_context",
+      "information_dependency": "project_context",
+      "recovery_path": null
     },
     {
       "id": "arena-083",
       "route": "/arena/home",
-      "instruction": "先打开项目页面查看各项目进度，再从项目进入任务列表，新建“跟进远航交付”，分配给李雪，设为低优先级和“进行中”后保存。",
+      "instruction": "先打开项目页面查看相关项目进度，再从项目进入任务列表，新建“跟进远航交付”，分配给李雪，设为低优先级和“进行中”，截止日期设为 2026-09-15，标签填写“交付、远航”，子任务填写“确认里程碑、发送提醒”，并保存。",
       "initial_state": {
         "theme": "浅色",
         "compact": false
@@ -2750,7 +3020,16 @@
         "created_name": "跟进远航交付",
         "created_owner": "李雪",
         "created_priority": "low",
-        "created_status": "进行中"
+        "created_status": "进行中",
+        "created_due_date": "2026-09-15",
+        "created_tags": [
+          "交付",
+          "远航"
+        ],
+        "created_subtasks": [
+          "确认里程碑",
+          "发送提醒"
+        ]
       },
       "forbidden_actions": [
         "address_bar_navigation"
@@ -2767,17 +3046,20 @@
         "selection",
         "workflow"
       ],
-      "expected_steps": 8,
+      "expected_steps": 10,
       "required_checkpoints": [
         "visited_projects",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "project_context",
+      "information_dependency": "project_context",
+      "recovery_path": null
     },
     {
       "id": "arena-084",
       "route": "/arena/home",
-      "instruction": "先打开项目页面查看各项目进度，再从项目进入任务列表，新建“整理云图发布记录”，分配给张三，设为高优先级和“进行中”后保存。",
+      "instruction": "先打开项目页面查看相关项目进度，再从项目进入任务列表，新建“整理云图发布记录”，分配给张三，设为高优先级和“进行中”，截止日期设为 2026-09-18，标签填写“发布、云图”，子任务填写“整理版本、确认归档”，并保存。",
       "initial_state": {
         "theme": "浅色",
         "compact": false
@@ -2788,7 +3070,16 @@
         "created_name": "整理云图发布记录",
         "created_owner": "张三",
         "created_priority": "high",
-        "created_status": "进行中"
+        "created_status": "进行中",
+        "created_due_date": "2026-09-18",
+        "created_tags": [
+          "发布",
+          "云图"
+        ],
+        "created_subtasks": [
+          "整理版本",
+          "确认归档"
+        ]
       },
       "forbidden_actions": [
         "address_bar_navigation"
@@ -2805,17 +3096,20 @@
         "selection",
         "workflow"
       ],
-      "expected_steps": 8,
+      "expected_steps": 10,
       "required_checkpoints": [
         "visited_projects",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "project_context",
+      "information_dependency": "project_context",
+      "recovery_path": null
     },
     {
       "id": "arena-085",
       "route": "/arena/home",
-      "instruction": "先打开项目页面查看各项目进度，再从项目进入任务列表，新建“核验北极星预算”，分配给赵敏，设为普通优先级和“进行中”后保存。",
+      "instruction": "先打开项目页面查看相关项目进度，再从项目进入任务列表，新建“核验北极星预算”，分配给赵敏，设为普通优先级和“进行中”，截止日期设为 2026-09-20，标签填写“预算、北极星”，子任务填写“核对金额、提交复核”，并保存。",
       "initial_state": {
         "theme": "浅色",
         "compact": false
@@ -2826,7 +3120,16 @@
         "created_name": "核验北极星预算",
         "created_owner": "赵敏",
         "created_priority": "normal",
-        "created_status": "进行中"
+        "created_status": "进行中",
+        "created_due_date": "2026-09-20",
+        "created_tags": [
+          "预算",
+          "北极星"
+        ],
+        "created_subtasks": [
+          "核对金额",
+          "提交复核"
+        ]
       },
       "forbidden_actions": [
         "address_bar_navigation"
@@ -2843,12 +3146,15 @@
         "selection",
         "workflow"
       ],
-      "expected_steps": 8,
+      "expected_steps": 10,
       "required_checkpoints": [
         "visited_projects",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "project_context",
+      "information_dependency": "project_context",
+      "recovery_path": null
     },
     {
       "id": "arena-086",
@@ -2886,7 +3192,10 @@
         "visited_projects",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "project_context",
+      "information_dependency": "project_context",
+      "recovery_path": null
     },
     {
       "id": "arena-087",
@@ -2924,7 +3233,10 @@
         "visited_projects",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "project_context",
+      "information_dependency": "project_context",
+      "recovery_path": null
     },
     {
       "id": "arena-088",
@@ -2962,7 +3274,10 @@
         "visited_projects",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "project_context",
+      "information_dependency": "project_context",
+      "recovery_path": null
     },
     {
       "id": "arena-089",
@@ -3000,7 +3315,10 @@
         "visited_projects",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "project_context",
+      "information_dependency": "project_context",
+      "recovery_path": null
     },
     {
       "id": "arena-090",
@@ -3038,7 +3356,10 @@
         "visited_projects",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "project_context",
+      "information_dependency": "project_context",
+      "recovery_path": null
     },
     {
       "id": "arena-091",
@@ -3080,7 +3401,10 @@
         "visited_reports",
         "visited_tasks"
       ],
-      "smoke": true
+      "smoke": true,
+      "task_family": "batch_confirmation",
+      "information_dependency": "project_context",
+      "recovery_path": null
     },
     {
       "id": "arena-092",
@@ -3122,7 +3446,10 @@
         "visited_reports",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "batch_confirmation",
+      "information_dependency": "project_context",
+      "recovery_path": null
     },
     {
       "id": "arena-093",
@@ -3164,7 +3491,10 @@
         "visited_reports",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "batch_confirmation",
+      "information_dependency": "project_context",
+      "recovery_path": null
     },
     {
       "id": "arena-094",
@@ -3206,7 +3536,10 @@
         "visited_reports",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "batch_confirmation",
+      "information_dependency": "project_context",
+      "recovery_path": null
     },
     {
       "id": "arena-095",
@@ -3248,7 +3581,10 @@
         "visited_reports",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "batch_confirmation",
+      "information_dependency": "project_context",
+      "recovery_path": null
     },
     {
       "id": "arena-096",
@@ -3290,7 +3626,10 @@
         "visited_reports",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "batch_confirmation",
+      "information_dependency": "project_context",
+      "recovery_path": null
     },
     {
       "id": "arena-097",
@@ -3332,7 +3671,10 @@
         "visited_reports",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "batch_confirmation",
+      "information_dependency": "project_context",
+      "recovery_path": null
     },
     {
       "id": "arena-098",
@@ -3374,12 +3716,15 @@
         "visited_reports",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "batch_confirmation",
+      "information_dependency": "project_context",
+      "recovery_path": null
     },
     {
       "id": "arena-099",
       "route": "/arena/home",
-      "instruction": "先查看报表中的完成趋势，再进入任务列表按名称排序，选中“设计评审”和“客户反馈归档”，将它们批量删除并在弹窗中确认。",
+      "instruction": "先查看报表中的完成趋势，再进入任务列表按名称排序，选中“设计评审”和“客户反馈归档”，将它们批量删除并在弹窗中确认，看到删除反馈后立即撤销删除。",
       "initial_state": {
         "theme": "浅色",
         "compact": false
@@ -3393,7 +3738,8 @@
           "7"
         ],
         "batch_action": "delete",
-        "batch_count": 2
+        "batch_count": 2,
+        "undo_completed": true
       },
       "forbidden_actions": [
         "address_bar_navigation"
@@ -3416,7 +3762,10 @@
         "visited_reports",
         "visited_tasks"
       ],
-      "smoke": true
+      "smoke": true,
+      "task_family": "batch_confirmation",
+      "information_dependency": "project_context",
+      "recovery_path": "undo"
     },
     {
       "id": "arena-100",
@@ -3458,7 +3807,10 @@
         "visited_reports",
         "visited_tasks"
       ],
-      "smoke": false
+      "smoke": false,
+      "task_family": "batch_confirmation",
+      "information_dependency": "project_context",
+      "recovery_path": null
     }
   ]
 }

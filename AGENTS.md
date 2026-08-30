@@ -23,7 +23,7 @@
 1. **探索**（可选）：需求不清时用 `openspec-explore`，先对齐再写变更。
 2. **提案**：用 `openspec-propose` 生成 change，至少包含 `proposal.md`、`design.md`、`specs/`、`tasks.md`。写完产物后默认停止，不要接着改代码或归档。
 3. **实现**：默认不实现。只有用户明确要求实现（例如「开始实现」、`/opsx:apply`）时，才用 `openspec-apply-change` 按 `tasks.md` 逐项落地，完成后立刻把对应任务标为 `[x]`。
-4. **归档**：默认不归档。只有用户明确要求归档时，才用 `openspec-archive-change` 归档到 `openspec/changes/archive/`。禁止删除变更记录。归档后立刻同步更新项目级说明文件，但不额外需要记录具体的归档信息。
+4. **归档**：默认不归档。只有用户明确要求归档时，才用 `openspec-archive-change` 归档到 `openspec/changes/archive/`。禁止删除变更记录。归档后立刻同步更新受影响的项目级说明；`README.md` 仅维护既定章节结构中的相关内容，不额外扩展章节或细节。
 
 约束：
 
@@ -32,7 +32,7 @@
 - 实现过程中发现设计不对：先改 OpenSpec 产物，再改代码，不要只改代码。
 - 纯笔误、格式化、依赖锁文件等无行为变化的修补，可不开 change；除此之外不要绕过 OpenSpec。
 - 开发记录必须留在仓库里：`openspec/changes/`（进行中）与 `openspec/changes/archive/`（已完成）。不要用聊天记录代替归档。
-- 每次 OpenSpec 归档完成后，必须同步更新项目级说明文件（至少 `README.md`，以及本次变更实际影响的其他说明），使其与已落地的能力、流程和约束一致。不要只归档 change、不改对外说明，若没有明确提出，无需更新 `AGENTS.md`。
+- 每次 OpenSpec 归档完成后，必须同步更新项目级说明文件（至少更新 `README.md` 的受影响既定章节，以及本次变更实际影响的其他说明），使其与已落地的能力、流程和约束一致。`README.md` 不新增既定结构之外的内容，也不展开过度的功能细节。不要只归档 change、不改对外说明，若没有明确提出，无需更新 `AGENTS.md`。
 
 相关技能：`.agents/skills/openspec-propose/`、`openspec-apply-change/`、`openspec-archive-change/`、`openspec-explore/`。
 

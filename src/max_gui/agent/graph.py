@@ -20,10 +20,12 @@ from max_gui.agent.context import (
     locate_label,
     new_task_context,
     record_cursor_verification,
+    register_completion_declaration,
     replace_locate_facts,
     require_completion,
     restore_task_context,
     task_context_message,
+    update_recovery,
     update_task_context,
     verify_completion,
 )
@@ -47,6 +49,8 @@ from max_gui.tools.protocol import ToolResult
 from max_gui.tools.registry import ToolRegistry
 
 ITERATION_LIMIT_MESSAGE = "已达到最大迭代次数，本回合停止。"
+RECOVERY_LIMIT = 2
+DISABLED_AGENT_TOOLS = frozenset({"locate"})
 
 
 class AgentRunner:
@@ -70,6 +74,8 @@ class AgentRunner:
         self._on_status: Callable[[str], None] | None = None
         self._on_message: Callable[[str, dict[str, Any]], None] | None = None
         self._on_event: Callable[[RunEvent], None] | None = None
+        self._on_evaluation_step: Callable[[dict[str, Any]], None] | None = None
+        self._tool_guard: Callable[[str, dict[str, Any]], str | None] | None = None
         self._session: Session | None = None
         self._recorder: RunRecorder | None = None
         self._last_status: str | None = None
@@ -95,6 +101,8 @@ class AgentRunner:
         on_status: Callable[[str], None] | None = None,
         on_message: Callable[[str, dict[str, Any]], None] | None = None,
         on_event: Callable[[RunEvent], None] | None = None,
+        on_evaluation_step: Callable[[dict[str, Any]], None] | None = None,
+        tool_guard: Callable[[str, dict[str, Any]], str | None] | None = None,
     ) -> AgentState:
         """跑完一图并持久化。
 
@@ -111,6 +119,8 @@ class AgentRunner:
             on_status: 节点状态变化回调。
             on_message: 一条助手或工具消息已提交时回调。
             on_event: 结构化运行事件回调；观察者异常不会进入 Agent 控制流。
+            on_evaluation_step: 仅评测模式使用的动作回调，接收解析参数与截图关联。
+            tool_guard: 仅评测模式使用的动作前护栏；返回原因时不执行对应工具。
 
         返回：
             终态 `AgentState`。
@@ -121,6 +131,8 @@ class AgentRunner:
         self._on_status = on_status
         self._on_message = on_message
         self._on_event = on_event
+        self._on_evaluation_step = on_evaluation_step
+        self._tool_guard = tool_guard
         self._last_status = None
         token = current_session_id.set(session.id)
         self._session = session
@@ -139,12 +151,16 @@ class AgentRunner:
         try:
             if resume and session.checkpoint:
                 state: AgentState = dict(session.checkpoint)  # type: ignore[assignment]
+                cursor = session.checkpoint.get("message_cursor")
+                if isinstance(cursor, int) and 0 <= cursor <= len(session.messages):
+                    state["messages"] = [
+                        _message_to_state(item) for item in session.messages[:cursor]
+                    ]
+                elif "messages" not in state:
+                    state["messages"] = [_message_to_state(item) for item in session.messages]
                 state["session_id"] = session.id
                 state["run_id"] = self._recorder.run_id
-                state["history_message_count"] = int(
-                    state.get("history_message_count")
-                    or max(0, len(session.messages) - len(state.get("messages") or []))
-                )
+                state["history_message_count"] = int(state.get("history_message_count") or 0)
                 state["task_context"] = restore_task_context(
                     state.get("task_context") or session.task_context,
                     list(state.get("messages") or []),
@@ -235,6 +251,8 @@ class AgentRunner:
         """
         if self._interrupt.is_set():
             return {**state, "status": "interrupted"}
+        if state.get("status") == "error":
+            return state
         self._emit_status("thinking", state)
         if int(state.get("iteration") or 0) >= self.settings.max_iterations:
             messages = list(state.get("messages") or [])
@@ -258,7 +276,7 @@ class AgentRunner:
         inline_image = latest_observation_path(context) or conversation_observation_path(context)
         system_prompt = compose_gui_system_prompt(frame=active_view_frame())
         allowed_tools = _allowed_tool_names(context, self.registry)
-        tool_schemas = self.registry.schemas(allowed_tools)
+        tool_schemas = _model_tool_schemas(self.registry, allowed_tools)
         model_started = time.perf_counter()
         try:
             selection = _select_model_context(
@@ -451,9 +469,19 @@ class AgentRunner:
                 },
             )
             started = time.perf_counter()
-            if side_effect_seen:
+            blocked_fingerprint = _blocked_fingerprint(context, name, arguments)
+            if blocked_fingerprint:
+                output = ToolResult(
+                    text="该工具调用已被恢复护栏阻断，请先获取新截图或切换观察策略。",
+                    ok=False,
+                    code="recovery_blocked",
+                )
+            elif side_effect_seen:
                 output: str | ToolResult = ToolResult(
-                    text="本轮已有副作用工具；后续调用已阻断，请先观察最新截图再继续。",
+                    text=(
+                        "本轮已有副作用工具；后续调用已阻断。下一次只提交一个副作用调用，"
+                        "并先阅读该动作后的截图再决定点击或继续操作。"
+                    ),
                     ok=False,
                     code="action_batch_blocked",
                 )
@@ -463,6 +491,8 @@ class AgentRunner:
                     ok=False,
                     code="tool_not_available",
                 )
+            elif self._tool_guard and (guard_reason := self._tool_guard(name, arguments)):
+                output = ToolResult(text=guard_reason, ok=False, code="evaluation_safety_blocked")
             else:
                 output = await self.registry.invoke(name, fn.get("arguments"))
             if side_effect:
@@ -484,11 +514,13 @@ class AgentRunner:
                 if _tool_output_failed(output):
                     error = str(output)
                     result_code = "tool_error"
-            if name == "task_complete" and error is None:
-                if not _completion_evidence_ready(context):
-                    text = "任务完成验证失败：最近成功副作用没有可用的后置截图。"
-                    error = text
-                    result_code = "completion_not_ready"
+            if (
+                name == "task_complete"
+                and error is None
+                and not _completion_evidence_ready(context)
+            ):
+                text = "任务完成声明已登记，但需要声明后的新截图进行独立核验。"
+                result_code = "completion_pending"
             content: dict[str, Any] = {
                 "text": text,
                 "images": images,
@@ -534,7 +566,12 @@ class AgentRunner:
             if side_effect and error is None:
                 context = require_completion(context)
             if name == "task_complete" and error is None:
-                context = verify_completion(context, summary=str(arguments.get("summary") or ""))
+                context = register_completion_declaration(
+                    context,
+                    summary=str(arguments.get("summary") or ""),
+                    evidence=str(arguments.get("evidence") or ""),
+                    observed_path=latest_observation_path(context),
+                )
             message_index = self._commit_message(item)
             event_type: RunEventType = "tool.failed" if error else "tool.completed"
             event_data: dict[str, Any] = {
@@ -550,6 +587,67 @@ class AgentRunner:
             if error:
                 event_data["error"] = safe_error_summary(error)
             self._emit_event(event_type, state, event_data)
+            self._emit_evaluation_step(
+                {
+                    "tool_name": name,
+                    "arguments": arguments,
+                    "images": [str(item["path"]) for item in images],
+                    "text": text,
+                    "ok": error is None,
+                    "code": result_code,
+                    "iteration": int(state.get("iteration") or 0),
+                    "message_index": message_index,
+                    "reasoning": _last_assistant_reasoning(list(state.get("messages") or [])),
+                }
+            )
+            if name == "task_complete" and error is None:
+                # 完成声明必须紧接一次独立截图；这一步不依赖模型是否再次请求工具。
+                post_output = await self.registry.invoke("screenshot", {})
+                if isinstance(post_output, ToolResult):
+                    post_images = [{"path": str(path)} for path in post_output.images]
+                    post_text = post_output.text
+                    post_ok = post_output.ok
+                    post_code = post_output.code
+                else:
+                    post_images = []
+                    post_text = str(post_output)
+                    post_ok = True
+                    post_code = "ok"
+                post_item = {
+                    "role": "tool",
+                    "content": {
+                        "text": post_text,
+                        "images": post_images,
+                        "name": "screenshot",
+                        "exec": {
+                            "iteration": int(state.get("iteration") or 0),
+                            "arguments": {},
+                            "duration_ms": 0,
+                            "error": None if post_ok else post_text,
+                            "ok": post_ok,
+                            "code": post_code,
+                            "has_image": bool(post_images),
+                        },
+                    },
+                    "tool_call_id": f"{call_id}:post-screenshot",
+                    "name": "screenshot",
+                }
+                results.append(post_item)
+                post_index = self._commit_message(post_item)
+                self._emit_evaluation_step(
+                    {
+                        "tool_name": "screenshot",
+                        "arguments": {},
+                        "images": [str(item["path"]) for item in post_images],
+                        "text": post_text,
+                        "ok": post_ok,
+                        "code": post_code,
+                        "iteration": int(state.get("iteration") or 0),
+                        "message_index": post_index,
+                        "reasoning": None,
+                        "completion_post_observation": True,
+                    }
+                )
         self._flush_desktop_context()
         return {
             **state,
@@ -578,17 +676,50 @@ class AgentRunner:
         messages.extend(tool_messages)
         context = _task_context(state)
         completion_verified = bool(context.get("completion_verified"))
+        declaration = context.get("completion_declaration") or {}
+        if declaration and not completion_verified:
+            post = next(
+                (
+                    item
+                    for item in tool_messages
+                    if isinstance(item.get("content"), dict)
+                    and item.get("name") == "screenshot"
+                    and item["content"].get("exec", {}).get("ok")
+                    and item["content"].get("images")
+                ),
+                None,
+            )
+            if post:
+                path = str(post["content"]["images"][-1].get("path") or "")
+                if path and Path(path).is_file() and str(declaration.get("evidence") or "").strip():
+                    context = verify_completion(
+                        context,
+                        summary=str(declaration.get("summary") or "独立后置观察通过"),
+                        observation_path=path,
+                    )
+                    completion_verified = True
+                else:
+                    context = _completion_verification_failed(
+                        context, "后置截图不可用或声明证据不足"
+                    )
+            elif any(item.get("name") == "task_complete" for item in tool_messages):
+                context = _completion_verification_failed(context, "完成声明后必须获取新的截图")
+            completion_verified = bool(context.get("completion_verified"))
+        context = _update_recovery_after_observation(context, tool_messages)
+        recovery = context.get("recovery") or {}
+        exhausted = int(recovery.get("failure_count") or 0) >= RECOVERY_LIMIT
         next_state: AgentState = {
             **state,
             "messages": messages,
             "pending_tool_calls": [],
             "iteration": int(state.get("iteration") or 0) + 1,
-            "status": "done" if completion_verified else "thinking",
+            "status": "error" if exhausted else ("done" if completion_verified else "thinking"),
+            "error": "recovery_exhausted" if exhausted else state.get("error"),
             "plan": plan,
             "current_subtask": current,
             "task_context": update_task_context(
                 context,
-                status="done" if completion_verified else "thinking",
+                status="error" if exhausted else ("done" if completion_verified else "thinking"),
                 plan=plan,
                 current_subtask=current,
             ),
@@ -609,6 +740,7 @@ class AgentRunner:
                 "business_verified": completion_verified,
                 "completion_required": bool(context.get("completion_required")),
                 "completion_verified": completion_verified,
+                "terminal_reason": "recovery_exhausted" if exhausted else None,
             },
         )
         return next_state
@@ -623,6 +755,18 @@ class AgentRunner:
             session.view_frame = frame
         session.locate_hits = hits
         self.store.save(session)
+
+    def _emit_evaluation_step(self, payload: dict[str, Any]) -> None:
+        """向显式评测回调发送高保真动作，不扩展普通运行 JSONL。
+
+        参数：`payload` 仅在调用方提供回调时发送；回调异常被隔离，不能影响 Agent 控制流。
+        """
+        if self._on_evaluation_step is None:
+            return
+        try:
+            self._on_evaluation_step(payload)
+        except Exception:
+            return
 
     def _emit_status(self, status: str, state: AgentState) -> None:
         """通知调用方当前状态，并为真实迁移发出结构化事件。"""
@@ -724,14 +868,21 @@ class AgentRunner:
         else:
             event_type = "run.completed"
         data = self._run_summary(status)
+        data["run_id"] = self._recorder.run_id if self._recorder else state.get("run_id")
+        data["terminal_reason"] = _terminal_reason(status, state)
         if state.get("error"):
             data["error"] = safe_error_summary(str(state["error"]))
         self._emit_event(event_type, state, data)
+        if self._session is not None:
+            self._session.run_summary = dict(data)
+            self.store.save(self._session)
 
     def _persist(self, session: Session, state: AgentState) -> None:
         """写回 status、checkpoint、桌面坐标系；尚未落盘的消息才追加。"""
         session.status = str(state.get("status") or "done")
-        session.checkpoint = dict(state)
+        checkpoint = {key: value for key, value in dict(state).items() if key != "messages"}
+        checkpoint["message_cursor"] = len(session.messages)
+        session.checkpoint = checkpoint
         session.task_context = dict(
             update_task_context(
                 _task_context(state),
@@ -750,8 +901,9 @@ class AgentRunner:
             self.store.append_messages(
                 session, [_state_to_session_message(item) for item in extras]
             )
-        else:
-            self.store.save(session)
+        if session.checkpoint is not None:
+            session.checkpoint["message_cursor"] = len(session.messages)
+        self.store.save(session)
 
 
 def _assistant_content(delta: ChatDelta) -> dict[str, Any]:
@@ -760,6 +912,19 @@ def _assistant_content(delta: ChatDelta) -> dict[str, Any]:
     if delta.reasoning:
         payload["reasoning"] = delta.reasoning
     return payload
+
+
+def _terminal_reason(status: str, state: AgentState) -> str:
+    """把图状态投影为稳定的运行终态原因。"""
+    if status == "interrupted":
+        return "user_interrupted"
+    if status == "error":
+        if str(state.get("error") or "") == "recovery_exhausted":
+            return "recovery_exhausted"
+        if str(state.get("error") or "") == ITERATION_LIMIT_MESSAGE:
+            return "iteration_limit"
+        return "inference_failed" if str(state.get("error") or "").strip() else "error"
+    return "completed"
 
 
 def _build_graph(runner: AgentRunner):
@@ -846,6 +1011,18 @@ def _last_assistant_text(messages: list[dict[str, Any]]) -> str:
             return str(content.get("text") or "")
         return str(content or "")
     return ""
+
+
+def _last_assistant_reasoning(messages: list[dict[str, Any]]) -> str | None:
+    """提取当前动作关联的最近模型推理，仅供显式评测回调使用。"""
+    for message in reversed(messages):
+        if message.get("role") != "assistant":
+            continue
+        content = message.get("content")
+        if isinstance(content, dict):
+            reasoning = str(content.get("reasoning") or "").strip()
+            return reasoning or None
+    return None
 
 
 def _task_context(state: AgentState) -> TaskContext:
@@ -978,10 +1155,102 @@ def _allowed_tool_names(context: TaskContext, registry: ToolRegistry) -> set[str
     frame_ready = bool(frame is not None and frame.image_path.is_file())
     if not frame_ready:
         return registry.names() & _INITIAL_TOOL_NAMES
-    allowed = registry.names() - {"task_complete"}
+    allowed = registry.names() - {"task_complete"} - DISABLED_AGENT_TOOLS
+    recovery = context.get("recovery") or {}
+    blocked = {str(item) for item in recovery.get("blocked_calls") or []}
+    allowed -= blocked
     if context.get("completion_required") and not context.get("completion_verified"):
         allowed.add("task_complete")
     return allowed
+
+
+def _model_tool_schemas(registry: ToolRegistry, allowed_tools: set[str]) -> list[dict[str, Any]]:
+    """导出默认模型可见 schema，并隐藏只供旧会话兼容的定位编号字段。"""
+    schemas = registry.schemas(allowed_tools)
+    for schema in schemas:
+        function = schema.get("function")
+        if not isinstance(function, dict) or function.get("name") not in {
+            "mouse_move",
+            "mouse_scroll",
+        }:
+            continue
+        parameters = function.get("parameters")
+        if isinstance(parameters, dict) and isinstance(parameters.get("properties"), dict):
+            parameters["properties"].pop("target_id", None)
+    return schemas
+
+
+def _completion_verification_failed(context: TaskContext, reason: str) -> TaskContext:
+    """保留待验证声明并记录失败原因，供下一轮模型修正。"""
+    updated = dict(context)
+    updated["completion_verified"] = False
+    updated["completion_verification"] = {"ok": False, "conclusion": reason[:400]}
+    return updated
+
+
+def _update_recovery_after_observation(
+    context: TaskContext, tool_messages: list[dict[str, Any]]
+) -> TaskContext:
+    """按工具错误码和当前帧更新恢复计数；成功截图清除旧护栏。"""
+    batch_blocked = any(
+        isinstance(item.get("content"), dict)
+        and str((item["content"].get("exec") or {}).get("code") or "") == "action_batch_blocked"
+        for item in tool_messages
+    )
+    if batch_blocked:
+        return update_recovery(
+            context,
+            fingerprint="action_batch_blocked",
+            frame_path=None,
+            hint="上一回复包含多个副作用调用。下一次只提交一个副作用调用，并先观察动作后的截图。",
+        )
+    for item in tool_messages:
+        content = item.get("content")
+        if not isinstance(content, dict):
+            continue
+        execution = content.get("exec") or {}
+        code = str(execution.get("code") or "")
+        name = str(item.get("name") or "")
+        frame = _active_frame_path()
+        if name == "screenshot" and execution.get("ok"):
+            context = update_recovery(
+                context, fingerprint=None, frame_path=frame, hint=None, increment=False
+            )
+            continue
+        if not execution.get("error"):
+            continue
+        arguments = _short_args(execution.get("arguments"))
+        text_value = str(content.get("text") or "")
+        is_coordinate_failure = "坐标" in text_value or (
+            code in {"tool_error", "recovery_blocked"} and name.startswith("mouse_")
+        )
+        if not is_coordinate_failure:
+            continue
+        fingerprint = f"{name}:{code}:{json.dumps(arguments, ensure_ascii=False, sort_keys=True)}"
+        hint = "请先获取新截图，并使用该截图内的视图像素重新移动鼠标。"
+        blocked = list((context.get("recovery") or {}).get("blocked_calls") or [])
+        if (
+            fingerprint not in blocked
+            and int((context.get("recovery") or {}).get("failure_count") or 0) >= 1
+        ):
+            blocked.append(fingerprint)
+        context = update_recovery(
+            context, fingerprint=fingerprint, frame_path=frame, hint=hint, blocked_calls=blocked
+        )
+    return context
+
+
+def _blocked_fingerprint(context: TaskContext, name: str, arguments: dict[str, Any]) -> str | None:
+    """返回当前调用是否命中已记录的失败指纹。"""
+    recovery = context.get("recovery") or {}
+    encoded = json.dumps(_short_args(arguments), ensure_ascii=False, sort_keys=True)
+    fingerprint = f"{name}:{encoded}"
+    for blocked in recovery.get("blocked_calls") or []:
+        if str(blocked).startswith(f"{name}:") and (
+            str(blocked).endswith(encoded) or str(blocked) == fingerprint
+        ):
+            return str(blocked)
+    return None
 
 
 def _completion_evidence_ready(context: TaskContext) -> bool:
@@ -1117,7 +1386,7 @@ def _route_after_think(state: AgentState) -> Literal["think", "act", "__end__"]:
 
 def _route_after_observe(state: AgentState) -> Literal["think", "__end__"]:
     """Observe 之后：完成门通过则结束，否则继续 Think。"""
-    if state.get("status") == "done":
+    if state.get("status") in {"done", "error", "interrupted"}:
         return END
     return "think"
 
@@ -1145,4 +1414,20 @@ def _state_to_session_message(item: dict[str, Any]) -> SessionMessage:
         payload["tool_calls"] = item["tool_calls"]
     if item.get("tool_call_id"):
         payload["tool_call_id"] = item["tool_call_id"]
+    if str(item.get("name") or payload.get("name") or "") == "locate":
+        text = str(payload.get("text") or "")
+        try:
+            locate_payload = json.loads(text)
+        except json.JSONDecodeError:
+            locate_payload = None
+        if isinstance(locate_payload, dict) and isinstance(locate_payload.get("items"), list):
+            payload["text"] = json.dumps(
+                {
+                    "observation_ref": locate_payload.get("path")
+                    or locate_payload.get("image_path"),
+                    "candidate_count": len(locate_payload["items"]),
+                    "summary": "已生成当前帧定位候选；详细框数据仅保留在观察图中。",
+                },
+                ensure_ascii=False,
+            )
     return SessionMessage(role=str(item.get("role") or "assistant"), content=payload)

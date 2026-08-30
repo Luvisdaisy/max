@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
+from datetime import datetime
 from typing import Any, Literal, TypedDict
 from uuid import uuid4
 
@@ -50,6 +51,9 @@ class TaskContext(TypedDict, total=False):
     completion_summary: str
     conversation_observation: dict[str, str]
     conversation_dialogue: list[str]
+    recovery: dict[str, Any]
+    completion_declaration: dict[str, Any]
+    completion_verification: dict[str, Any]
 
 
 def new_task_context(
@@ -69,6 +73,15 @@ def new_task_context(
         "completion_required": False,
         "completion_verified": False,
         "completion_summary": "",
+        "recovery": {
+            "failure_fingerprint": None,
+            "failure_count": 0,
+            "frame_path": None,
+            "blocked_calls": [],
+            "recovery_hint": None,
+        },
+        "completion_declaration": {},
+        "completion_verification": {},
     }
     paths = list(image_paths)
     if paths:
@@ -112,6 +125,15 @@ def restore_task_context(value: Any, messages: list[dict[str, Any]]) -> TaskCont
         context["completion_required"] = bool(value.get("completion_required"))
         context["completion_verified"] = bool(value.get("completion_verified"))
         context["completion_summary"] = str(value.get("completion_summary") or "")[:400]
+        recovery = value.get("recovery")
+        if isinstance(recovery, dict):
+            context["recovery"] = _restore_recovery(recovery)
+        declaration = value.get("completion_declaration")
+        if isinstance(declaration, dict):
+            context["completion_declaration"] = _restore_completion_declaration(declaration)
+        verification = value.get("completion_verification")
+        if isinstance(verification, dict):
+            context["completion_verification"] = _restore_completion_verification(verification)
         observation = value.get("conversation_observation")
         if isinstance(observation, dict) and observation.get("path"):
             context["conversation_observation"] = {
@@ -188,16 +210,113 @@ def require_completion(context: TaskContext) -> TaskContext:
     updated["completion_required"] = True
     updated["completion_verified"] = False
     updated["completion_summary"] = ""
+    updated["completion_declaration"] = {}
+    updated["completion_verification"] = {}
     return updated
 
 
-def verify_completion(context: TaskContext, *, summary: str) -> TaskContext:
-    """记录通过完成门的短摘要；证据原文不写入任务胶囊。"""
+def register_completion_declaration(
+    context: TaskContext, *, summary: str, evidence: str, observed_path: str | None
+) -> TaskContext:
+    """登记待验证完成声明，不改变完成状态。"""
+    updated = dict(context)
+    updated["completion_required"] = True
+    updated["completion_verified"] = False
+    updated["completion_summary"] = summary.strip()[:400]
+    updated["completion_declaration"] = {
+        "summary": summary.strip()[:400],
+        "evidence": evidence.strip()[:400],
+        "declared_at": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+        "before_observation": observed_path,
+    }
+    updated["completion_verification"] = {}
+    return updated
+
+
+def verify_completion(
+    context: TaskContext, *, summary: str, observation_path: str | None = None
+) -> TaskContext:
+    """记录独立后置观察的验证结论并迁移到完成状态。"""
     updated = dict(context)
     updated["completion_required"] = True
     updated["completion_verified"] = True
     updated["completion_summary"] = summary.strip()[:400]
+    updated["completion_verification"] = {
+        "ok": True,
+        "observation_path": observation_path,
+        "conclusion": summary.strip()[:400],
+    }
     return updated
+
+
+def update_recovery(
+    context: TaskContext,
+    *,
+    fingerprint: str | None,
+    frame_path: str | None,
+    hint: str | None,
+    blocked_calls: list[str] | None = None,
+    increment: bool = True,
+) -> TaskContext:
+    """更新当前帧的失败指纹与恢复建议；成功观察会传入空指纹清零。"""
+    updated = dict(context)
+    previous = context.get("recovery") if isinstance(context.get("recovery"), dict) else {}
+    same = (
+        fingerprint is not None
+        and previous.get("failure_fingerprint") == fingerprint
+        and previous.get("frame_path") == frame_path
+    )
+    count = int(previous.get("failure_count") or 0) + (1 if increment and same else 0)
+    if fingerprint is None:
+        count = 0
+    elif not same:
+        count = 1
+    updated["recovery"] = {
+        "failure_fingerprint": fingerprint,
+        "failure_count": count,
+        "frame_path": frame_path,
+        "blocked_calls": list(blocked_calls or previous.get("blocked_calls") or []),
+        "recovery_hint": hint,
+    }
+    return updated
+
+
+def _restore_recovery(value: dict[str, Any]) -> dict[str, Any]:
+    """清洗恢复信号，避免坏 checkpoint 注入不可序列化值。"""
+    return {
+        "failure_fingerprint": str(value.get("failure_fingerprint"))
+        if value.get("failure_fingerprint")
+        else None,
+        "failure_count": max(0, int(value.get("failure_count") or 0)),
+        "frame_path": str(value.get("frame_path")) if value.get("frame_path") else None,
+        "blocked_calls": [str(item) for item in value.get("blocked_calls") or []][:12],
+        "recovery_hint": str(value.get("recovery_hint"))[:400]
+        if value.get("recovery_hint")
+        else None,
+    }
+
+
+def _restore_completion_declaration(value: dict[str, Any]) -> dict[str, Any]:
+    """清洗待验证完成声明。"""
+    return {
+        "summary": str(value.get("summary") or "")[:400],
+        "evidence": str(value.get("evidence") or "")[:400],
+        "declared_at": str(value.get("declared_at") or ""),
+        "before_observation": str(value.get("before_observation"))
+        if value.get("before_observation")
+        else None,
+    }
+
+
+def _restore_completion_verification(value: dict[str, Any]) -> dict[str, Any]:
+    """清洗完成核验结论。"""
+    return {
+        "ok": bool(value.get("ok")),
+        "observation_path": str(value.get("observation_path"))
+        if value.get("observation_path")
+        else None,
+        "conclusion": str(value.get("conclusion") or "")[:400],
+    }
 
 
 def replace_locate_facts(
@@ -291,6 +410,12 @@ def task_context_message(context: TaskContext, *, current_frame_path: str | None
         or "无"
     )
     facts = grounded_facts_message(context, current_frame_path=current_frame_path)
+    recovery = context.get("recovery") or {}
+    recovery_text = str(recovery.get("recovery_hint") or "")
+    if recovery_text:
+        recovery_text = (
+            f"恢复护栏：{recovery_text}（连续 {int(recovery.get('failure_count') or 0)} 次）"
+        )
     if context.get("completion_verified"):
         completion = "已通过 task_complete 完成验证"
     elif context.get("completion_required"):
@@ -301,7 +426,7 @@ def task_context_message(context: TaskContext, *, current_frame_path: str | None
         completion = "当前未要求副作用完成声明"
     return (
         f"任务状态：{context.get('status') or 'thinking'}。当前子任务：{current}。"
-        f"计划：{plan}。近期动作：{actions}。{latest}。历史观察：{history}。当前有效事实：{facts}。"
+        f"计划：{plan}。近期动作：{actions}。{latest}。历史观察：{history}。当前有效事实：{facts}。{recovery_text}。"
         f"完成门：{completion}。"
     )
 
@@ -314,11 +439,7 @@ def grounded_facts_message(context: TaskContext, *, current_frame_path: str | No
     for item in _grounded_facts(context):
         if item["source_path"] != current_frame_path:
             continue
-        if item["kind"] == "locate" and item["target_id"] is not None:
-            fragments.append(
-                f"已定位「{item['label']}」，可用 target_id={item['target_id']} 调用 mouse_move"
-            )
-        elif item["kind"] == "cursor_verification":
+        if item["kind"] == "cursor_verification":
             fragments.append(f"「{item['label']}」已移鼠并回注截图，确认后可无参数 mouse_click")
         if len("；".join(fragments)) >= GROUNDED_FACT_SUMMARY_LIMIT:
             break

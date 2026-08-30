@@ -62,6 +62,35 @@ def _conversation_context(value: Any) -> dict[str, Any] | None:
     }
 
 
+def _run_summary(value: Any) -> dict[str, Any] | None:
+    """恢复紧凑运行摘要，只保留可 JSON 化的标量诊断。"""
+    if not isinstance(value, dict):
+        return None
+    allowed = {
+        "run_id",
+        "final_status",
+        "terminal_reason",
+        "iterations",
+        "model_calls",
+        "tool_calls",
+        "tool_successes",
+        "tool_failures",
+        "duration_ms",
+        "model_duration_ms",
+        "tool_duration_ms",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "finish_reason",
+    }
+    result: dict[str, Any] = {}
+    for key in allowed:
+        item = value.get(key)
+        if item is None or isinstance(item, (str, int, float, bool)):
+            result[key] = item
+    return result
+
+
 def _now() -> str:
     """当前本地时区 ISO 时间，精确到秒。"""
     return datetime.now().astimezone().isoformat(timespec="seconds")
@@ -121,6 +150,7 @@ class Session:
     locate_hits: dict[str, list[int]] = field(default_factory=dict)
     task_context: dict[str, Any] | None = None
     conversation_context: dict[str, Any] | None = None
+    run_summary: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """转为可 JSON 序列化的字典。"""
@@ -146,6 +176,7 @@ class Session:
             locate_hits=_string_int_points(data.get("locate_hits")),
             task_context=_task_context(data.get("task_context")),
             conversation_context=_conversation_context(data.get("conversation_context")),
+            run_summary=_run_summary(data.get("run_summary")),
         )
 
 

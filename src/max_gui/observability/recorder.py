@@ -59,6 +59,7 @@ class RunRecorder:
             "iterations": 0,
         }
         self._usage: dict[str, int] | None = None
+        self._last_finish_reason: str | None = None
         self._open_tools: dict[str, str] = {}
         self._restore_existing()
         self._open_for_append()
@@ -99,7 +100,9 @@ class RunRecorder:
         self._publish_pending_failure(iteration=iteration, subtask=subtask)
         return event
 
-    def summary(self, *, final_status: str | None = None) -> dict[str, Any]:
+    def summary(
+        self, *, final_status: str | None = None, terminal_reason: str | None = None
+    ) -> dict[str, Any]:
         """返回终态事件可直接使用的运行汇总副本。"""
         payload: dict[str, Any] = dict(self._summary)
         payload["duration_ms"] = self._elapsed_ms()
@@ -107,6 +110,9 @@ class RunRecorder:
             payload.update(self._usage)
         if final_status is not None:
             payload["final_status"] = final_status
+        payload["finish_reason"] = self._last_finish_reason
+        if terminal_reason is not None:
+            payload["terminal_reason"] = terminal_reason
         return payload
 
     def close(self) -> None:
@@ -246,6 +252,9 @@ class RunRecorder:
         if event.event_type == "model.started":
             self._summary["model_calls"] += 1
         elif event.event_type in {"model.completed", "model.failed"}:
+            if event.event_type == "model.completed":
+                reason = data.get("finish_reason")
+                self._last_finish_reason = str(reason) if reason else None
             self._summary["model_duration_ms"] += _safe_int(data.get("duration_ms"))
             usage = usage_from_data(data)
             if usage is not None:

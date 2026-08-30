@@ -1,8 +1,8 @@
 """桌面工具：截图回注、屏幕信息、移鼠、点按、拖拽、滚轮与键盘输入。
 
 `mouse_move` 成功后回注带光标的截图；点击、拖拽、滚动与键盘成功后再附一帧。
-视图坐标系与 `locate` 命中表经 `restore_desktop_context` /
-`snapshot_desktop_context` 与会话 JSON 同步，避免跨回合丢失。
+视图坐标系与历史定位命中表经 `restore_desktop_context` /
+`snapshot_desktop_context` 与会话 JSON 同步，避免旧会话恢复时出错。
 进程内当前帧以会话缓存为准，避免父 ContextVar 盖住后置截图。
 """
 
@@ -289,7 +289,7 @@ def reject_if_outside_view(x: int, y: int, frame: ViewFrame | None) -> None:
         return
     raise ToolError(
         f"坐标 ({vx}, {vy}) 超出最近截图视图 {frame.view_width}×{frame.view_height}，"
-        "请使用图上像素或 locate 的 target_id。"
+        "请根据这张截图重新选择图内视图像素。"
     )
 
 
@@ -335,7 +335,7 @@ def lookup_locate_hit(target_id: int) -> tuple[int, int]:
     """
     hits = active_locate_hits()
     if target_id not in hits:
-        raise ToolError(f"没有 id={target_id} 的定位结果，请先调用 locate")
+        raise ToolError(f"没有 id={target_id} 的可用定位结果，请改用当前截图的视图坐标")
     return hits[target_id]
 
 
@@ -762,7 +762,7 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
         Tool(
             name="mouse_move",
             description=(
-                f"将指针移到视图像素 (x, y)，或按 locate 的 target_id。"
+                f"将指针移到最近截图上的视图像素 (x, y)。"
                 f"成功后回注带光标标注的截图，请先看图再点击。{VIEW_COORD_HINT}"
             ),
             parameters={
@@ -770,7 +770,10 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
                 "properties": {
                     "x": {"type": "integer"},
                     "y": {"type": "integer"},
-                    "target_id": {"type": "integer", "description": "locate 返回的编号"},
+                    "target_id": {
+                        "type": "integer",
+                        "description": "旧会话兼容字段，新任务请使用 x/y",
+                    },
                     "duration": {"type": "number"},
                 },
             },
@@ -816,7 +819,10 @@ def desktop_tools(settings: Settings, backend: DesktopBackend) -> list[Tool]:
                     "clicks": {"type": "integer"},
                     "x": {"type": "integer"},
                     "y": {"type": "integer"},
-                    "target_id": {"type": "integer"},
+                    "target_id": {
+                        "type": "integer",
+                        "description": "旧会话兼容字段，新任务请使用 x/y",
+                    },
                 },
                 "required": ["clicks"],
             },

@@ -144,16 +144,18 @@ def build_default_registry(
         gate: 确认门；缺省自动批准。
         desktop: 桌面后端；缺省 `PyAutoGUIBackend`。
         ocr: OCR 运行时；缺省按配置懒启动。
-        locate: OmniParser 运行时；缺省按配置懒启动。
+        locate: 可选的 OmniParser 运行时；仅显式注入时注册定位器，默认 Agent 不暴露该工具。
     """
     backend = desktop or PyAutoGUIBackend()
     tools = [
         image_tool(settings.workspace, settings),
         *ocr_tools(settings, ocr),
-        locate_tool(settings, locate),
         *desktop_tools(settings, backend),
         _task_complete_tool(),
     ]
+    if locate is not None:
+        # 默认 Agent 不暴露定位器；显式注入仅供离线调试与兼容测试。
+        tools.insert(2, locate_tool(settings, locate))
     return ToolRegistry(tools, gate=gate, timeout=settings.tool_timeout)
 
 

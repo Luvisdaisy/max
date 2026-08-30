@@ -6,41 +6,40 @@ LangGraph ReAct 循环、状态、JSON 检查点、中断恢复。
 ## Requirements
 ### Requirement: 系统契约引导复用当前帧定位
 
-每次 `think` 的 GUI 系统契约 MUST 明确：当前截图存在有效定位事实时，模型 MUST 优先使用其中的 `target_id` 调用 `mouse_move`，MUST NOT 因同一定位目标重复调用 `locate`；当前帧没有有效定位时才调用 `locate`。移动后模型 MUST 依据后置截图的光标核验决定是否调用无坐标 `mouse_click`。
+每次 `think` 的 GUI 系统契约 MUST 要求模型先取得并阅读最新截图，再使用该截图中的视图像素调用 `mouse_move`。契约 MUST NOT 要求或推荐已禁用的定位工具、`target_id` 或定位编号；需要确认控件文字时 MUST 指导模型调用 `ocr`。移动后模型 MUST 依据后置截图的光标核验决定是否调用无坐标的 `mouse_click`。
 
-#### Scenario: 有有效定位时提示复用编号
+#### Scenario: 只用视图像素移动
 
-- **WHEN** 当前任务上下文有绑定当前帧的有效定位事实
-- **THEN** 模型请求的 system 或任务上下文明确该编号可用于 `mouse_move`
+- **WHEN** 当前任务需要点击图标或按钮
+- **THEN** system 提示模型使用当前截图视图像素调用 `mouse_move`，且不要求先调用 `locate`
 
-#### Scenario: 无有效定位时仍要求先定位
+#### Scenario: 需要读字时使用 OCR
 
-- **WHEN** 当前任务没有有效定位事实且需要点击图标或按钮
-- **THEN** 系统契约仍要求先调用 `locate` 或以最近截图的视图像素移动光标，不允许猜测旧编号
+- **WHEN** 截图中的控件文字无法直接读清
+- **THEN** system 提示模型调用 `ocr` 获取文字，不调用 `locate`
 
 ### Requirement: ReAct 状态机
-
-Agent SHALL 用 LangGraph StateGraph 实现 `think`、`act`、`observe` 节点。一个回合 MUST 从 `think` 开始。若模型返回工具调用，图 MUST 先跑 `act` 再 `observe`。普通工具观察后 MUST 回到 `think`；完成声明通过后 MUST 从 `observe` 结束。纯对话或只读观察任务中，模型不再返回工具调用时图 MUST 以 `done` 结束。任务已经成功执行副作用但尚未通过完成声明时，模型不返回工具调用 MUST NOT 直接结束；图 MUST 保留正文、标记仍需完成验证并再次进入 `think`，且该重试计入迭代上限。
+Agent SHALL 用 LangGraph StateGraph 实现 `think`、`act`、`observe` 节点。一个回合 MUST 从 `think` 开始。若模型返回工具调用，图 MUST 先跑 `act` 再 `observe`。普通工具观察后 MUST 回到 `think`；仅当独立完成证据校验通过后才 MUST 从 `observe` 结束。纯对话或只读观察任务中，模型不再返回工具调用时图 MUST 以 `done` 结束。任务已经成功执行副作用但尚未通过完成声明与独立校验时，模型不返回工具调用 MUST NOT 直接结束；图 MUST 保留正文、标记仍需完成验证并再次进入 `think`，且该重试计入迭代上限。恢复护栏耗尽时图 MUST 以 `error` 结束。
 
 #### Scenario: 纯文本完成
-
 - **WHEN** 模型返回最终助手消息且当前任务未执行副作用
 - **THEN** 图状态为 `done`，且不调用任何工具
 
 #### Scenario: 一次工具循环
-
 - **WHEN** 模型返回普通工具调用且工具成功
 - **THEN** 图执行 `act` 再 `observe`，追加工具结果，并再次调用 `think`
 
 #### Scenario: 副作用后正文不能直接完成
-
 - **WHEN** 最近成功副作用已经回注截图，但模型只返回正文且没有调用完成声明工具
 - **THEN** 图不标记 `done`，任务胶囊提示仍需完成验证并再次调用 `think`
 
 #### Scenario: 完成声明通过后结束
+- **WHEN** 模型在成功副作用的后置截图之后调用 `task_complete` 且参数有效，并且声明后的独立观察校验通过
+- **THEN** 图经过 `act`、声明后观察与校验后以 `done` 结束，不再额外调用模型
 
-- **WHEN** 模型在成功副作用的后置截图之后调用 `task_complete` 且参数有效
-- **THEN** 图经过 `act` 与 `observe` 后以 `done` 结束，不再额外调用模型
+#### Scenario: 完成校验失败继续
+- **WHEN** `task_complete` 的独立后置观察或证据校验失败
+- **THEN** 图不得以 `done` 结束，而是向模型回注失败原因并回到 `think`
 
 ### Requirement: 迭代上限
 
@@ -81,27 +80,17 @@ Agent MUST 接受来自 TUI 的中断。中断状态 MUST 写入该会话 JSON �
 
 ### Requirement: GUI 系统契约注入
 
-每次 `think` 发给模型的消息列表 MUST 以一条中文 `role=system` 消息开头。该消息 MUST 要求：桌面任务一律用键鼠完成；每一次键鼠动作都必须截图核验；还没有画面时先 `screenshot`；要点、拖、输入前先 `mouse_move`，根据回注图上的光标判断位置，对了再调用不带坐标的 `mouse_click` 或拖拽/键盘；看到回注图后 MUST 先判断红十字落在哪个控件上，与目标不一致则再 `mouse_move`，MUST NOT 在未看图时点击；坐标只用最近一帧视图像素或 `ocr_locate` 的 `target_id`，且视图像素必须落在该帧 `view_width`×`view_height` 内；不要用逻辑分辨率、屏幕百分比、归一化坐标，也不要把工具摘要里的逻辑坐标再当输入；看不清字再 OCR；破坏性桌面动作一次一个；动作后根据新画面判断是否进入下一子任务；首轮尽量输出编号子任务。该消息 MUST 写明当前操作系统的中文名称；当主机为 macOS 时 MUST 写明不是 Windows，快捷键用 `command` 而不是 `windows`。若当前会话已有视图帧，该消息 MUST 包含该帧的 `view_width` 与 `view_height`。该 `system` 消息 MUST NOT 写入会话 JSON，MUST NOT 作为 TUI 记录区条目出现。
+每次 `think` 发给模型的消息列表 MUST 以一条中文 `role=system` 消息开头。该消息 MUST 要求：桌面任务一律用键鼠完成；每一次键鼠动作都必须截图核验；还没有画面时先 `screenshot`；要点、拖、输入前先 `mouse_move`，根据回注图上的光标判断位置，对了再调用不带坐标的 `mouse_click` 或拖拽/键盘；看到回注图后 MUST 先判断红十字落在哪个控件上，与目标不一致则再 `mouse_move`，MUST NOT 在未看图时点击；坐标只用最近一帧视图像素，且视图像素必须落在该帧 `view_width`×`view_height` 内；不要用逻辑分辨率、屏幕百分比或归一化坐标，也不要把工具摘要里的逻辑坐标再当输入；看不清字再调用 `ocr`；MUST NOT 调用或尝试调用 `locate`；破坏性桌面动作一次一个；动作后根据新画面判断是否进入下一子任务；首轮尽量输出编号子任务。该消息 MUST 写明当前操作系统的中文名称；当主机为 macOS 时 MUST 写明不是 Windows，快捷键用 `command` 而不是 `windows`。若当前会话已有视图帧，该消息 MUST 包含该帧的 `view_width` 与 `view_height`。该 `system` 消息 MUST NOT 写入会话 JSON，MUST NOT 作为 TUI 记录区条目出现。
 
 #### Scenario: think 请求带 system
 
 - **WHEN** Agent 进入 `think` 并调用推理客户端
-- **THEN** 请求的 `messages` 第一条 `role` 为 `system`，正文含「先截图」、先移鼠看光标、视图像素约定与视图宽高边界
+- **THEN** 请求的 `messages` 第一条 `role` 为 `system`，正文含「先截图」、视图像素约定与视图宽高边界，且不含 `target_id` 或定位编号
 
 #### Scenario: 会话不保存 system
 
 - **WHEN** 一回合结束并落盘
 - **THEN** 该会话 JSON 的 `messages` 中没有 `role` 为 `system` 的条目
-
-#### Scenario: macOS 上标明不是 Windows
-
-- **WHEN** 主机为 macOS，Agent 进入 `think`
-- **THEN** 系统消息含「macOS」，且含「不是 Windows」或等价说明，以及使用 `command` 而非 `windows`
-
-#### Scenario: 有视图帧时写出宽高
-
-- **WHEN** 当前会话视图为 1536×864，Agent 进入 `think`
-- **THEN** 系统消息含 `1536` 与 `864`
 
 ### Requirement: think 推理异常结束为 error
 
@@ -250,6 +239,28 @@ Agent MUST 接受来自 TUI 的中断。中断状态 MUST 写入该会话 JSON �
 - **WHEN** 同一模型回复依次调用 `mouse_move` 与 `mouse_click`
 - **THEN** 系统执行 `mouse_move`，拒绝 `mouse_click`，两次调用都有配对 tool 消息，并在下一次动作前先进入观察
 
+### Requirement: 批次阻断进入恢复护栏
+
+一次 `observe` 中只要存在 `action_batch_blocked`，系统 MUST 按该批次记录一次稳定的恢复失败，并向下一次
+`think` 回注“只提交一个副作用、先观察后置截图”的恢复提示；同一批次内任意数量的被阻断调用 MUST NOT
+多次增加恢复计数。相同批次违规在同一活动截图上连续达到既有恢复阈值时，Agent MUST 以
+`recovery_exhausted` 结束。成功 `screenshot` MUST 清除该恢复状态。
+
+#### Scenario: 单批次多个阻断调用只计一次
+
+- **WHEN** 一个模型回复的首个副作用后还有多个调用，且它们都返回 `action_batch_blocked`
+- **THEN** 本次观察仅将恢复失败计数增加一次
+
+#### Scenario: 重复批次有界终止
+
+- **WHEN** 模型在同一活动截图上连续两次回复包含多个副作用调用
+- **THEN** 第二次观察后 Agent 状态为 `error`，错误与终止原因为 `recovery_exhausted`
+
+#### Scenario: 重新截图解除护栏
+
+- **WHEN** 批次阻断后模型先成功调用 `screenshot`
+- **THEN** 恢复失败计数清零，下一次可按单个副作用协议继续执行
+
 #### Scenario: 只读后执行一个副作用
 
 - **WHEN** 同一模型回复先调用 `screen_info` 再调用 `mouse_move`
@@ -268,4 +279,3 @@ Agent MUST 接受来自 TUI 的中断。中断状态 MUST 写入该会话 JSON �
 
 - **WHEN** 会话在成功副作用后中断并恢复
 - **THEN** 恢复后的任务仍要求 `task_complete`，不会因恢复丢失完成门
-
