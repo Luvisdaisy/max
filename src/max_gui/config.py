@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
 
@@ -99,7 +100,8 @@ def load_env_file(root: Path) -> None:
 class Settings:
     """一次运行所需的路径、推理端点与限制。
 
-    字段由 `load_settings` 从 `.env` 与环境变量填充。
+    字段通常由 `load_settings` 从 `.env` 与环境变量填充；`reasoning_effort` 供特定内部调用按
+    provider 能力覆盖，默认不发送该字段。
     """
 
     provider: str = DEFAULT_PROVIDER
@@ -122,6 +124,7 @@ class Settings:
     image_token_reserve: int = DEFAULT_IMAGE_TOKEN_RESERVE
     inference_max_retries: int = DEFAULT_INFERENCE_MAX_RETRIES
     enable_thinking: bool = False
+    reasoning_effort: Literal["low", "high", "max"] | None = None
     dtype: str = "auto"
     ocr_base_url: str = DEFAULT_OCR_BASE_URL
     ocr_start_timeout: float = 180.0

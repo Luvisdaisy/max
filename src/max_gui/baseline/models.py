@@ -21,12 +21,12 @@ class BaselineStatus(StrEnum):
     ENVIRONMENT_BLOCKED = "environment_blocked"
     SAFETY_BLOCKED = "safety_blocked"
     TIMEOUT = "timeout"
+    TIMEOUT_FORCED = "timeout_forced"
     TOOL_LIMIT = "tool_limit"
-    VIOLATION = "violation"
+    MODEL_LIMIT = "model_limit"
     AGENT_ERROR = "agent_error"
     AGENT_INCOMPLETE = "agent_incomplete"
     REVIEW_ERROR = "review_error"
-    TIMEOUT_FORCED = "timeout_forced"
     COMPLETED = "completed"
 
 
@@ -72,6 +72,33 @@ class ReviewResult:
 
 
 @dataclass(frozen=True, slots=True)
+class BaselineScoreReferences:
+    """评分公式使用的固定参考值，随结果一并保存以便审计。"""
+
+    timeout_ms: int
+    actions: int = 10
+    tool_calls: int = 15
+    execution_tokens: int = 100_000
+
+
+@dataclass(frozen=True, slots=True)
+class BaselineScore:
+    """单题版本化评分；无法完整评分时保留缺失项与空总分。"""
+
+    version: str
+    total: float | None
+    effect: float | None
+    execution_time: float | None
+    actions: float | None
+    tool_calls: float | None
+    tool_reliability: float | None
+    execution_tokens: float | None
+    complete: bool
+    missing_metrics: tuple[str, ...]
+    references: BaselineScoreReferences
+
+
+@dataclass(frozen=True, slots=True)
 class BaselineResult:
     """单题单轮的审计指标；未知数值固定为 `None`。"""
 
@@ -88,16 +115,17 @@ class BaselineResult:
     execution_duration_ms: int | None
     review_duration_ms: int | None
     total_duration_ms: int
+    model_calls: int | None
     tool_calls: int | None
     tool_failures: int | None
     actions: int | None
-    violations: tuple[str, ...]
     execution_tokens: int | None
     review_tokens: int | None
     final_screenshot: str | None
     screenshot_source: str | None
     run_log: str | None
     detail: str = ""
+    score: BaselineScore | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """转换为 JSON 友好的普通字典。"""

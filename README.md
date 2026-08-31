@@ -98,9 +98,16 @@ max-gui --benchmark
 不能用单元测试替代真实评测证据。
 
 另有 `max --baseline`（兼容 `max-gui --baseline`）真实桌面基线评测，固定覆盖天气检索、Terminal、
-Calculator、Reminders 和微信文件传输助手五题。它要求用户在开始前显式确认，并把每题的最终截图交给一次
-独立无工具评审；结果目录包含逐题指标和可离线打开的 `dashboard.html`。提醒与微信属于真实个人写入，默认只
-运行一轮，且不会自动重试、撤回或清理。使用前请阅读[真实桌面基线评测](docs/baseline-desktop-evaluation.md)。
+Calculator、Reminders 和微信文件传输助手五题。每题由用户确认窗口后执行，并由最终截图接受一次独立无工具评审；
+每题最多执行 5 分钟或调用执行模型 20 次（以先到者为准），并开放除 `activate_app`、`click` 外的已注册工具，不执行任务专用 violation
+判定；任一上限终止后都会自动进入截图评审，结果 JSON 保存调用次数和版本化总分。报告不会自动生成，可用
+`max --baseline -report <json...>` 显式生成 Markdown 表格和
+中文柱状图。提醒与微信属于真实个人写入，默认只运行一轮，且不会自动重试、撤回或清理。使用前请阅读
+[真实桌面基线评测](docs/baseline-desktop-evaluation.md)。
+
+baseline 的独立评审固定使用 Qiniu `z-ai/glm-5.3-flash`，与执行 provider/model 隔离；运行前必须配置
+`MAX_QINIU_KEY`。评审按模型要求启用思考并固定为 `low` 档位，但不显示思考过程；评审请求和重试不计入每题
+20 次执行模型调用额度。baseline 启动时会在首题前打印当前执行 provider 和 model 名称。
 
 ## Results / Demo
 

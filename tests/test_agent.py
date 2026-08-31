@@ -598,6 +598,43 @@ async def test_iteration_limit(settings: Settings) -> None:
     assert not client.deltas or True
 
 
+async def test_expose_all_tools_is_opt_in(settings: Settings) -> None:
+    """显式开关暴露完整注册表，默认运行仍使用动态工具集合。"""
+    default_client = ScriptedClient([ChatDelta(text="完成")])
+    default_runner, default_store = _runner(settings, default_client)
+    await default_runner.run(default_store.create(model="test"), user_text="默认工具")
+    default_names = {str(item["function"]["name"]) for item in default_client.tool_requests[0]}
+    assert default_names < default_runner.registry.names()
+
+    complete_client = ScriptedClient([ChatDelta(text="完成")])
+    complete_runner, complete_store = _runner(settings, complete_client)
+    await complete_runner.run(
+        complete_store.create(model="test"),
+        user_text="全部工具",
+        expose_all_tools=True,
+    )
+    complete_names = {str(item["function"]["name"]) for item in complete_client.tool_requests[0]}
+    assert complete_names == complete_runner.registry.names()
+
+
+async def test_expose_all_tools_can_exclude_names(settings: Settings) -> None:
+    """完整工具模式可同时从 schema 和 Act 允许集合排除指定名称。"""
+    client = ScriptedClient([ChatDelta(text="完成")])
+    runner, store = _runner(settings, client)
+    excluded = {"activate_app", "click"}
+
+    state = await runner.run(
+        store.create(model="test"),
+        user_text="排除部分工具",
+        expose_all_tools=True,
+        excluded_tools=excluded,
+    )
+
+    schema_names = {str(item["function"]["name"]) for item in client.tool_requests[0]}
+    assert schema_names == runner.registry.names() - excluded
+    assert not excluded & set(state["allowed_tools"])
+
+
 async def test_interrupt_mid_think(settings: Settings) -> None:
     """Think 中途中断会写 `interrupted` 状态与 checkpoint。"""
     client = SlowClient()

@@ -14,6 +14,10 @@
   截图评审，最多三次指数退避重试，并将其结论、可见证据、失败原因及调用错误写入最终记录。
 - 将成功口径调整为“无安全违规且独立评审通过”；Agent 是否调用完成工具改为诊断字段，不再成为成功的额外门槛。
 - 为限流/服务错误、超时和无截图明确区分终态与报告文案，避免把评审不可用误写为任务未完成。
+- 在每题开始时打印实际发送给 Agent 的提示词；执行期间按顺序打印模型正文与工具调用步骤，但不注册或输出
+  reasoning/思考回调。
+- 在独立评审调用前打印评审文本、终态截图路径和模型信息，并在响应后打印原始评审输出或安全错误摘要；截图仅以路径
+  展示，不向终端输出编码后的图像字节。
 - 每次 `max --baseline` 仅在 `artifacts/evaluations/baseline-desktop/` 根目录写入一个时间戳 JSON 记录；该记录包含
   当前运行参数、逐题成功记录、Token、耗时、步长、终态和证据引用。逐题临时文件与批次目录不再作为最终产物。
 - `max --baseline` 完成后自动运行本地 Python 报告脚本，读取该 JSON 并生成同时间戳的图表报告与可读摘要。
@@ -22,7 +26,7 @@
 
 ### New Capabilities
 
-- `baseline-evaluation-evidence-reporting`: 真实桌面基线的截图证据判定、单文件运行记录与自动图表报告。
+- `baseline-evaluation-evidence-reporting`: 真实桌面基线的截图证据判定、可排除思考过程的控制台调用日志、单文件运行记录与自动图表报告。
 
 ### Modified Capabilities
 
@@ -31,5 +35,7 @@
 ## Impact
 
 - 影响 `artifacts/benchmarks/baseline-desktop-v1.json`、`src/max_gui/baseline/`、`src/max_gui/cli.py`、基线测试与中文使用文档。
+- 控制台会显示 baseline 固定任务提示词、模型正文、工具参数/结果及评审输入输出；不会显示 API Key、HTTP 载荷中的
+  图像编码或模型 reasoning 字段，也不会把这些新增控制台内容复制到结果 JSON。
 - 会改变 `--baseline` 的最终文件布局和成功判定；不会改变 `--benchmark` 的入口、任务或报告。
 - 保持 Python-first：图表由本地 Python 脚本生成，复用项目现有 Matplotlib 依赖，不增加服务端或前端技术栈。

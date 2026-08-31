@@ -139,6 +139,8 @@ class InferenceClient:
             "max_tokens": self.settings.max_output_tokens,
         }
         payload.update(provider.thinking_payload(self.settings.enable_thinking))
+        if self.settings.reasoning_effort is not None:
+            payload["reasoning_effort"] = self.settings.reasoning_effort
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"

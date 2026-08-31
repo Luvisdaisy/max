@@ -23,4 +23,17 @@
 
 - [x] 4.1 运行 `uv run ruff format src tests` 与 `uv run ruff check src tests`。
 - [x] 4.2 运行基线相关 pytest 与完整 pytest，记录组件验证和未执行的真实桌面验证边界。
-- [ ] 4.3 在用户明确启动后运行一轮真实桌面基线，核对单一 JSON、五题截图评审和自动图表报告。
+- [x] 4.3 已由用户确认真实桌面五题运行无误；证据记录为 `artifacts/evaluations/baseline-desktop/20260831-093259.json`。
+
+## 5. 控制台调用链日志
+
+- [x] 5.1 在每题启动时打印唯一一次渲染的 Agent 提示词，并通过仅接收 `on_token` 的控制台投影流式打印模型正文。
+- [x] 5.2 通过 `on_evaluation_step` 按顺序打印工具名、参数、状态、结果和截图路径；使用允许字段投影并忽略 `reasoning`。
+- [x] 5.3 为独立评审增加输入/输出回调，在请求前打印 provider、model、评审文本和截图路径，在响应或异常后打印原始正文或安全错误摘要。
+- [x] 5.4 更新 baseline 中文使用文档，说明控制台日志范围、思考过程排除规则及结果 JSON 不新增对话正文。
+
+## 6. 控制台日志验证
+
+- [x] 6.1 增加 fake Agent 测试，验证完整任务提示词、流式模型正文、纯工具调用与逐步工具结果的顺序和内容。
+- [x] 6.2 增加 reasoning 哨兵及评审成功、无效 JSON、服务错误测试，证明思考内容、凭据和图像编码不会进入控制台输出。
+- [x] 6.3 运行 `uv run ruff format src tests`、`uv run ruff check src tests`、baseline 相关 pytest 与完整 pytest，并记录真实桌面验证仍需用户显式启动。

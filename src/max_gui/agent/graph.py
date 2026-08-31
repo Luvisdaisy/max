@@ -91,6 +91,8 @@ class AgentRunner:
         self._on_event: Callable[[RunEvent], None] | None = None
         self._on_evaluation_step: Callable[[dict[str, Any]], None] | None = None
         self._tool_guard: Callable[[str, dict[str, Any]], str | None] | None = None
+        self._expose_all_tools = False
+        self._excluded_tools: set[str] = set()
         self._session: Session | None = None
         self._recorder: RunRecorder | None = None
         self._last_status: str | None = None
@@ -118,6 +120,8 @@ class AgentRunner:
         on_event: Callable[[RunEvent], None] | None = None,
         on_evaluation_step: Callable[[dict[str, Any]], None] | None = None,
         tool_guard: Callable[[str, dict[str, Any]], str | None] | None = None,
+        expose_all_tools: bool = False,
+        excluded_tools: set[str] | None = None,
     ) -> AgentState:
         """跑完一图并持久化。
 
@@ -136,6 +140,8 @@ class AgentRunner:
             on_event: 结构化运行事件回调；观察者异常不会进入 Agent 控制流。
             on_evaluation_step: 仅评测模式使用的动作回调，接收解析参数与截图关联。
             tool_guard: 仅评测模式使用的动作前护栏；返回原因时不执行对应工具。
+            expose_all_tools: 为真时向模型暴露当前注册表的全部工具；默认保持动态工具策略。
+            excluded_tools: 从本回合模型 schema 与 Act 允许集合中排除的工具名；默认不排除。
 
         返回：
             终态 `AgentState`。
@@ -148,6 +154,8 @@ class AgentRunner:
         self._on_event = on_event
         self._on_evaluation_step = on_evaluation_step
         self._tool_guard = tool_guard
+        self._expose_all_tools = expose_all_tools
+        self._excluded_tools = set(excluded_tools or ())
         self._last_status = None
         token = current_session_id.set(session.id)
         self._session = session
@@ -224,6 +232,8 @@ class AgentRunner:
                     "provider": self.settings.provider,
                     "model": self.settings.model_name,
                     "max_iterations": self.settings.max_iterations,
+                    "expose_all_tools": self._expose_all_tools,
+                    "excluded_tools": sorted(self._excluded_tools),
                     "legacy_checkpoint": bool(
                         resume and session.checkpoint and not checkpoint_run_id
                     ),
@@ -317,7 +327,12 @@ class AgentRunner:
         )
         inline_image = latest_observation_path(context) or conversation_observation_path(context)
         system_prompt = compose_gui_system_prompt(frame=active_view_frame())
-        allowed_tools = _allowed_tool_names(context, self.registry)
+        allowed_tools = (
+            self.registry.names()
+            if self._expose_all_tools
+            else _allowed_tool_names(context, self.registry)
+        )
+        allowed_tools -= self._excluded_tools
         tool_schemas = _model_tool_schemas(self.registry, allowed_tools)
         model_started = time.perf_counter()
         try:

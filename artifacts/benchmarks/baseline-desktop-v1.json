@@ -1,45 +1,48 @@
 {
-  "version": "baseline-desktop-v1",
   "tasks": [
     {
       "id": "weather",
-      "prompt": "请在浏览器中搜索北京明天的天气。明天是 {run_date} 的次日。必须依据搜索结果中的可见信息汇报来源、目标日期、天气、最高/最低温及降水信息；不得凭记忆回答。完成后查看最终截图并调用 task_complete。",
-      "review_rubric": "截图必须可见北京、目标日期或明天、天气结果来源及至少天气和温度信息；不可见或遮挡时返回 indeterminate。",
       "preconditions": ["网络可用", "浏览器可启动", "不得登录或提交表单"],
+      "prompt": "请在浏览器中搜索北京天气。必须依据搜索结果中的可见信息汇报天气预报信息；不得凭记忆回答。完成后查看最终截图并调用 task_complete。",
+      "review_rubric": "截图必须可见北京的天气预报信息；不可见或遮挡时返回 indeterminate。",
       "risk": "read_only",
-      "timeout_seconds": 180
+      "timeout_seconds": 300
     },
     {
       "id": "terminal",
-      "prompt": "打开终端，并只运行命令 whoami。观察输出精确为 flkbme 后调用 task_complete；不得输入其他命令。",
-      "review_rubric": "截图必须可见 Terminal、命令 whoami 及精确输出 flkbme；否则返回 fail 或 indeterminate。",
       "preconditions": ["Terminal 可启动"],
+      "prompt": "在终端中运行命令 whoami。观察输出精确为 “flkbme” 后调用 task_complete；不得输入其他命令。",
+      "review_rubric": "截图必须可见 Terminal、命令 whoami 及精确输出 “flkbme”；否则返回 fail 或 indeterminate。",
       "risk": "read_only",
-      "timeout_seconds": 180
+      "timeout_seconds": 300
     },
     {
       "id": "calculator",
-      "prompt": "打开计算器并计算 1+1。仅在最终截图清楚显示结果 2 后调用 task_complete。",
-      "review_rubric": "截图必须可见 Calculator 和计算结果 2；看不清数字时返回 indeterminate。",
       "preconditions": ["Calculator 可启动"],
+      "prompt": "在计算器中计算 1+1=2。仅在最终截图清楚显示结果 2 后调用 task_complete。",
+      "review_rubric": "截图必须可见 Calculator 和计算结果 2；看不清数字时返回 indeterminate。",
       "risk": "read_only",
-      "timeout_seconds": 180
+      "timeout_seconds": 300
     },
     {
       "id": "reminders",
-      "prompt": "打开提醒事项，新建一个不带日期、重复或通知的提醒：你好我是MAX。确认最终截图可见完整标题后调用 task_complete。",
-      "review_rubric": "截图必须可见 Reminders 中完整提醒标题你好我是MAX；否则返回 fail 或 indeterminate。",
-      "preconditions": ["Reminders 可启动", "用户已授权创建一条内容为你好我是MAX的个人提醒"],
+      "preconditions": [
+        "Reminders 可启动",
+        "用户已授权创建一条内容为“你好我是MAX”的个人提醒"
+      ],
+      "prompt": "在提醒事项中新建一个提醒：“你好我是MAX”。确认最终截图可见完整标题后调用 task_complete。",
+      "review_rubric": "截图必须可见 Reminders 中完整提醒标题“你好我是MAX”；否则返回 fail 或 indeterminate。",
       "risk": "personal_write",
-      "timeout_seconds": 180
+      "timeout_seconds": 300
     },
     {
       "id": "wechat",
-      "prompt": "前置条件已由用户确认：微信当前已打开文件传输助手且输入焦点正确。不得点击、搜索或切换联系人；仅发送文本你好我是MAX，并在最终截图可见该文本后调用 task_complete。",
-      "review_rubric": "截图必须可见文件传输助手与完整文本你好我是MAX；若无法确认收件人或文本，返回 indeterminate。",
-      "preconditions": ["WeChat 已登录", "用户已手动打开文件传输助手并确认输入焦点"],
+      "preconditions": ["WeChat 已登录", "用户已手动打开文件传输助手"],
+      "prompt": "在微信传输助手中发送文本“你好我是MAX”，并在最终截图可见该文本后调用 task_complete。",
+      "review_rubric": "截图必须可见文件传输助手与完整文本“你好我是MAX”；若无法确认收件人或文本，返回 indeterminate。",
       "risk": "personal_write",
-      "timeout_seconds": 180
+      "timeout_seconds": 300
     }
-  ]
+  ],
+  "version": "baseline-desktop-v1"
 }

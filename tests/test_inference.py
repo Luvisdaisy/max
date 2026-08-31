@@ -1333,6 +1333,35 @@ async def test_rejected_thinking_payload_is_not_downgraded_or_retried(settings: 
     ]
 
 
+async def test_qiniu_forced_thinking_sends_low_reasoning_effort(settings: Settings) -> None:
+    """七牛强制思考模型同时收到启用标记与最低推理档位。"""
+    definition = PROVIDERS["qiniu"]
+    settings.provider = definition.name
+    settings.base_url = definition.base_url
+    settings.model_name = definition.model_name
+    settings.api_key = "qiniu-token"
+    settings.enable_thinking = True
+    settings.reasoning_effort = "low"
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """记录请求正文并返回最小流式成功响应。"""
+        seen.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_sse(["ok"]).encode(),
+        )
+
+    result = await InferenceClient(settings, transport=httpx.MockTransport(handler)).stream(
+        [{"role": "user", "content": "hi"}]
+    )
+
+    assert result.text == "ok"
+    assert seen["thinking"] == {"type": "enabled"}
+    assert seen["reasoning_effort"] == "low"
+
+
 def _sse_tool_calls() -> str:
     """两段 `tool_calls` 增量拼成一次调用。"""
     chunks = [

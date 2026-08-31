@@ -120,7 +120,6 @@ def main(argv: list[str] | None = None) -> None:
     if args.baseline:
         from max_gui.baseline import run_baseline
         from max_gui.baseline.comparison import write_comparison_report
-        from max_gui.baseline.report import write_run_report
 
         if args.baseline_clean and args.baseline_report:
             parser.error("-clean 与 -report 不能同时使用")
@@ -131,7 +130,7 @@ def main(argv: list[str] | None = None) -> None:
             return
         if args.baseline_report:
             if len(args.baseline_report) > 5:
-                parser.error("-report 最多携带 5 份 summary.json")
+                parser.error("-report 最多携带 5 份基线运行 JSON")
             output = write_comparison_report(
                 args.baseline_report,
                 settings.project_root / "artifacts" / "evaluations" / "baseline-desktop-reports",
@@ -140,11 +139,6 @@ def main(argv: list[str] | None = None) -> None:
             return
         output = run_baseline(settings, rounds=args.baseline_runs)
         print(f"基线评测结果已写入：{output}")
-        report = write_run_report(
-            output,
-            settings.project_root / "artifacts" / "evaluations" / "baseline-desktop-reports",
-        )
-        print(f"基线图表报告已写入：{report}")
         return
     try:
         require_provider_key(get_provider(settings.provider), settings.api_key)
