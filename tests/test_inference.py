@@ -654,7 +654,7 @@ async def test_retry_recovers_from_transport_errors(settings: Settings) -> None:
     assert result.attempt_count == 3
     assert result.retry_count == 2
     assert attempts == 3
-    assert waits == [0.5, 1.0]
+    assert waits == [2.0, 4.0]
     assert [notice.attempt for notice in notices] == [2, 3]
 
 
@@ -798,11 +798,16 @@ async def test_permanent_http_status_is_not_retried(settings: Settings, status: 
 
 def test_retry_delay_uses_jitter_retry_after_and_cap() -> None:
     """退避采用指数基础、最多 20% 抖动，并限制服务端等待上限。"""
-    assert retry_delay_seconds(1, random_value=0.0) == 0.5
-    assert retry_delay_seconds(2, random_value=1.0) == 1.2
-    assert retry_delay_seconds(5, random_value=0.0) == 8.0
+    assert [retry_delay_seconds(number, random_value=0.0) for number in range(1, 6)] == [
+        2.0,
+        4.0,
+        8.0,
+        16.0,
+        32.0,
+    ]
+    assert retry_delay_seconds(5, random_value=1.0) == 38.4
     assert retry_delay_seconds(1, random_value=0.0, retry_after="3") == 3.0
-    assert retry_delay_seconds(1, random_value=0.0, retry_after="90") == 30.0
+    assert retry_delay_seconds(1, random_value=0.0, retry_after="90") == 40.0
 
 
 def test_retry_detail_redacts_plain_and_json_credentials() -> None:

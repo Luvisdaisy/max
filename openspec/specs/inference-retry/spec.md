@@ -48,17 +48,22 @@ TBD - created by archiving change add-inference-retry-policy. Update Purpose aft
 
 ### Requirement: 重试采用可中断的有界退避
 
-第 1–5 次重试 MUST 使用基础值为 0.5、1、2、4、8 秒的指数退避，并加入不超过各自基础值 20% 的抖动。合法 `Retry-After` MUST 优先于基础退避，但单次等待 MUST NOT 超过 30 秒。等待期间 MUST 检查用户中断；中断后 MUST 取消剩余等待并且 MUST NOT 发起下一次请求。
+第 1–5 次重试 MUST 使用基础值为 2、4、8、16、32 秒的指数退避，并加入不超过各自基础值 20% 的抖动。合法 `Retry-After` MUST 优先于基础退避，但单次等待 MUST NOT 超过 40 秒。等待期间 MUST 检查用户中断；中断后 MUST 取消剩余等待并且 MUST NOT 发起下一次请求。
 
 #### Scenario: 指数退避有上限
 
 - **WHEN** 连续 5 次失败且服务端没有 `Retry-After`
-- **THEN** 五次重试使用 0.5、1、2、4、8 秒基础等待并只增加规定范围内的抖动
+- **THEN** 五次重试使用 2、4、8、16、32 秒基础等待并只增加规定范围内的抖动
+
+#### Scenario: 第五次抖动不被截断
+
+- **WHEN** 第五次重试使用最大随机值且服务端没有 `Retry-After`
+- **THEN** 等待 38.4 秒，既不低于 32 秒基础等待，也不被 40 秒上限截断
 
 #### Scenario: 遵守服务端等待时间
 
-- **WHEN** 可重试响应携带合法 `Retry-After: 3`
-- **THEN** 下一次请求前采用不超过 30 秒的 3 秒服务端等待值
+- **WHEN** 可重试响应携带合法 `Retry-After: 45`
+- **THEN** 下一次请求前采用不超过 40 秒的 40 秒服务端等待值
 
 #### Scenario: 退避期间中断
 
@@ -83,4 +88,3 @@ TBD - created by archiving change add-inference-retry-policy. Update Purpose aft
 
 - **WHEN** 客户端已解析一个工具调用分片后连接断开
 - **THEN** 客户端不再发送请求，Agent 不执行不完整工具调用
-

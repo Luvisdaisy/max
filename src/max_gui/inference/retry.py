@@ -17,7 +17,7 @@ import httpx
 
 RETRYABLE_HTTP_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
 NON_RETRYABLE_HTTP_STATUSES = frozenset({401, 403, 404, 405, 409, 413, 415, 422})
-MAX_RETRY_DELAY_SECONDS = 30.0
+MAX_RETRY_DELAY_SECONDS = 40.0
 _TRANSIENT_400_MARKERS = (
     "model_loading",
     "model loading",
@@ -199,12 +199,12 @@ def retry_delay_seconds(
         now: 解析 HTTP 日期时使用的当前 UTC 时间，测试可注入。
 
     返回：
-        0–30 秒之间的等待时间。
+        0–40 秒之间的等待时间。
     """
     server_delay = _parse_retry_after(retry_after, now=now)
     if server_delay is not None:
         return min(MAX_RETRY_DELAY_SECONDS, max(0.0, server_delay))
-    base = min(8.0, 0.5 * (2 ** max(0, retry_number - 1)))
+    base = min(32.0, 2.0 * (2 ** max(0, retry_number - 1)))
     jitter = base * 0.2 * min(1.0, max(0.0, random_value))
     return min(MAX_RETRY_DELAY_SECONDS, base + jitter)
 
