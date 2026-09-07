@@ -87,7 +87,7 @@ max-gui --benchmark
 
 训练数据使用 ScreenAgent 处理后的 GUI 操作样本；计划采用 Qwen3.5-4B、PEFT 与 Accelerate 进行 LoRA 微调。建议 LoRA 配置为 `rank=64`、`alpha=32`、`dropout=0.05`，覆盖 Qwen 的注意力与 MLP 投影层。
 
-完整训练方案见 [LoRA 微调计划](docs/lora-finetune-plan.md)。当前尚未提供可执行的训练脚本或正式训练命令；该流程仍需在具备合适 GPU 的环境中完成端到端验证。
+当前仓库尚未提供可执行的训练脚本或正式训练命令；该流程仍需在具备合适 GPU 的环境中完成端到端验证。
 
 ## Evaluation
 
@@ -102,8 +102,7 @@ Calculator、Reminders 和微信文件传输助手五题。每题由用户确认
 每题最多执行 5 分钟或调用执行模型 20 次（以先到者为准），并开放除 `activate_app`、`click` 外的已注册工具，不执行任务专用 violation
 判定；任一上限终止后都会自动进入截图评审，结果 JSON 保存调用次数和版本化总分。报告不会自动生成，可用
 `max --baseline -report <json...>` 显式生成 Markdown 表格和
-中文柱状图。提醒与微信属于真实个人写入，默认只运行一轮，且不会自动重试、撤回或清理。使用前请阅读
-[真实桌面基线评测](docs/baseline-desktop-evaluation.md)。
+中文柱状图。提醒与微信属于真实个人写入，默认只运行一轮，且不会自动重试、撤回或清理。
 
 baseline 的独立评审固定使用 Qiniu `z-ai/glm-5.3-flash`，与执行 provider/model 隔离；运行前必须配置
 `MAX_QINIU_KEY`。评审按模型要求启用思考并固定为 `low` 档位，但不显示思考过程；评审请求和重试不计入每题
@@ -121,4 +120,4 @@ baseline 的独立评审固定使用 Qiniu `z-ai/glm-5.3-flash`，与执行 prov
 
 ## License
 
-当前仓库尚未声明许可证。
+本项目采用 [MIT License](LICENSE) 开源。
